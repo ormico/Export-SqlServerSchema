@@ -1,0 +1,9 @@
+DbScripts/**
+
+# Environment files with secrets
+.env
+tests/.env
+
+# Test outputs
+tests/exports/
+
