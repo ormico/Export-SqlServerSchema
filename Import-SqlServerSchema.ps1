@@ -492,10 +492,26 @@ For more details, see: https://go.microsoft.com/fwlink/?linkid=2226722
         return $true
     } catch {
         $errorMessage = $_.Exception.Message
+        
+        # Try to get the actual SQL Server error
         if ($_.Exception.InnerException) {
-            $errorMessage += " Inner: $($_.Exception.InnerException.Message)"
+            $innerMsg = $_.Exception.InnerException.Message
+            $errorMessage += "`n      Inner Exception: $innerMsg"
+            
+            # If it's a SQL Server exception, try to get error number
+            if ($_.Exception.InnerException.GetType().Name -eq 'SqlException') {
+                $sqlEx = $_.Exception.InnerException
+                if ($sqlEx.Errors.Count -gt 0) {
+                    $errorMessage += "`n      SQL Error Details:"
+                    foreach ($sqlError in $sqlEx.Errors) {
+                        $errorMessage += "`n        - Error $($sqlError.Number): $($sqlError.Message)"
+                        $errorMessage += "`n          Line $($sqlError.LineNumber), Server: $($sqlError.Server)"
+                    }
+                }
+            }
         }
-        Write-Error "  [ERROR] Failed: $scriptName - $errorMessage"
+        
+        Write-Error "  [ERROR] Failed: $scriptName`n$errorMessage"
         return -1
     }
 }
