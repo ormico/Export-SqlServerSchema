@@ -521,139 +521,6 @@ For more details, see: https://go.microsoft.com/fwlink/?linkid=2226722
     }
 }
 
-function Sort-DataFilesByDependencies {
-    <#
-    .SYNOPSIS
-        Sorts data files to ensure parent tables are loaded before child tables with FK references.
-    #>
-    param(
-        [System.IO.FileInfo[]]$DataFiles,
-        [string]$ServerName,
-        [pscredential]$Cred,
-        [string]$DatabaseName,
-        [hashtable]$Config
-    )
-    
-    if ($DataFiles.Count -le 1) {
-        return $DataFiles
-    }
-    
-    Write-Host '  Analyzing foreign key dependencies for data loading order...' -ForegroundColor Gray
-    
-    try {
-        # Connect to server to get FK information
-        $smServer = [Microsoft.SqlServer.Management.Smo.Server]::new($ServerName)
-        if ($Cred) {
-            $smServer.ConnectionContext.set_LoginSecure($false)
-            $smServer.ConnectionContext.set_Login($Cred.UserName)
-            $smServer.ConnectionContext.set_SecurePassword($Cred.Password)
-        }
-        $smServer.ConnectionContext.ConnectTimeout = 15
-        $smServer.ConnectionContext.DatabaseName = $DatabaseName
-        
-        if ($Config -and $Config.ContainsKey('trustServerCertificate')) {
-            $smServer.ConnectionContext.TrustServerCertificate = $Config.trustServerCertificate
-        }
-        
-        $smServer.ConnectionContext.Connect()
-        $db = $smServer.Databases[$DatabaseName]
-        
-        # Build a map of table -> list of tables it depends on (via FKs)
-        $dependencies = @{}
-        
-        foreach ($file in $DataFiles) {
-            # Parse filename: Schema.TableName.data.sql
-            $fileName = $file.Name
-            if ($fileName -match '^(.+?)\.(.+?)\.data\.sql$') {
-                $schema = $Matches[1]
-                $tableName = $Matches[2]
-                $fullTableName = "$schema.$tableName"
-                
-                $dependencies[$fullTableName] = @()
-                
-                # Find the table in SMO
-                $table = $db.Tables | Where-Object { $_.Schema -eq $schema -and $_.Name -eq $tableName }
-                if ($table) {
-                    # Get all FK dependencies (tables this table references)
-                    foreach ($fk in $table.ForeignKeys) {
-                        $referencedSchema = $fk.ReferencedTableSchema
-                        $referencedTable = $fk.ReferencedTable
-                        $referencedFullName = "$referencedSchema.$referencedTable"
-                        
-                        # Only track dependency if we're also loading that table
-                        if ($DataFiles.Name -contains "$referencedFullName.data.sql") {
-                            $dependencies[$fullTableName] += $referencedFullName
-                        }
-                    }
-                }
-            }
-        }
-        
-        $smServer.ConnectionContext.Disconnect()
-        
-        # Topological sort to determine loading order
-        $sorted = @()
-        $visited = @{}
-        $visiting = @{}
-        
-        function Visit-Table {
-            param([string]$tableName)
-            
-            if ($visited[$tableName]) {
-                return
-            }
-            
-            if ($visiting[$tableName]) {
-                # Circular dependency detected - this is OK, FK disable should handle it
-                Write-Verbose "  Note: Circular FK dependency detected involving $tableName"
-                return
-            }
-            
-            $visiting[$tableName] = $true
-            
-            # Visit dependencies first (parent tables)
-            if ($dependencies.ContainsKey($tableName)) {
-                foreach ($dep in $dependencies[$tableName]) {
-                    Visit-Table $dep
-                }
-            }
-            
-            $visiting[$tableName] = $false
-            $visited[$tableName] = $true
-            $script:sorted += $tableName
-        }
-        
-        # Visit all tables
-        foreach ($tableName in $dependencies.Keys) {
-            Visit-Table $tableName
-        }
-        
-        # Reorder files based on sorted table names
-        $orderedFiles = @()
-        foreach ($tableName in $sorted) {
-            $file = $DataFiles | Where-Object { $_.Name -eq "$tableName.data.sql" }
-            if ($file) {
-                $orderedFiles += $file
-            }
-        }
-        
-        # Add any files that weren't in the dependency graph (shouldn't happen, but just in case)
-        foreach ($file in $DataFiles) {
-            if ($file -notin $orderedFiles) {
-                $orderedFiles += $file
-            }
-        }
-        
-        Write-Host "  [SUCCESS] Ordered $($orderedFiles.Count) data file(s) by FK dependencies" -ForegroundColor Green
-        return $orderedFiles
-        
-    } catch {
-        Write-Warning "  [WARNING] Could not analyze FK dependencies: $_"
-        Write-Warning '  Using alphabetical order (may cause FK constraint violations)'
-        return ($DataFiles | Sort-Object FullName)
-    }
-}
-
 function Get-ScriptFiles {
     <#
     .SYNOPSIS
@@ -1178,9 +1045,10 @@ try {
     $skipCount = 0
     
     # Track if we need to handle foreign keys for data import
-    # Use cross-platform path separator regex (works on Windows \ and Linux /)
-    $dataScripts = $scripts | Where-Object { $_.FullName -match '[/\\]20_Data[/\\]' }
-    $nonDataScripts = $scripts | Where-Object { $_.FullName -notmatch '[/\\]20_Data[/\\]' }
+    # Identify data scripts by filename pattern (*.data.sql) rather than folder name
+    # This is more resilient to folder structure changes
+    $dataScripts = $scripts | Where-Object { $_.Name -match '\.data\.sql$' }
+    $nonDataScripts = $scripts | Where-Object { $_.Name -notmatch '\.data\.sql$' }
     
     Write-Verbose "Found $($nonDataScripts.Count) non-data script(s) and $($dataScripts.Count) data script(s)"
     
