@@ -1171,11 +1171,7 @@ try {
     $dataScripts = $scripts | Where-Object { $_.FullName -match '\\20_Data\\' }
     $nonDataScripts = $scripts | Where-Object { $_.FullName -notmatch '\\20_Data\\' }
     
-    # Sort data scripts by FK dependencies to avoid constraint violations
-    if ($dataScripts.Count -gt 0) {
-        $dataScripts = Sort-DataFilesByDependencies -DataFiles $dataScripts -ServerName $Server `
-            -Cred $Credential -DatabaseName $Database -Config $config
-    }
+    Write-Verbose "Found $($nonDataScripts.Count) non-data script(s) and $($dataScripts.Count) data script(s)"
     
     # Process non-data scripts first
     foreach ($script in $nonDataScripts) {

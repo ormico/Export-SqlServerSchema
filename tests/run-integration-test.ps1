@@ -278,7 +278,7 @@ try {
     Write-Host "  Running Dev mode import..." -ForegroundColor Gray
     
     try {
-        & $importScript -Server $TEST_SERVER -Database $TargetDatabaseDev -SourcePath $exportDir -CreateDatabase -Credential $credential -ConfigFile $DevConfigFile -Verbose
+        & $importScript -Server $TEST_SERVER -Database $TargetDatabaseDev -SourcePath $exportDir -CreateDatabase -Credential $credential -ConfigFile $DevConfigFile -IncludeData -Verbose
         Write-TestStep "Dev mode import completed" -Type Success
     } catch {
         Write-TestStep "Dev mode import failed" -Type Error
