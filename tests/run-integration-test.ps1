@@ -157,7 +157,7 @@ try {
     }
     
     Write-Host "  Executing SQL script..." -ForegroundColor Gray
-    $result = sqlcmd -S $Server -U $Username -P $Password -i $schemaFile 2>&1
+    $result = sqlcmd -S $Server -U $Username -P $Password -C -i $schemaFile 2>&1
     
     if ($LASTEXITCODE -eq 0) {
         Write-TestStep "Test database created successfully" -Type Success
