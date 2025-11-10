@@ -491,24 +491,29 @@ For more details, see: https://go.microsoft.com/fwlink/?linkid=2226722
         Write-Output "  [SUCCESS] Applied: $scriptName"
         return $true
     } catch {
-        $errorMessage = $_.Exception.Message
+        $errorMessage = "Exception: $($_.Exception.GetType().FullName)`n      Message: $($_.Exception.Message)"
         
-        # Try to get the actual SQL Server error
-        if ($_.Exception.InnerException) {
-            $innerMsg = $_.Exception.InnerException.Message
-            $errorMessage += "`n      Inner Exception: $innerMsg"
+        # Recursively get all inner exceptions
+        $currentException = $_.Exception
+        $level = 1
+        while ($currentException.InnerException) {
+            $currentException = $currentException.InnerException
+            $errorMessage += "`n      Inner Exception $level (Type: $($currentException.GetType().FullName)):"
+            $errorMessage += "`n        Message: $($currentException.Message)"
             
-            # If it's a SQL Server exception, try to get error number
-            if ($_.Exception.InnerException.GetType().Name -eq 'SqlException') {
-                $sqlEx = $_.Exception.InnerException
-                if ($sqlEx.Errors.Count -gt 0) {
-                    $errorMessage += "`n      SQL Error Details:"
-                    foreach ($sqlError in $sqlEx.Errors) {
-                        $errorMessage += "`n        - Error $($sqlError.Number): $($sqlError.Message)"
-                        $errorMessage += "`n          Line $($sqlError.LineNumber), Server: $($sqlError.Server)"
+            # Check for SQL Server specific exceptions at any level
+            if ($currentException.GetType().Name -match 'Sql.*Exception') {
+                if ($currentException.PSObject.Properties['Errors'] -and $currentException.Errors.Count -gt 0) {
+                    $errorMessage += "`n        SQL Error Details:"
+                    foreach ($sqlError in $currentException.Errors) {
+                        $errorMessage += "`n          - Error $($sqlError.Number): $($sqlError.Message)"
+                        if ($sqlError.PSObject.Properties['LineNumber']) {
+                            $errorMessage += "`n            Line $($sqlError.LineNumber)"
+                        }
                     }
                 }
             }
+            $level++
         }
         
         Write-Error "  [ERROR] Failed: $scriptName`n$errorMessage"
