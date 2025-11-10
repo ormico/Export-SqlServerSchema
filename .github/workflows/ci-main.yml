@@ -78,7 +78,7 @@ jobs:
       - name: Start SQL Server container
         working-directory: ./tests
         run: |
-          docker-compose up -d
+          docker compose up -d
           echo "Waiting for SQL Server to be ready..."
           sleep 30
       
@@ -93,7 +93,7 @@ jobs:
         if: always()
         working-directory: ./tests
         run: |
-          docker-compose down -v
+          docker compose down -v
 
   release:
     name: Create Release
