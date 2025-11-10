@@ -1,0 +1,15 @@
+# Development Mode Configuration for Integration Tests
+# Skips environment-specific infrastructure for rapid schema-only deployments
+
+# CONNECTION SETTINGS
+# Trust server certificate for Docker SQL Server 2022 with self-signed cert
+trustServerCertificate: true
+
+importMode: Dev
+includeData: true
+
+# Dev mode automatically skips:
+# - FileGroups (infrastructure)
+# - Database Scoped Configurations (infrastructure)
+# - External Data Sources (environment-specific)
+# - Database Scoped Credentials (always skipped - secrets required)
