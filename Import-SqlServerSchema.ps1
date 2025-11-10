@@ -200,7 +200,7 @@ function Test-DatabaseConnection {
         [hashtable]$Config
     )
     
-    Write-Output "Testing connection to $ServerName..."
+    Write-Host "Testing connection to $ServerName..."
     
     try {
         $server = [Microsoft.SqlServer.Management.Smo.Server]::new($ServerName)
@@ -219,7 +219,7 @@ function Test-DatabaseConnection {
         
         $server.ConnectionContext.Connect()
         $server.ConnectionContext.Disconnect()
-        Write-Output '[SUCCESS] Connection successful'
+        Write-Host '[SUCCESS] Connection successful' -ForegroundColor Green
         return $true
     } catch {
         if ($_.Exception.Message -match 'certificate|SSL|TLS') {
@@ -336,7 +336,7 @@ function New-Database {
         [hashtable]$Config
     )
     
-    Write-Output "Creating database $DatabaseName..."
+    Write-Host "Creating database $DatabaseName..."
     
     try {
         $server = [Microsoft.SqlServer.Management.Smo.Server]::new($ServerName)
@@ -356,7 +356,7 @@ function New-Database {
         $db = [Microsoft.SqlServer.Management.Smo.Database]::new($server, $DatabaseName)
         $db.Create()
         $server.ConnectionContext.Disconnect()
-        Write-Output "[SUCCESS] Database $DatabaseName created"
+        Write-Host "[SUCCESS] Database $DatabaseName created" -ForegroundColor Green
         return $true
     } catch {
         Write-Error "[ERROR] Failed to create database: $_"
@@ -636,7 +636,7 @@ function Import-YamlConfig {
         throw "Configuration file not found: $ConfigFilePath"
     }
     
-    Write-Output "[INFO] Loading configuration from: $ConfigFilePath"
+    Write-Host "[INFO] Loading configuration from: $ConfigFilePath"
     
     try {
         # Check for PowerShell-Yaml module
@@ -650,13 +650,30 @@ function Import-YamlConfig {
         
         Import-Module powershell-yaml -ErrorAction Stop
         $yamlContent = Get-Content $ConfigFilePath -Raw
-        $config = ConvertFrom-Yaml $yamlContent
+        $parsedYaml = ConvertFrom-Yaml $yamlContent
+        
+        # ConvertFrom-Yaml may return an array if there are multiple documents
+        # Ensure we return a single hashtable
+        if ($parsedYaml -is [System.Array]) {
+            if ($parsedYaml.Count -eq 1) {
+                $config = $parsedYaml[0]
+            } else {
+                throw "Configuration file contains multiple YAML documents. Only single document configs are supported."
+            }
+        } else {
+            $config = $parsedYaml
+        }
+        
+        # Ensure we have a hashtable (OrderedDictionary is fine too)
+        if (-not ($config -is [System.Collections.IDictionary])) {
+            throw "Configuration file did not parse to a valid hashtable/dictionary structure. Type: $($config.GetType().FullName)"
+        }
         
         # NOTE: Do NOT add default import structure here
         # Let Get-ScriptFiles and Show-ImportConfiguration handle defaults
         # This allows simplified configs (with importMode at root) to work
         
-        Write-Output "[SUCCESS] Configuration loaded successfully"
+        Write-Host "[SUCCESS] Configuration loaded successfully" -ForegroundColor Green
         return $config
         
     } catch {
