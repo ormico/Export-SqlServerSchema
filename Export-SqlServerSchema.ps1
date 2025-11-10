@@ -300,7 +300,7 @@ function Show-ExportConfiguration {
     
     Write-Host ""
     Write-Host "═══════════════════════════════════════════════════════════════" -ForegroundColor Cyan
-    Write-Host "Export-SqlServerSchema v2.0" -ForegroundColor Cyan
+    Write-Host "Export-SqlServerSchema" -ForegroundColor Cyan
     Write-Host "═══════════════════════════════════════════════════════════════" -ForegroundColor Cyan
     Write-Host "Server: " -NoNewline -ForegroundColor Gray
     Write-Host $ServerName -ForegroundColor White

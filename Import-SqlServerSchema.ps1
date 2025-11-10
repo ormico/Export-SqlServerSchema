@@ -870,7 +870,7 @@ function Show-ImportConfiguration {
     
     Write-Host ""
     Write-Host "═══════════════════════════════════════════════════════════════" -ForegroundColor Cyan
-    Write-Host "Import-SqlServerSchema v2.0" -ForegroundColor Cyan
+    Write-Host "Import-SqlServerSchema" -ForegroundColor Cyan
     Write-Host "═══════════════════════════════════════════════════════════════" -ForegroundColor Cyan
     Write-Host "Target Server: " -NoNewline -ForegroundColor Gray
     Write-Host $ServerName -ForegroundColor White
@@ -1178,8 +1178,9 @@ try {
     $skipCount = 0
     
     # Track if we need to handle foreign keys for data import
-    $dataScripts = $scripts | Where-Object { $_.FullName -match '\\20_Data\\' }
-    $nonDataScripts = $scripts | Where-Object { $_.FullName -notmatch '\\20_Data\\' }
+    # Use cross-platform path separator regex (works on Windows \ and Linux /)
+    $dataScripts = $scripts | Where-Object { $_.FullName -match '[/\\]20_Data[/\\]' }
+    $nonDataScripts = $scripts | Where-Object { $_.FullName -notmatch '[/\\]20_Data[/\\]' }
     
     Write-Verbose "Found $($nonDataScripts.Count) non-data script(s) and $($dataScripts.Count) data script(s)"
     
