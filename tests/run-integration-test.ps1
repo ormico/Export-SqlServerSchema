@@ -78,7 +78,7 @@ function Invoke-SqlCommand {
         [string]$Database = "master"
     )
     
-    $result = sqlcmd -S $Server -U $Username -P $Password -d $Database -Q $Query -h -1 2>&1
+    $result = sqlcmd -S $Server -U $Username -P $Password -d $Database -C -Q $Query -h -1 2>&1
     if ($LASTEXITCODE -ne 0) {
         throw "SQL command failed: $result"
     }
