@@ -169,16 +169,28 @@ function Get-TargetServerOS {
     .SYNOPSIS
         Detects the target SQL Server's operating system (Windows or Linux).
     #>
-    param([string]$ServerName, [pscredential]$Cred)
+    param(
+        [string]$ServerName,
+        [pscredential]$Cred,
+        [hashtable]$Config
+    )
     
     try {
         $query = "SELECT CASE WHEN host_platform = 'Windows' THEN 'Windows' ELSE 'Linux' END AS OS FROM sys.dm_os_host_info"
         
+        # Build sqlcmd parameters
+        $sqlcmdParams = @("-S", $ServerName, "-Q", $query, "-h", "-1", "-W")
+        
         if ($Cred) {
-            $result = sqlcmd -S $ServerName -U $Cred.UserName -P $Cred.GetNetworkCredential().Password -Q $query -h -1 -W
-        } else {
-            $result = sqlcmd -S $ServerName -Q $query -h -1 -W
+            $sqlcmdParams += @("-U", $Cred.UserName, "-P", $Cred.GetNetworkCredential().Password)
         }
+        
+        # Add -C flag if trustServerCertificate is enabled in config
+        if ($Config -and $Config.ContainsKey('trustServerCertificate') -and $Config.trustServerCertificate) {
+            $sqlcmdParams += "-C"
+        }
+        
+        $result = sqlcmd @sqlcmdParams
         
         $os = ($result | Select-String -Pattern '(Windows|Linux)').Matches[0].Value
         Write-Verbose "Target server OS detected: $os"
@@ -916,7 +928,7 @@ try {
     Write-Output "Found $($scripts.Count) script(s)"
     
     # Detect target server OS for path separator
-    $targetOS = Get-TargetServerOS -ServerName $Server -Cred $Credential
+    $targetOS = Get-TargetServerOS -ServerName $Server -Cred $Credential -Config $config
     $pathSeparator = if ($targetOS -eq 'Linux') { '/' } else { '\' }
     Write-Verbose "Using path separator for $targetOS`: $pathSeparator"
     
