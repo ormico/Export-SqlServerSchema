@@ -1,0 +1,70 @@
+name: CI - Pull Request
+
+on:
+  pull_request:
+    branches:
+      - main
+      - develop
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - '.github/**'
+      - '!.github/workflows/**'
+
+jobs:
+  test:
+    name: Run Integration Tests
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Setup PowerShell
+        shell: pwsh
+        run: |
+          Write-Host "PowerShell version: $($PSVersionTable.PSVersion)"
+          Write-Host "OS: $($PSVersionTable.OS)"
+      
+      - name: Install PowerShell modules
+        shell: pwsh
+        run: |
+          Install-Module -Name SqlServer -Scope CurrentUser -Force -AllowClobber
+          Install-Module -Name powershell-yaml -Scope CurrentUser -Force -AllowClobber
+          Write-Host "[SUCCESS] PowerShell modules installed"
+      
+      - name: Start SQL Server container
+        working-directory: ./tests
+        run: |
+          docker-compose up -d
+          echo "Waiting for SQL Server to be ready..."
+          sleep 30
+      
+      - name: Check SQL Server status
+        working-directory: ./tests
+        run: |
+          docker-compose ps
+          docker-compose logs sqlserver
+      
+      - name: Run integration tests
+        shell: pwsh
+        working-directory: ./tests
+        run: |
+          Write-Host "Starting integration test suite..."
+          ./run-integration-test.ps1
+      
+      - name: Cleanup
+        if: always()
+        working-directory: ./tests
+        run: |
+          docker-compose down -v
+      
+      - name: Upload test artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-exports
+          path: tests/exports/
+          retention-days: 7
