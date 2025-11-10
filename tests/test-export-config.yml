@@ -1,0 +1,9 @@
+# Export Configuration for Integration Tests
+# Used for exporting from Docker SQL Server 2022 with self-signed cert
+
+# CONNECTION SETTINGS
+# Trust server certificate for Docker SQL Server 2022 with self-signed cert
+trustServerCertificate: true
+
+# Export settings
+includeData: true

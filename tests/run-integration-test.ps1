@@ -211,9 +211,12 @@ try {
     $securePassword = ConvertTo-SecureString $Password -AsPlainText -Force
     $credential = New-Object System.Management.Automation.PSCredential($Username, $securePassword)
     
+    # Get export config path
+    $exportConfigPath = Join-Path $PSScriptRoot "test-export-config.yml"
+    
     # Run export (this will fail if SMO is not installed, but we'll handle it gracefully)
     try {
-        & $exportScript -Server $TEST_SERVER -Database $SourceDatabase -OutputPath $ExportPath -IncludeData -Credential $credential -Verbose
+        & $exportScript -Server $TEST_SERVER -Database $SourceDatabase -OutputPath $ExportPath -IncludeData -Credential $credential -ConfigFile $exportConfigPath -Verbose
         Write-TestStep "Schema exported successfully" -Type Success
     } catch {
         Write-TestStep "Export failed (SMO may not be installed)" -Type Warning

@@ -119,7 +119,8 @@ function Test-DatabaseConnection {
     param(
         [string]$ServerName,
         [string]$DatabaseName,
-        [pscredential]$Cred
+        [pscredential]$Cred,
+        [hashtable]$Config
     )
     
     Write-Output "Testing connection to $ServerName\$DatabaseName..."
@@ -135,6 +136,12 @@ function Test-DatabaseConnection {
         }
         
         $server.ConnectionContext.ConnectTimeout = 15
+        
+        # Apply TrustServerCertificate from config if specified
+        if ($Config -and $Config.ContainsKey('trustServerCertificate')) {
+            $server.ConnectionContext.TrustServerCertificate = $Config.trustServerCertificate
+        }
+        
         $server.ConnectionContext.Connect()
         
         # Verify database exists
@@ -235,7 +242,7 @@ function Import-YamlConfig {
         throw "Configuration file not found: $ConfigFilePath"
     }
     
-    Write-Output "[INFO] Loading configuration from: $ConfigFilePath"
+    Write-Host "[INFO] Loading configuration from: $ConfigFilePath"
     
     try {
         # Check for PowerShell-Yaml module
@@ -268,7 +275,7 @@ function Import-YamlConfig {
             $config.export.excludeSchemas = @()
         }
         
-        Write-Output "[SUCCESS] Configuration loaded successfully"
+        Write-Host "[SUCCESS] Configuration loaded successfully" -ForegroundColor Green
         return $config
         
     } catch {
@@ -1351,7 +1358,7 @@ try {
     Test-Dependencies
     
     # Test database connection
-    if (-not (Test-DatabaseConnection -ServerName $Server -DatabaseName $Database -Cred $Credential)) {
+    if (-not (Test-DatabaseConnection -ServerName $Server -DatabaseName $Database -Cred $Credential -Config $config)) {
         exit 1
     }
     
