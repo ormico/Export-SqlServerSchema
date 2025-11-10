@@ -745,8 +745,12 @@ function Get-ScriptFiles {
     $orderedDirs += '19_Security'
     
     # Data - only if requested
+    Write-Verbose "Get-ScriptFiles: IncludeData parameter = $IncludeData"
     if ($IncludeData) {
         $orderedDirs += '20_Data'
+        Write-Verbose "Added 20_Data to ordered directories"
+    } else {
+        Write-Verbose "Skipping 20_Data (IncludeData=$IncludeData)"
     }
     
     $scripts = @()
@@ -1003,6 +1007,7 @@ try {
             
             # Override IncludeData if specified in config
             # Support both simplified config (includeData at root) and full config (nested mode settings)
+            Write-Verbose "Config includeData value: $($config.includeData), Parameter IncludeData: $IncludeData"
             if ($config.includeData -and -not $IncludeData) {
                 $IncludeData = $config.includeData
                 Write-Output "[INFO] Data import enabled from config file"
@@ -1163,6 +1168,11 @@ try {
     # Apply scripts
     Write-Output 'Applying scripts...'
     Write-Output '───────────────────────────────────────────────'
+    Write-Verbose "Total scripts to process: $($scripts.Count)"
+    if ($scripts.Count -gt 0) {
+        Write-Verbose "First script: $($scripts[0].FullName)"
+        Write-Verbose "Last script: $($scripts[-1].FullName)"
+    }
     $successCount = 0
     $failureCount = 0
     $skipCount = 0
@@ -1192,13 +1202,16 @@ try {
     }
     
     # If we have data scripts and no failures so far, handle them with FK constraints disabled
+    Write-Verbose "FK disable check: dataScripts.Count=$($dataScripts.Count), failureCount=$failureCount"
     if ($dataScripts.Count -gt 0 -and $failureCount -eq 0) {
         Write-Output ''
         Write-Output 'Preparing for data import...'
+        Write-Verbose "Attempting to disable foreign key constraints..."
         
         # Disable all foreign key constraints  
         # Get list of FKs and disable them individually
         try {
+            Write-Verbose "Connecting to $Server database $Database to disable FKs..."
             $smServer = [Microsoft.SqlServer.Management.Smo.Server]::new($Server)
             if ($Credential) {
                 $smServer.ConnectionContext.set_LoginSecure($false)
@@ -1214,14 +1227,19 @@ try {
             }
             
             $smServer.ConnectionContext.Connect()
+            Write-Verbose "Connected to SQL Server successfully"
             
             $db = $smServer.Databases[$Database]
+            Write-Verbose "Found database: $($db.Name), Tables count: $($db.Tables.Count)"
             $fkCount = 0
             
             foreach ($table in $db.Tables) {
+                Write-Verbose "Checking table: $($table.Schema).$($table.Name), FK count: $($table.ForeignKeys.Count)"
                 foreach ($fk in $table.ForeignKeys) {
+                    Write-Verbose "  FK: $($fk.Name), IsEnabled: $($fk.IsEnabled)"
                     if ($fk.IsEnabled) {
                         $alterSql = "ALTER TABLE [$($table.Schema)].[$($table.Name)] NOCHECK CONSTRAINT [$($fk.Name)]"
+                        Write-Verbose "  Executing: $alterSql"
                         $smServer.ConnectionContext.ExecuteNonQuery($alterSql)
                         $fkCount++
                     }
