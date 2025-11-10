@@ -75,6 +75,19 @@ jobs:
           Install-Module -Name powershell-yaml -Scope CurrentUser -Force -AllowClobber
           Write-Host "[SUCCESS] PowerShell modules installed"
       
+      - name: Create .env file for Docker
+        working-directory: ./tests
+        run: |
+          cat > .env << EOF
+          SA_PASSWORD=Test@1234
+          MSSQL_PID=Developer
+          SQL_PORT=1433
+          TEST_DATABASE=TestDb
+          TEST_SERVER=localhost
+          TEST_USERNAME=sa
+          EOF
+          echo "Created .env file"
+      
       - name: Start SQL Server container
         working-directory: ./tests
         run: |
