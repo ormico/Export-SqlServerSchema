@@ -5,7 +5,7 @@ on:
     branches:
       - main
     tags:
-      - 'v*.*.*'
+      - 'v*'  # Triggers on any tag starting with v (v1.0.0, v1.2.3, etc.)
   workflow_dispatch:
 
 jobs:
