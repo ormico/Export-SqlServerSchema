@@ -1380,7 +1380,32 @@ try {
     }
     
     $smServer.ConnectionContext.ConnectTimeout = 15
-    $smServer.ConnectionContext.Connect()
+    
+    # Apply TrustServerCertificate from config if specified
+    if ($config -and $config.ContainsKey('trustServerCertificate')) {
+        $smServer.ConnectionContext.TrustServerCertificate = $config.trustServerCertificate
+    }
+    
+    try {
+        $smServer.ConnectionContext.Connect()
+    } catch {
+        if ($_.Exception.Message -match 'certificate|SSL|TLS') {
+            Write-Error @"
+[ERROR] SSL/Certificate error connecting to SQL Server: $_
+
+This usually occurs with SQL Server 2022+ using self-signed certificates.
+
+SOLUTION: Add to your config file:
+  trustServerCertificate: true
+
+Or create a config file with:
+  trustServerCertificate: true
+  
+For more details, see: https://go.microsoft.com/fwlink/?linkid=2226722
+"@
+        }
+        throw
+    }
     
     $smDatabase = $smServer.Databases[$Database]
     if ($null -eq $smDatabase) {

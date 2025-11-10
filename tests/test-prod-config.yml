@@ -1,6 +1,10 @@
 # Production Mode Configuration for Integration Tests
 # Full database deployment including infrastructure and environment-specific settings
 
+# CONNECTION SETTINGS
+# Trust server certificate for Docker SQL Server 2022 with self-signed cert
+trustServerCertificate: true
+
 importMode: Prod
 includeData: true
 

@@ -5,6 +5,22 @@
 $schema: "./export-import-config.schema.json"
 
 # ═══════════════════════════════════════════════════════════════
+# CONNECTION SETTINGS
+# ═══════════════════════════════════════════════════════════════
+
+# Trust server certificate (for self-signed certificates)
+# Set to true for:
+#   - Local development environments
+#   - Docker containers with self-signed certs
+#   - SQL Server 2022+ with default encryption
+# Set to false for:
+#   - Production environments with valid certificates
+#   - Environments with proper certificate infrastructure
+# 
+# If you get certificate verification errors, set this to true
+trustServerCertificate: false
+
+# ═══════════════════════════════════════════════════════════════
 # EXPORT CONFIGURATION
 # ═══════════════════════════════════════════════════════════════
 export:

@@ -194,13 +194,22 @@ function Test-DatabaseConnection {
     .SYNOPSIS
         Tests connection to target SQL Server.
     #>
-    param([string]$ServerName, [pscredential]$Cred)
+    param(
+        [string]$ServerName,
+        [pscredential]$Cred,
+        [hashtable]$Config
+    )
     
     Write-Output "Testing connection to $ServerName..."
     
     try {
         $server = [Microsoft.SqlServer.Management.Smo.Server]::new($ServerName)
         $server.ConnectionContext.ConnectTimeout = 10
+        
+        # Apply TrustServerCertificate from config if specified
+        if ($Config -and $Config.ContainsKey('trustServerCertificate')) {
+            $server.ConnectionContext.TrustServerCertificate = $Config.trustServerCertificate
+        }
         
         if ($Cred) {
             $server.ConnectionContext.LoginSecure = $false
@@ -213,7 +222,23 @@ function Test-DatabaseConnection {
         Write-Output '[SUCCESS] Connection successful'
         return $true
     } catch {
-        Write-Error "[ERROR] Connection failed: $_"
+        if ($_.Exception.Message -match 'certificate|SSL|TLS') {
+            Write-Error @"
+[ERROR] SSL/Certificate error connecting to SQL Server: $_
+
+This usually occurs with SQL Server 2022+ using self-signed certificates.
+
+SOLUTION: Add to your config file:
+  trustServerCertificate: true
+
+Or create a config file with:
+  trustServerCertificate: true
+  
+For more details, see: https://go.microsoft.com/fwlink/?linkid=2226722
+"@
+        } else {
+            Write-Error "[ERROR] Connection failed: $_"
+        }
         return $false
     }
 }
@@ -223,7 +248,12 @@ function Test-DatabaseExists {
     .SYNOPSIS
         Checks if target database exists.
     #>
-    param([string]$ServerName, [string]$DatabaseName, [pscredential]$Cred)
+    param(
+        [string]$ServerName,
+        [string]$DatabaseName,
+        [pscredential]$Cred,
+        [hashtable]$Config
+    )
     
     try {
         $server = [Microsoft.SqlServer.Management.Smo.Server]::new($ServerName)
@@ -232,6 +262,12 @@ function Test-DatabaseExists {
             $server.ConnectionContext.Login = $Cred.UserName
             $server.ConnectionContext.SecurePassword = $Cred.Password
         }
+        
+        # Apply TrustServerCertificate from config if specified
+        if ($Config -and $Config.ContainsKey('trustServerCertificate')) {
+            $server.ConnectionContext.TrustServerCertificate = $Config.trustServerCertificate
+        }
+        
         $server.ConnectionContext.Connect()
         $exists = $null -ne $server.Databases[$DatabaseName]
         $server.ConnectionContext.Disconnect()
@@ -247,7 +283,12 @@ function Test-SchemaExists {
     .SYNOPSIS
         Checks if schema already exists in target database.
     #>
-    param([string]$ServerName, [string]$DatabaseName, [pscredential]$Cred)
+    param(
+        [string]$ServerName,
+        [string]$DatabaseName,
+        [pscredential]$Cred,
+        [hashtable]$Config
+    )
     
     try {
         $server = [Microsoft.SqlServer.Management.Smo.Server]::new($ServerName)
@@ -256,6 +297,12 @@ function Test-SchemaExists {
             $server.ConnectionContext.Login = $Cred.UserName
             $server.ConnectionContext.SecurePassword = $Cred.Password
         }
+        
+        # Apply TrustServerCertificate from config if specified
+        if ($Config -and $Config.ContainsKey('trustServerCertificate')) {
+            $server.ConnectionContext.TrustServerCertificate = $Config.trustServerCertificate
+        }
+        
         $server.ConnectionContext.Connect()
         
         $db = $server.Databases[$DatabaseName]
@@ -282,7 +329,12 @@ function New-Database {
     .SYNOPSIS
         Creates a new database on the target server.
     #>
-    param([string]$ServerName, [string]$DatabaseName, [pscredential]$Cred)
+    param(
+        [string]$ServerName,
+        [string]$DatabaseName,
+        [pscredential]$Cred,
+        [hashtable]$Config
+    )
     
     Write-Output "Creating database $DatabaseName..."
     
@@ -293,6 +345,12 @@ function New-Database {
             $server.ConnectionContext.Login = $Cred.UserName
             $server.ConnectionContext.SecurePassword = $Cred.Password
         }
+        
+        # Apply TrustServerCertificate from config if specified
+        if ($Config -and $Config.ContainsKey('trustServerCertificate')) {
+            $server.ConnectionContext.TrustServerCertificate = $Config.trustServerCertificate
+        }
+        
         $server.ConnectionContext.Connect()
         
         $db = [Microsoft.SqlServer.Management.Smo.Database]::new($server, $DatabaseName)
@@ -319,7 +377,8 @@ function Invoke-SqlScript {
         [pscredential]$Cred,
         [int]$Timeout,
         [switch]$Show,
-        [hashtable]$SqlCmdVariables = @{}
+        [hashtable]$SqlCmdVariables = @{},
+        [hashtable]$Config
     )
     
     # Determine script source
@@ -377,7 +436,31 @@ function Invoke-SqlScript {
         
         $server.ConnectionContext.ConnectTimeout = 15
         $server.ConnectionContext.DatabaseName = $DatabaseName
-        $server.ConnectionContext.Connect()
+        
+        # Apply TrustServerCertificate from config if specified
+        if ($Config -and $Config.ContainsKey('trustServerCertificate')) {
+            $server.ConnectionContext.TrustServerCertificate = $Config.trustServerCertificate
+        }
+        
+        try {
+            $server.ConnectionContext.Connect()
+        } catch {
+            if ($_.Exception.Message -match 'certificate|SSL|TLS') {
+                Write-Error @"
+[ERROR] SSL/Certificate error connecting to SQL Server for script execution: $_
+
+This usually occurs with SQL Server 2022+ using self-signed certificates.
+
+SOLUTION: Add to your config file:
+  trustServerCertificate: true
+
+Failed script: $scriptName
+For more details, see: https://go.microsoft.com/fwlink/?linkid=2226722
+"@
+            }
+            throw
+        }
+        
         $server.ConnectionContext.StatementTimeout = $Timeout
         
         # Split by GO statements (batch separator)
@@ -769,17 +852,17 @@ try {
     Write-Output ''
     
     # Test connection to server
-    if (-not (Test-DatabaseConnection -ServerName $Server -Cred $Credential)) {
+    if (-not (Test-DatabaseConnection -ServerName $Server -Cred $Credential -Config $config)) {
         exit 1
     }
     Write-Output ''
     
     # Check if database exists
-    $dbExists = Test-DatabaseExists -ServerName $Server -DatabaseName $Database -Cred $Credential
+    $dbExists = Test-DatabaseExists -ServerName $Server -DatabaseName $Database -Cred $Credential -Config $config
     
     if (-not $dbExists) {
         if ($CreateDatabase) {
-            if (-not (New-Database -ServerName $Server -DatabaseName $Database -Cred $Credential)) {
+            if (-not (New-Database -ServerName $Server -DatabaseName $Database -Cred $Credential -Config $config)) {
                 exit 1
             }
         } else {
@@ -792,7 +875,7 @@ try {
     Write-Output ''
     
     # Check for existing schema
-    if (Test-SchemaExists -ServerName $Server -DatabaseName $Database -Cred $Credential) {
+    if (Test-SchemaExists -ServerName $Server -DatabaseName $Database -Cred $Credential -Config $config) {
         if (-not $Force) {
             Write-Output "[INFO[ Database $Database already contains schema objects."
             Write-Output "Use -Force to proceed with redeployment."
@@ -909,7 +992,7 @@ try {
     foreach ($script in $nonDataScripts) {
         $result = Invoke-SqlScript -FilePath $script.FullName -ServerName $Server `
             -DatabaseName $Database -Cred $Credential -Timeout $CommandTimeout -Show:$ShowSQL `
-            -SqlCmdVariables $sqlCmdVars
+            -SqlCmdVariables $sqlCmdVars -Config $config
         
         if ($result -eq $true) {
             $successCount++
@@ -939,6 +1022,12 @@ try {
             }
             $smServer.ConnectionContext.ConnectTimeout = 15
             $smServer.ConnectionContext.DatabaseName = $Database
+            
+            # Apply TrustServerCertificate from config if specified
+            if ($config -and $config.ContainsKey('trustServerCertificate')) {
+                $smServer.ConnectionContext.TrustServerCertificate = $config.trustServerCertificate
+            }
+            
             $smServer.ConnectionContext.Connect()
             
             $db = $smServer.Databases[$Database]
@@ -973,7 +1062,7 @@ try {
         foreach ($script in $dataScripts) {
             $result = Invoke-SqlScript -FilePath $script.FullName -ServerName $Server `
                 -DatabaseName $Database -Cred $Credential -Timeout $CommandTimeout -Show:$ShowSQL `
-                -SqlCmdVariables $sqlCmdVars
+                -SqlCmdVariables $sqlCmdVars -Config $config
             
             if ($result -eq $true) {
                 $successCount++
@@ -997,6 +1086,12 @@ try {
             }
             $smServer.ConnectionContext.ConnectTimeout = 15
             $smServer.ConnectionContext.DatabaseName = $Database
+            
+            # Apply TrustServerCertificate from config if specified
+            if ($config -and $config.ContainsKey('trustServerCertificate')) {
+                $smServer.ConnectionContext.TrustServerCertificate = $config.trustServerCertificate
+            }
+            
             $smServer.ConnectionContext.Connect()
             
             $db = $smServer.Databases[$Database]

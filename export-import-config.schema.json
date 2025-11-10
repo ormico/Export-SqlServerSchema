@@ -5,6 +5,11 @@
   "description": "Configuration schema for SQL Server schema export and import operations",
   "type": "object",
   "properties": {
+    "trustServerCertificate": {
+      "type": "boolean",
+      "description": "Trust server certificate (required for SQL Server with self-signed certificates). Set to true for local/dev environments with self-signed certs, false for production with valid certificates.",
+      "default": false
+    },
     "export": {
       "type": "object",
       "description": "Export operation settings",

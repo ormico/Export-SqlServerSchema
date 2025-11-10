@@ -1,6 +1,10 @@
 # Development Mode Configuration for Integration Tests
 # Skips environment-specific infrastructure for rapid schema-only deployments
 
+# CONNECTION SETTINGS
+# Trust server certificate for Docker SQL Server 2022 with self-signed cert
+trustServerCertificate: true
+
 importMode: Dev
 includeData: true
 
