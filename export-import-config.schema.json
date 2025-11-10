@@ -1,0 +1,175 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/ormico/Export-SqlServerSchema/export-import-config.schema.json",
+  "title": "Export-SqlServerSchema Configuration",
+  "description": "Configuration schema for SQL Server schema export and import operations",
+  "type": "object",
+  "properties": {
+    "export": {
+      "type": "object",
+      "description": "Export operation settings",
+      "properties": {
+        "excludeObjectTypes": {
+          "type": "array",
+          "description": "Object types to exclude from export (all included by default)",
+          "items": {
+            "type": "string",
+            "enum": [
+              "FileGroups",
+              "DatabaseScopedConfigurations",
+              "DatabaseScopedCredentials",
+              "SecurityPolicies",
+              "ExternalDataSources",
+              "ExternalFileFormats",
+              "SearchPropertyLists",
+              "PlanGuides",
+              "ExternalLibraries",
+              "ExternalLanguages",
+              "Sequences",
+              "Synonyms",
+              "Views",
+              "StoredProcedures",
+              "Functions",
+              "Triggers",
+              "Indexes",
+              "ForeignKeys"
+            ]
+          },
+          "uniqueItems": true
+        },
+        "includeData": {
+          "type": "boolean",
+          "description": "Export table data as INSERT statements",
+          "default": false
+        },
+        "excludeObjects": {
+          "type": "array",
+          "description": "Specific objects to exclude using schema.name pattern (supports wildcards)",
+          "items": {
+            "type": "string",
+            "pattern": "^[\\w\\*]+\\.[\\w\\*]+$"
+          },
+          "examples": [
+            "dbo.LegacyTable",
+            "staging.*",
+            "*.TempTable"
+          ]
+        },
+        "excludeSchemas": {
+          "type": "array",
+          "description": "Schemas to exclude entirely from export",
+          "items": {
+            "type": "string"
+          },
+          "examples": ["staging", "temp", "archive"]
+        }
+      },
+      "additionalProperties": false
+    },
+    "import": {
+      "type": "object",
+      "description": "Import operation settings",
+      "properties": {
+        "defaultMode": {
+          "type": "string",
+          "enum": ["Dev", "Prod"],
+          "description": "Default import mode (Dev or Prod)",
+          "default": "Dev"
+        },
+        "developerMode": {
+          "$ref": "#/definitions/importSettings",
+          "description": "Settings for developer mode imports"
+        },
+        "productionMode": {
+          "$ref": "#/definitions/importSettings",
+          "description": "Settings for production mode imports"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "importSettings": {
+      "type": "object",
+      "description": "Import mode settings",
+      "properties": {
+        "includeFileGroups": {
+          "type": "boolean",
+          "description": "Import FileGroup definitions and create files",
+          "default": false
+        },
+        "includeConfigurations": {
+          "type": "boolean",
+          "description": "Import database scoped configurations",
+          "default": false
+        },
+        "includeDatabaseScopedCredentials": {
+          "type": "boolean",
+          "const": false,
+          "description": "Always false - credentials require manual setup (cannot be imported)"
+        },
+        "includeExternalData": {
+          "type": "boolean",
+          "description": "Import external data sources and file formats",
+          "default": false
+        },
+        "enableSecurityPolicies": {
+          "type": "boolean",
+          "description": "Enable Row-Level Security policies (true = STATE ON, false = STATE OFF)",
+          "default": false
+        },
+        "includeData": {
+          "type": "boolean",
+          "description": "Import table data",
+          "default": false
+        },
+        "excludeObjectTypes": {
+          "type": "array",
+          "description": "Object types to exclude from import in this mode",
+          "items": {
+            "type": "string",
+            "enum": [
+              "PlanGuides",
+              "ExternalLibraries",
+              "ExternalLanguages",
+              "SearchPropertyLists",
+              "Synonyms"
+            ]
+          },
+          "uniqueItems": true
+        },
+        "fileGroupPathMapping": {
+          "type": "object",
+          "description": "Map FileGroup names to physical paths (required if includeFileGroups=true)",
+          "additionalProperties": {
+            "type": "string",
+            "description": "Physical path for FileGroup data files"
+          },
+          "examples": [
+            {
+              "FG_CURRENT": "E:\\SQLData\\Current",
+              "FG_ARCHIVE": "F:\\SQLArchive\\Archive"
+            }
+          ]
+        },
+        "externalConnectionStrings": {
+          "type": "object",
+          "description": "Map external data source names to connection URLs",
+          "additionalProperties": {
+            "type": "string",
+            "format": "uri",
+            "description": "Connection URL for external data source"
+          },
+          "examples": [
+            {
+              "AzureDataLake": "https://proddatalake.blob.core.windows.net/data",
+              "AzureBackup": "https://prodbackup.blob.core.windows.net/backup"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

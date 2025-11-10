@@ -2,6 +2,7 @@
 
 <#
 .NOTES
+    Version: 1.1.0
     License: MIT
     Repository: https://github.com/ormico/Export-SqlServerSchema
 
@@ -10,8 +11,8 @@
 
 .DESCRIPTION
     Applies schema scripts in the correct dependency order to recreate database objects on a target server.
-    Supports creating the database if it doesn't exist, detecting existing schema, data loading, error handling,
-    and idempotent operations.
+    Supports two import modes: Developer (default, schema-only) and Production (full infrastructure).
+    Automatically handles foreign key constraints during data imports and validates referential integrity.
 
 .PARAMETER Server
     Target SQL Server instance. Required parameter.
@@ -22,17 +23,23 @@
     Required parameter.
 
 .PARAMETER SourcePath
-    Path to the directory containing exported schema files (the timestamped folder created by DB2SCRIPT.ps1).
+    Path to the directory containing exported schema files (timestamped folder from Export-SqlServerSchema.ps1).
     Required parameter.
 
 .PARAMETER Credential
     PSCredential object for SQL Server authentication. If not provided, uses integrated Windows authentication.
 
+.PARAMETER ImportMode
+    Import mode: 'Dev' (default, schema-only) or 'Prod' (full infrastructure with FileGroups, configs).
+
+.PARAMETER ConfigFile
+    Path to YAML configuration file with FileGroup mappings and mode-specific settings. Optional.
+
 .PARAMETER CreateDatabase
     If specified, creates the target database if it does not exist. Requires appropriate server-level permissions.
 
 .PARAMETER IncludeData
-    If specified, includes data loading from the 12_Data folder. Default is schema only.
+    If specified, includes data loading from the Data folder. Default is schema only.
 
 .PARAMETER Force
     If specified, skips the check for existing schema and applies all scripts. Use with caution in production.
@@ -48,24 +55,27 @@
     Displays verbose output of SQL scripts being executed.
 
 .EXAMPLE
-    # Basic usage - apply schema to existing database
-    ./Apply-Schema.ps1 -Server localhost -Database TargetDb -SourcePath ".\DbScripts\localhost_SourceDb_20231215_120000"
+    # Developer mode (default) - schema only, no infrastructure
+    ./Import-SqlServerSchema.ps1 -Server localhost -Database DevDb `
+        -SourcePath ".\DbScripts\localhost_SourceDb_20251110_120000" -CreateDatabase
 
-    # With SQL authentication
+    # Production mode - full import with FileGroups and configurations
+    ./Import-SqlServerSchema.ps1 -Server prodserver -Database ProdDb `
+        -SourcePath ".\DbScripts\localhost_SourceDb_20251110_120000" `
+        -ImportMode Prod -ConfigFile ".\prod-config.yml" -CreateDatabase
+
+    # With SQL authentication and data
     $cred = Get-Credential
-    ./Apply-Schema.ps1 -Server localhost -Database TargetDb -SourcePath ".\DbScripts\..." -Credential $cred
-
-    # Create database and apply schema
-    ./Apply-Schema.ps1 -Server localhost -Database TargetDb -SourcePath ".\DbScripts\..." -CreateDatabase
-
-    # Include data loading
-    ./Apply-Schema.ps1 -Server localhost -Database TargetDb -SourcePath ".\DbScripts\..." -IncludeData
+    ./Import-SqlServerSchema.ps1 -Server localhost -Database TargetDb `
+        -SourcePath ".\DbScripts\..." -Credential $cred -IncludeData
 
     # Continue on errors (idempotent mode)
-    ./Apply-Schema.ps1 -Server localhost -Database TargetDb -SourcePath ".\DbScripts\..." -ContinueOnError
+    ./Import-SqlServerSchema.ps1 -Server localhost -Database TargetDb `
+        -SourcePath ".\DbScripts\..." -ContinueOnError
 
 .NOTES
-    Requires: sqlcmd (SQL Server Command Line Utility) or .NET SqlConnection
+    Requires: SQL Server Management Objects (SMO), PowerShell 7.0+
+    Optional: powershell-yaml module for YAML config file support
     Author: Zack Moore
     Supports: Windows, Linux, macOS
 #>
@@ -101,7 +111,14 @@ param(
     [int]$CommandTimeout = 300,
     
     [Parameter(HelpMessage = 'Show SQL scripts during execution')]
-    [switch]$ShowSQL
+    [switch]$ShowSQL,
+    
+    [Parameter(HelpMessage = 'Import mode: Dev (skip infrastructure) or Prod (import everything)')]
+    [ValidateSet('Dev', 'Prod')]
+    [string]$ImportMode = 'Dev',
+    
+    [Parameter(HelpMessage = 'Path to YAML configuration file')]
+    [string]$ConfigFile
 )
 
 $ErrorActionPreference = if ($ContinueOnError) { 'Continue' } else { 'Stop' }
@@ -119,19 +136,19 @@ function Test-Dependencies {
     if ($PSVersionTable.PSVersion.Major -lt 7) {
         throw "PowerShell 7.0 or later required. Current: $($PSVersionTable.PSVersion)"
     }
-    Write-Output '✓ PowerShell 7.0+'
+    Write-Output '[SUCCESS] PowerShell 7.0+'
     
     # Check for SMO or sqlcmd
     try {
         # Try to import SqlServer module if available
         if (Get-Module -ListAvailable -Name SqlServer) {
             Import-Module SqlServer -ErrorAction Stop
-            Write-Output '✓ SQL Server Management Objects (SMO) available (SqlServer module)'
+            Write-Output '[SUCCESS] SQL Server Management Objects (SMO) available (SqlServer module)'
             return 'SMO'
         } else {
             # Fallback to direct assembly load
             Add-Type -AssemblyName 'Microsoft.SqlServer.Smo' -ErrorAction Stop
-            Write-Output '✓ SQL Server Management Objects (SMO) available'
+            Write-Output '[SUCCESS] SQL Server Management Objects (SMO) available'
             return 'SMO'
         }
     } catch {
@@ -139,11 +156,36 @@ function Test-Dependencies {
         
         try {
             $sqlcmdPath = Get-Command sqlcmd -ErrorAction Stop
-            Write-Output "✓ sqlcmd available at $($sqlcmdPath.Source)"
+            Write-Output "[SUCCESS] sqlcmd available at $($sqlcmdPath.Source)"
             return 'SQLCMD'
         } catch {
             throw "Neither SMO nor sqlcmd found. Install SQL Server Management Studio or sqlcmd utility."
         }
+    }
+}
+
+function Get-TargetServerOS {
+    <#
+    .SYNOPSIS
+        Detects the target SQL Server's operating system (Windows or Linux).
+    #>
+    param([string]$ServerName, [pscredential]$Cred)
+    
+    try {
+        $query = "SELECT CASE WHEN host_platform = 'Windows' THEN 'Windows' ELSE 'Linux' END AS OS FROM sys.dm_os_host_info"
+        
+        if ($Cred) {
+            $result = sqlcmd -S $ServerName -U $Cred.UserName -P $Cred.GetNetworkCredential().Password -Q $query -h -1 -W
+        } else {
+            $result = sqlcmd -S $ServerName -Q $query -h -1 -W
+        }
+        
+        $os = ($result | Select-String -Pattern '(Windows|Linux)').Matches[0].Value
+        Write-Verbose "Target server OS detected: $os"
+        return $os
+    } catch {
+        Write-Verbose "Could not detect target OS, assuming Windows: $_"
+        return 'Windows'
     }
 }
 
@@ -168,10 +210,10 @@ function Test-DatabaseConnection {
         
         $server.ConnectionContext.Connect()
         $server.ConnectionContext.Disconnect()
-        Write-Output '✓ Connection successful'
+        Write-Output '[SUCCESS] Connection successful'
         return $true
     } catch {
-        Write-Error "✗ Connection failed: $_"
+        Write-Error "[ERROR] Connection failed: $_"
         return $false
     }
 }
@@ -195,7 +237,7 @@ function Test-DatabaseExists {
         $server.ConnectionContext.Disconnect()
         return $exists
     } catch {
-        Write-Error "✗ Error checking database: $_"
+        Write-Error "[ERROR] Error checking database: $_"
         return $false
     }
 }
@@ -222,12 +264,15 @@ function Test-SchemaExists {
             return $false
         }
         
-        # Check if any user tables exist (sign of existing schema)
-        $hasObjects = $db.Tables.Count -gt 0 -or $db.Views.Count -gt 0 -or $db.StoredProcedures.Count -gt 0
+        # Check if any user objects exist (excluding system objects)
+        $userTables = @($db.Tables | Where-Object { -not $_.IsSystemObject })
+        $userViews = @($db.Views | Where-Object { -not $_.IsSystemObject })
+        $userProcs = @($db.StoredProcedures | Where-Object { -not $_.IsSystemObject })
+        $hasObjects = ($userTables.Count -gt 0) -or ($userViews.Count -gt 0) -or ($userProcs.Count -gt 0)
         $server.ConnectionContext.Disconnect()
         return $hasObjects
     } catch {
-        Write-Error "✗ Error checking schema: $_"
+        Write-Error "[ERROR] Error checking schema: $_"
         return $false
     }
 }
@@ -253,10 +298,10 @@ function New-Database {
         $db = [Microsoft.SqlServer.Management.Smo.Database]::new($server, $DatabaseName)
         $db.Create()
         $server.ConnectionContext.Disconnect()
-        Write-Output "✓ Database $DatabaseName created"
+        Write-Output "[SUCCESS] Database $DatabaseName created"
         return $true
     } catch {
-        Write-Error "✗ Failed to create database: $_"
+        Write-Error "[ERROR] Failed to create database: $_"
         return $false
     }
 }
@@ -273,7 +318,8 @@ function Invoke-SqlScript {
         [string]$DatabaseName,
         [pscredential]$Cred,
         [int]$Timeout,
-        [switch]$Show
+        [switch]$Show,
+        [hashtable]$SqlCmdVariables = @{}
     )
     
     # Determine script source
@@ -294,8 +340,27 @@ function Invoke-SqlScript {
     
     try {
         if ([string]::IsNullOrWhiteSpace($sql)) {
-            Write-Output "  ⊘ Skipped (empty): $scriptName"
+            Write-Output "  [INFO] Skipped (empty): $scriptName"
             return $true
+        }
+        
+        # Replace SQLCMD variables in script content
+        # Format: $(VariableName) -> value
+        foreach ($varName in $SqlCmdVariables.Keys) {
+            $varValue = $SqlCmdVariables[$varName]
+            $sql = $sql -replace [regex]::Escape("`$($varName)"), $varValue
+        }
+        
+        # Replace ALTER DATABASE CURRENT with actual database name
+        # CURRENT keyword doesn't work with SMO ExecuteNonQuery
+        $sql = $sql -replace '\bALTER\s+DATABASE\s+CURRENT\b', "ALTER DATABASE [$DatabaseName]"
+        
+        # For FileGroups scripts, ensure logical file names are unique by prefixing with database name
+        # This prevents conflicts when multiple databases on same server use similar schema
+        # Pattern: NAME = N'OriginalName' (but NOT FILENAME = ...)
+        # Use negative lookbehind to ensure we're not matching FILENAME
+        if ($scriptName -match '(?i)filegroup') {
+            $sql = $sql -replace "(?<!FILE)NAME\s*=\s*N'([^']+)'", "NAME = N'${DatabaseName}_`$1'"
         }
         
         if ($Show) {
@@ -328,14 +393,14 @@ function Invoke-SqlScript {
         
         $server.ConnectionContext.Disconnect()
         
-        Write-Output "  ✓ Applied: $scriptName"
+        Write-Output "  [SUCCESS] Applied: $scriptName"
         return $true
     } catch {
         $errorMessage = $_.Exception.Message
         if ($_.Exception.InnerException) {
             $errorMessage += " Inner: $($_.Exception.InnerException.Message)"
         }
-        Write-Error "  ✗ Failed: $scriptName - $errorMessage"
+        Write-Error "  [ERROR] Failed: $scriptName - $errorMessage"
         return -1
     }
 }
@@ -343,54 +408,290 @@ function Invoke-SqlScript {
 function Get-ScriptFiles {
     <#
     .SYNOPSIS
-        Gets SQL script files in dependency order.
+        Gets SQL script files in dependency order, filtered by import mode.
     #>
     param(
         [string]$Path,
-        [switch]$IncludeData
+        [switch]$IncludeData,
+        [string]$Mode = 'Dev',
+        $Config = @{}
     )
     
-    $orderedDirs = @(
-        '01_Schemas',
-        '02_Types',
-        '03_Tables_PrimaryKey',
-        '04_Tables_ForeignKeys',
-        '05_Indexes',
-        '06_Defaults',
-        '07_Rules',
-        '08_Programmability'
+    # Get mode-specific settings
+    # Support both simplified config (no import.mode structure) and full config (nested)
+    $modeSettings = if ($Mode -eq 'Dev') {
+        if ($Config.import -and $Config.import.developerMode) {
+            # Full config format with nested mode settings
+            $Config.import.developerMode
+        } else {
+            # Simplified config or no config - use Dev defaults
+            @{
+                includeFileGroups = $false
+                includeConfigurations = $false
+                includeDatabaseScopedCredentials = $false
+                includeExternalData = $false
+                enableSecurityPolicies = $false
+            }
+        }
+    } else {
+        # Prod mode
+        if ($Config.import -and $Config.import.productionMode) {
+            # Full config format with nested mode settings
+            $Config.import.productionMode
+        } else {
+            # Simplified config or no config - use Prod defaults
+            @{
+                includeFileGroups = $true
+                includeConfigurations = $true
+                includeDatabaseScopedCredentials = $false
+                includeExternalData = $true
+                enableSecurityPolicies = $true
+            }
+        }
+    }
+    
+    # Build ordered directory list based on mode
+    $orderedDirs = @()
+    
+    # FileGroups - skip in Dev mode unless explicitly enabled
+    if ($modeSettings.includeFileGroups) {
+        $orderedDirs += '00_FileGroups'
+    }
+    
+    # Database Configuration - skip in Dev mode unless explicitly enabled
+    if ($modeSettings.includeConfigurations) {
+        $orderedDirs += '01_DatabaseConfiguration'
+    }
+    
+    # Core schema objects - always included
+    $orderedDirs += @(
+        '02_Schemas',
+        '03_Sequences',
+        '04_PartitionFunctions',
+        '05_PartitionSchemes',
+        '06_Types',
+        '07_XmlSchemaCollections',
+        '08_Tables_PrimaryKey',
+        '09_Tables_ForeignKeys',
+        '10_Indexes',
+        '11_Defaults',
+        '12_Rules',
+        '13_Programmability',
+        '14_Synonyms',
+        '15_FullTextSearch'
     )
     
+    # External Data - skip in Dev mode unless explicitly enabled
+    if ($modeSettings.includeExternalData) {
+        $orderedDirs += '16_ExternalData'
+    }
+    
+    # Search Property Lists and Plan Guides - always included (harmless)
+    $orderedDirs += @(
+        '17_SearchPropertyLists',
+        '18_PlanGuides'
+    )
+    
+    # Security - always include keys/certs/roles/users
+    $orderedDirs += '19_Security'
+    
+    # Data - only if requested
     if ($IncludeData) {
-        $orderedDirs += '12_Data'
+        $orderedDirs += '20_Data'
     }
     
     $scripts = @()
+    $skippedFolders = @()
     
     foreach ($dir in $orderedDirs) {
         $fullPath = Join-Path $Path $dir
         if (Test-Path $fullPath) {
-            $scripts += @(Get-ChildItem -Path $fullPath -Filter '*.sql' -Recurse | 
-                Sort-Object FullName)
+            # Special handling for Security folder - may need to skip RLS policies
+            if ($dir -eq '19_Security' -and -not $modeSettings.enableSecurityPolicies) {
+                # Get all security scripts except SecurityPolicies
+                $securityScripts = Get-ChildItem -Path $fullPath -Filter '*.sql' -Recurse | 
+                    Where-Object { $_.Name -notmatch 'SecurityPolicies' } |
+                    Sort-Object FullName
+                $scripts += @($securityScripts)
+                
+                if ((Get-ChildItem -Path $fullPath -Filter '*SecurityPolicies.sql' -ErrorAction SilentlyContinue).Count -gt 0) {
+                    Write-Output "  [INFO] Skipping Row-Level Security policies (disabled in $Mode mode)"
+                }
+            } else {
+                $scripts += @(Get-ChildItem -Path $fullPath -Filter '*.sql' -Recurse | 
+                    Sort-Object FullName)
+            }
         }
     }
     
-    # Add remaining directories (09_Synonyms, 10_FullTextSearch, 11_Security)
-    $remainingDirs = @(
-        '09_Synonyms',
-        '10_FullTextSearch',
-        '11_Security'
+    # Track skipped folders for reporting
+    $allPossibleDirs = @('00_FileGroups', '01_DatabaseConfiguration', '16_ExternalData', '20_Data')
+    foreach ($dir in $allPossibleDirs) {
+        if ($dir -notin $orderedDirs) {
+            $fullPath = Join-Path $Path $dir
+            if (Test-Path $fullPath) {
+                $skippedFolders += $dir
+            }
+        }
+    }
+    
+    # Return both scripts and skipped folders info
+    return @{
+        Scripts = $scripts
+        SkippedFolders = $skippedFolders
+    }
+}
+
+function Import-YamlConfig {
+    <#
+    .SYNOPSIS
+        Loads and parses YAML configuration file.
+    #>
+    param([string]$ConfigFilePath)
+    
+    if (-not (Test-Path $ConfigFilePath)) {
+        throw "Configuration file not found: $ConfigFilePath"
+    }
+    
+    Write-Output "[INFO] Loading configuration from: $ConfigFilePath"
+    
+    try {
+        # Check for PowerShell-Yaml module
+        if (-not (Get-Module -ListAvailable -Name powershell-yaml)) {
+            Write-Host ""
+            Write-Host "[ERROR] PowerShell-Yaml module not found" -ForegroundColor Red
+            Write-Host "[INFO] Install with: Install-Module powershell-yaml -Scope CurrentUser" -ForegroundColor Yellow
+            Write-Host ""
+            throw "PowerShell-Yaml module is required to parse YAML configuration files"
+        }
+        
+        Import-Module powershell-yaml -ErrorAction Stop
+        $yamlContent = Get-Content $ConfigFilePath -Raw
+        $config = ConvertFrom-Yaml $yamlContent
+        
+        # NOTE: Do NOT add default import structure here
+        # Let Get-ScriptFiles and Show-ImportConfiguration handle defaults
+        # This allows simplified configs (with importMode at root) to work
+        
+        Write-Output "[SUCCESS] Configuration loaded successfully"
+        return $config
+        
+    } catch {
+        Write-Host "[ERROR] Failed to parse configuration file: $_" -ForegroundColor Red
+        throw
+    }
+}
+
+function Show-ImportConfiguration {
+    <#
+    .SYNOPSIS
+        Displays the active import configuration at script start.
+    #>
+    param(
+        [string]$ServerName,
+        [string]$DatabaseName,
+        [string]$SourceDirectory,
+        [string]$Mode,
+        $Config = @{},
+        [bool]$DataImport = $false,
+        [bool]$DatabaseCreation = $false,
+        [string]$ConfigSource = "None (using defaults)"
     )
     
-    foreach ($dir in $remainingDirs) {
-        $fullPath = Join-Path $Path $dir
-        if (Test-Path $fullPath) {
-            $scripts += @(Get-ChildItem -Path $fullPath -Filter '*.sql' -Recurse | 
-                Sort-Object FullName)
+    Write-Host ""
+    Write-Host "═══════════════════════════════════════════════════════════════" -ForegroundColor Cyan
+    Write-Host "Import-SqlServerSchema v2.0" -ForegroundColor Cyan
+    Write-Host "═══════════════════════════════════════════════════════════════" -ForegroundColor Cyan
+    Write-Host "Target Server: " -NoNewline -ForegroundColor Gray
+    Write-Host $ServerName -ForegroundColor White
+    Write-Host "Target Database: " -NoNewline -ForegroundColor Gray
+    Write-Host $DatabaseName -ForegroundColor White
+    Write-Host "Source: " -NoNewline -ForegroundColor Gray
+    Write-Host $SourceDirectory -ForegroundColor White
+    Write-Host ""
+    Write-Host "CONFIGURATION" -ForegroundColor Yellow
+    Write-Host "-------------" -ForegroundColor Yellow
+    Write-Host "Config File: " -NoNewline -ForegroundColor Gray
+    Write-Host $ConfigSource -ForegroundColor White
+    Write-Host "Import Mode: " -NoNewline -ForegroundColor Gray
+    Write-Host $Mode -ForegroundColor $(if ($Mode -eq 'Prod') { 'Red' } else { 'Green' })
+    Write-Host "Create Database: " -NoNewline -ForegroundColor Gray
+    Write-Host $(if ($DatabaseCreation) { "Yes" } else { "No" }) -ForegroundColor White
+    Write-Host "Include Data: " -NoNewline -ForegroundColor Gray
+    Write-Host $(if ($DataImport) { "Yes" } else { "No" }) -ForegroundColor White
+    
+    Write-Host ""
+    Write-Host "IMPORT STRATEGY ($Mode Mode)" -ForegroundColor Yellow
+    Write-Host "$(('-' * (17 + $Mode.Length)))" -ForegroundColor Yellow
+    
+    # Get mode-specific settings
+    # Support both simplified config (no import.mode structure) and full config (nested)
+    $modeSettings = if ($Mode -eq 'Dev') {
+        if ($Config.import -and $Config.import.developerMode) {
+            # Full config format with nested mode settings
+            $Config.import.developerMode
+        } else {
+            # Simplified config or no config - use Dev defaults
+            @{
+                includeFileGroups = $false
+                includeConfigurations = $false
+                includeDatabaseScopedCredentials = $false
+                includeExternalData = $false
+                enableSecurityPolicies = $false
+            }
+        }
+    } else {
+        # Prod mode
+        if ($Config.import -and $Config.import.productionMode) {
+            # Full config format with nested mode settings
+            $Config.import.productionMode
+        } else {
+            # Simplified config or no config - use Prod defaults
+            @{
+                includeFileGroups = $true
+                includeConfigurations = $true
+                includeDatabaseScopedCredentials = $false
+                includeExternalData = $true
+                enableSecurityPolicies = $true
+            }
         }
     }
     
-    return $scripts
+    # Display mode-specific settings
+    if ($modeSettings.includeFileGroups) {
+        Write-Host "[ENABLED] FileGroups" -ForegroundColor Green
+    } else {
+        Write-Host "[SKIPPED] FileGroups (environment-specific)" -ForegroundColor Yellow
+    }
+    
+    if ($modeSettings.includeConfigurations) {
+        Write-Host "[ENABLED] Database Scoped Configurations" -ForegroundColor Green
+    } else {
+        Write-Host "[SKIPPED] Database Scoped Configurations (hardware-specific)" -ForegroundColor Yellow
+    }
+    
+    if ($modeSettings.includeDatabaseScopedCredentials) {
+        Write-Host "[ENABLED] Database Scoped Credentials" -ForegroundColor Green
+    } else {
+        Write-Host "[SKIPPED] Database Scoped Credentials (always - secrets required)" -ForegroundColor Gray
+    }
+    
+    if ($modeSettings.includeExternalData) {
+        Write-Host "[ENABLED] External Data Sources" -ForegroundColor Green
+    } else {
+        Write-Host "[SKIPPED] External Data Sources (environment-specific)" -ForegroundColor Yellow
+    }
+    
+    if ($modeSettings.enableSecurityPolicies) {
+        Write-Host "[ENABLED] Row-Level Security Policies" -ForegroundColor Green
+    } else {
+        Write-Host "[DISABLED] Row-Level Security Policies (dev convenience)" -ForegroundColor Yellow
+    }
+    
+    Write-Host ""
+    Write-Host "═══════════════════════════════════════════════════════════════" -ForegroundColor Cyan
+    Write-Host "Starting import..." -ForegroundColor Cyan
+    Write-Host ""
 }
 
 #endregion
@@ -398,11 +699,70 @@ function Get-ScriptFiles {
 #region Main Script
 
 try {
-    Write-Output ''
-    Write-Output '═══════════════════════════════════════════════'
-    Write-Output 'DATABASE SCHEMA DEPLOYMENT'
-    Write-Output '═══════════════════════════════════════════════'
-    Write-Output ''
+    # Load configuration if provided
+    $config = @{ 
+        import = @{ 
+            defaultMode = 'Dev'
+            developerMode = @{
+                includeFileGroups = $false
+                includeConfigurations = $false
+                includeDatabaseScopedCredentials = $false
+                includeExternalData = $false
+                enableSecurityPolicies = $false
+            }
+            productionMode = @{
+                includeFileGroups = $true
+                includeConfigurations = $true
+                includeDatabaseScopedCredentials = $false
+                includeExternalData = $true
+                enableSecurityPolicies = $true
+            }
+        } 
+    }
+    $configSource = "None (using defaults)"
+    
+    if ($ConfigFile) {
+        if (Test-Path $ConfigFile) {
+            $config = Import-YamlConfig -ConfigFilePath $ConfigFile
+            $configSource = $ConfigFile
+            
+            # Support both simplified config (importMode at root) and full config (import.defaultMode nested)
+            $configImportMode = if ($config.importMode) { $config.importMode } else { $config.import.defaultMode }
+            
+            # Override ImportMode if specified in config
+            if ($configImportMode -and $ImportMode -eq 'Dev') {
+                $ImportMode = $configImportMode
+                Write-Output "[INFO] Import mode set from config file: $ImportMode"
+            }
+            
+            # Override IncludeData if specified in config
+            # Support both simplified config (includeData at root) and full config (nested mode settings)
+            if ($config.includeData -and -not $IncludeData) {
+                $IncludeData = $config.includeData
+                Write-Output "[INFO] Data import enabled from config file"
+            } elseif ($config.import) {
+                $modeSettings = if ($ImportMode -eq 'Dev') { $config.import.developerMode } else { $config.import.productionMode }
+                if ($modeSettings.includeData -and -not $IncludeData) {
+                    $IncludeData = $modeSettings.includeData
+                    Write-Output "[INFO] Data import enabled from config file"
+                }
+            }
+        } else {
+            Write-Warning "Config file not found: $ConfigFile"
+            Write-Warning "Continuing with default settings..."
+        }
+    }
+    
+    # Display configuration
+    Show-ImportConfiguration `
+        -ServerName $Server `
+        -DatabaseName $Database `
+        -SourceDirectory $SourcePath `
+        -Mode $ImportMode `
+        -Config $config `
+        -DataImport $IncludeData `
+        -DatabaseCreation $CreateDatabase `
+        -ConfigSource $configSource
     
     # Validate dependencies
     $execMethod = Test-Dependencies
@@ -427,24 +787,26 @@ try {
             exit 1
         }
     } else {
-        Write-Output "✓ Target database exists: $Database"
+        Write-Output "[SUCCESS] Target database exists: $Database"
     }
     Write-Output ''
     
     # Check for existing schema
     if (Test-SchemaExists -ServerName $Server -DatabaseName $Database -Cred $Credential) {
         if (-not $Force) {
-            Write-Output "⚠ Database $Database already contains schema objects."
+            Write-Output "[INFO[ Database $Database already contains schema objects."
             Write-Output "Use -Force to proceed with redeployment."
             exit 0
         }
-        Write-Output '⚠ Proceeding with redeployment due to -Force flag'
+        Write-Output '[INFO[ Proceeding with redeployment due to -Force flag'
     }
     Write-Output ''
     
     # Get scripts in order
     Write-Output "Collecting scripts from: $(Split-Path -Leaf $SourcePath)"
-    $scripts = Get-ScriptFiles -Path $SourcePath -IncludeData:$IncludeData
+    $scriptInfo = Get-ScriptFiles -Path $SourcePath -IncludeData:$IncludeData -Mode $ImportMode -Config $config
+    $scripts = $scriptInfo.Scripts
+    $skippedFolders = $scriptInfo.SkippedFolders
     
     if ($scripts.Count -eq 0) {
         Write-Error "No SQL scripts found in $SourcePath"
@@ -452,6 +814,84 @@ try {
     }
     
     Write-Output "Found $($scripts.Count) script(s)"
+    
+    # Detect target server OS for path separator
+    $targetOS = Get-TargetServerOS -ServerName $Server -Cred $Credential
+    $pathSeparator = if ($targetOS -eq 'Linux') { '/' } else { '\' }
+    Write-Verbose "Using path separator for $targetOS`: $pathSeparator"
+    
+    # Build SQLCMD variables from config (for FileGroup path mappings, etc.)
+    $sqlCmdVars = @{}
+    if ($config) {
+        # Support both simplified config (fileGroupPathMapping at root) and full config (nested)
+        $modeConfig = $null
+        if ($config.fileGroupPathMapping) {
+            # Simplified config format (root-level fileGroupPathMapping)
+            $modeConfig = $config
+        } elseif ($config.import) {
+            # Full config format (nested under import.productionMode or import.developerMode)
+            $modeConfig = if ($ImportMode -eq 'Prod') { $config.import.productionMode } else { $config.import.developerMode }
+        }
+        
+        if ($modeConfig -and $modeConfig.fileGroupPathMapping) {
+            # First pass: read FileGroups SQL to extract file names
+            $fileGroupScript = Join-Path $SourcePath '00_FileGroups' '001_FileGroups.sql'
+            $fileGroupFiles = @{}  # Map: FileGroup -> [list of file names]
+            
+            if (Test-Path $fileGroupScript) {
+                # Parse FileGroup names and file names from comments
+                $currentFG = $null
+                foreach ($line in (Get-Content $fileGroupScript)) {
+                    if ($line -match '-- FileGroup: (.+)') {
+                        $currentFG = $matches[1]
+                        $fileGroupFiles[$currentFG] = @()
+                    }
+                    elseif ($line -match '-- File: (.+)' -and $currentFG) {
+                        $fileGroupFiles[$currentFG] += $matches[1]
+                    }
+                }
+            }
+            
+            # Second pass: build SQLCMD variables with full paths
+            foreach ($fg in $modeConfig.fileGroupPathMapping.Keys) {
+                $basePath = $modeConfig.fileGroupPathMapping[$fg]
+                
+                # Store base path variable
+                $varName = "${fg}_PATH"
+                $sqlCmdVars[$varName] = $basePath
+                Write-Verbose "SQLCMD Variable: `$($varName) = $basePath"
+                
+                # Build full file path variables for each file in this filegroup
+                # Include database name in filename to avoid conflicts with other databases
+                if ($fileGroupFiles.ContainsKey($fg)) {
+                    foreach ($fileName in $fileGroupFiles[$fg]) {
+                        $fileVarName = "${fg}_PATH_FILE"
+                        # Use database name + original file name for uniqueness
+                        $uniqueFileName = "${Database}_${fileName}"
+                        $fullPath = "${basePath}${pathSeparator}${uniqueFileName}.ndf"
+                        $sqlCmdVars[$fileVarName] = $fullPath
+                        Write-Verbose "SQLCMD Variable: `$($fileVarName) = $fullPath"
+                    }
+                }
+            }
+        }
+    }
+    
+    # Report skipped folders if any
+    if ($skippedFolders.Count -gt 0) {
+        Write-Output "[INFO] Skipped $($skippedFolders.Count) folder(s) due to $ImportMode mode settings:"
+        foreach ($folder in $skippedFolders) {
+            $reason = switch ($folder) {
+                '00_FileGroups' { 'FileGroups (environment-specific)' }
+                '01_DatabaseConfiguration' { 'Database Scoped Configurations (environment-specific)' }
+                '16_ExternalData' { 'External Data Sources (environment-specific)' }
+                '20_Data' { 'Data not requested' }
+                default { $folder }
+            }
+            Write-Output "  - $reason"
+        }
+    }
+    
     Write-Output ''
     
     # Apply scripts
@@ -462,13 +902,14 @@ try {
     $skipCount = 0
     
     # Track if we need to handle foreign keys for data import
-    $dataScripts = $scripts | Where-Object { $_.FullName -match '\\12_Data\\' }
-    $nonDataScripts = $scripts | Where-Object { $_.FullName -notmatch '\\12_Data\\' }
+    $dataScripts = $scripts | Where-Object { $_.FullName -match '\\20_Data\\' }
+    $nonDataScripts = $scripts | Where-Object { $_.FullName -notmatch '\\20_Data\\' }
     
     # Process non-data scripts first
     foreach ($script in $nonDataScripts) {
         $result = Invoke-SqlScript -FilePath $script.FullName -ServerName $Server `
-            -DatabaseName $Database -Cred $Credential -Timeout $CommandTimeout -Show:$ShowSQL
+            -DatabaseName $Database -Cred $Credential -Timeout $CommandTimeout -Show:$ShowSQL `
+            -SqlCmdVariables $sqlCmdVars
         
         if ($result -eq $true) {
             $successCount++
@@ -516,12 +957,12 @@ try {
             $smServer.ConnectionContext.Disconnect()
             
             if ($fkCount -gt 0) {
-                Write-Output "✓ Disabled $fkCount foreign key constraint(s) for data import"
+                Write-Output "[SUCCESS] Disabled $fkCount foreign key constraint(s) for data import"
             } else {
                 Write-Output 'ℹ No foreign key constraints to disable'
             }
         } catch {
-            Write-Output "⚠ Could not disable foreign keys: $_"
+            Write-Output "[INFO[ Could not disable foreign keys: $_"
             Write-Output '  Continuing with data import anyway...'
         }
         
@@ -531,7 +972,8 @@ try {
         # Process data scripts
         foreach ($script in $dataScripts) {
             $result = Invoke-SqlScript -FilePath $script.FullName -ServerName $Server `
-                -DatabaseName $Database -Cred $Credential -Timeout $CommandTimeout -Show:$ShowSQL
+                -DatabaseName $Database -Cred $Credential -Timeout $CommandTimeout -Show:$ShowSQL `
+                -SqlCmdVariables $sqlCmdVars
             
             if ($result -eq $true) {
                 $successCount++
@@ -569,7 +1011,7 @@ try {
                             $smServer.ConnectionContext.ExecuteNonQuery($alterSql)
                             $fkCount++
                         } catch {
-                            Write-Error "  ✗ Failed to re-enable FK $($fk.Name) on $($table.Schema).$($table.Name): $_"
+                            Write-Error "  [ERROR] Failed to re-enable FK $($fk.Name) on $($table.Schema).$($table.Name): $_"
                             $errorCount++
                         }
                     }
@@ -579,15 +1021,15 @@ try {
             $smServer.ConnectionContext.Disconnect()
             
             if ($errorCount -gt 0) {
-                Write-Error "✗ Foreign key constraint validation failed ($errorCount errors) - data may violate referential integrity"
+                Write-Error "[ERROR] Foreign key constraint validation failed ($errorCount errors) - data may violate referential integrity"
                 $failureCount++
             } elseif ($fkCount -gt 0) {
-                Write-Output "✓ Re-enabled and validated $fkCount foreign key constraint(s)"
+                Write-Output "[SUCCESS] Re-enabled and validated $fkCount foreign key constraint(s)"
             } else {
                 Write-Output 'ℹ No foreign key constraints to re-enable'
             }
         } catch {
-            Write-Error "✗ Error re-enabling foreign keys: $_"
+            Write-Error "[ERROR] Error re-enabling foreign keys: $_"
             $failureCount++
         }
     }
@@ -595,23 +1037,123 @@ try {
     Write-Output '───────────────────────────────────────────────'
     Write-Output ''
     Write-Output '═══════════════════════════════════════════════'
-    Write-Output 'DEPLOYMENT SUMMARY'
+    Write-Output 'IMPORT SUMMARY'
     Write-Output '═══════════════════════════════════════════════'
-    Write-Output "  ✓ Successful: $successCount"
-    Write-Output "  ⊘ Skipped:   $skipCount"
-    Write-Output "  ✗ Failed:    $failureCount"
+    Write-Output ''
+    Write-Output "Import mode: $ImportMode"
+    Write-Output "Target: $Server\$Database"
+    Write-Output ''
+    Write-Output "Execution results:"
+    Write-Output "  [SUCCESS] Successful: $successCount script(s)"
+    if ($skipCount -gt 0) {
+        Write-Output "  [INFO] Skipped:   $skipCount script(s)"
+    }
+    if ($failureCount -gt 0) {
+        Write-Output "  [ERROR] Failed:    $failureCount script(s)"
+    }
+    Write-Output ''
+    
+    # Report mode-specific decisions
+    if ($skippedFolders.Count -gt 0) {
+        Write-Output "Folders skipped due to $ImportMode mode:"
+        foreach ($folder in $skippedFolders) {
+            $reason = switch ($folder) {
+                '00_FileGroups' { 'FileGroups (environment-specific, skipped in Dev mode)' }
+                '01_DatabaseConfiguration' { 'Database Configurations (hardware-specific, skipped in Dev mode)' }
+                '16_ExternalData' { 'External Data Sources (environment-specific, skipped in Dev mode)' }
+                '20_Data' { 'Data not requested via -IncludeData flag' }
+                default { $folder }
+            }
+            Write-Output "  - $reason"
+        }
+        Write-Output ''
+    }
+    
+    # Check for manual actions needed
+    $manualActions = @()
+    
+    # Check if FileGroups were in source but skipped
+    $sourceFgPath = Join-Path $SourcePath '00_FileGroups'
+    if ((Test-Path $sourceFgPath) -and ('00_FileGroups' -in $skippedFolders)) {
+        $manualActions += "[INFO] FileGroups were exported but not imported (Dev mode)"
+        $manualActions += "  Use -ImportMode Prod to import FileGroups (review file paths first)"
+    }
+    
+    # Check if DB Configurations were in source but skipped
+    $sourceDbConfigPath = Join-Path $SourcePath '01_DatabaseConfiguration'
+    if ((Test-Path $sourceDbConfigPath) -and ('01_DatabaseConfiguration' -in $skippedFolders)) {
+        $manualActions += "[INFO] Database Scoped Configurations were exported but not imported (Dev mode)"
+        $manualActions += "  Use -ImportMode Prod to import configurations (review settings first)"
+    }
+    
+    # Check if External Data was in source but skipped
+    $sourceExtDataPath = Join-Path $SourcePath '16_ExternalData'
+    if ((Test-Path $sourceExtDataPath) -and ('16_ExternalData' -in $skippedFolders)) {
+        $manualActions += "[INFO] External Data Sources were exported but not imported (Dev mode)"
+        $manualActions += "  Use -ImportMode Prod to import external data (review connection strings first)"
+    }
+    
+    # Check for Database Scoped Credentials (never imported, always manual)
+    $sourceCredsPath = Join-Path $SourcePath '01_DatabaseConfiguration' '002_DatabaseScopedCredentials.sql'
+    if (Test-Path $sourceCredsPath) {
+        $credsContent = Get-Content $sourceCredsPath -Raw
+        if ($credsContent -match 'CREATE DATABASE SCOPED CREDENTIAL') {
+            $manualActions += "[ACTION REQUIRED] Database Scoped Credentials"
+            $manualActions += "  Location: Source\01_DatabaseConfiguration\002_DatabaseScopedCredentials.sql"
+            $manualActions += "  Action: Manually create credentials with appropriate secrets on target server"
+            $manualActions += "  Note: Credentials cannot be scripted with secrets - must be manually configured"
+        }
+    }
+    
+    # Check for RLS policies
+    $sourceRlsPath = Join-Path $SourcePath '19_Security' '008_SecurityPolicies.sql'
+    if (Test-Path $sourceRlsPath) {
+        $rlsContent = Get-Content $sourceRlsPath -Raw
+        if ($rlsContent -match 'CREATE SECURITY POLICY') {
+            $modeSettings = if ($ImportMode -eq 'Dev') {
+                if ($config.import -and $config.import.developerMode) {
+                    $config.import.developerMode
+                } else {
+                    @{ enableSecurityPolicies = $false }
+                }
+            } else {
+                @{ enableSecurityPolicies = $true }
+            }
+            
+            if (-not $modeSettings.enableSecurityPolicies) {
+                $manualActions += "[INFO] Row-Level Security Policies were exported but not imported ($ImportMode mode)"
+                $manualActions += "  RLS policies are disabled in Dev mode by default to simplify testing"
+                $manualActions += "  Use -ImportMode Prod or configure enableSecurityPolicies = true in config file"
+            }
+        }
+    }
+    
+    if ($manualActions.Count -gt 0) {
+        Write-Output "Manual actions and information:"
+        Write-Output ''
+        $manualActions | ForEach-Object { Write-Output $_ }
+        Write-Output ''
+    }
+    
+    if ($failureCount -gt 0) {
+        Write-Output '[ERROR] Import completed with errors - review output above'
+        Write-Output ''
+    } else {
+        Write-Output '[SUCCESS] Import completed successfully'
+        Write-Output ''
+    }
+    
+    Write-Output '═══════════════════════════════════════════════'
     Write-Output ''
     
     if ($failureCount -eq 0) {
-        Write-Output '✓ DEPLOYMENT COMPLETE'
         exit 0
     } else {
-        Write-Error "✗ DEPLOYMENT FAILED ($failureCount errors)"
         exit 1
     }
     
 } catch {
-    Write-Error "✗ Script error: $_"
+    Write-Error "[ERROR] Script error: $_"
     exit 1
 }
 

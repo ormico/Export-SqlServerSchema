@@ -2,6 +2,7 @@
 
 <#
 .NOTES
+    Version: 1.1.0
     License: MIT
     Repository: https://github.com/ormico/Export-SqlServerSchema
 
@@ -33,16 +34,19 @@
 .PARAMETER Credential
     PSCredential object for authentication. If not provided, uses integrated Windows authentication.
 
+.PARAMETER ConfigFile
+    Path to YAML configuration file for advanced export settings. Optional.
+
 .EXAMPLE
     # Export with Windows auth
-    ./DB2SCRIPT.ps1 -Server localhost -Database TestDb
+    ./Export-SqlServerSchema.ps1 -Server localhost -Database TestDb
 
     # Export with SQL auth
     $cred = Get-Credential
-    ./DB2SCRIPT.ps1 -Server localhost -Database TestDb -Credential $cred
+    ./Export-SqlServerSchema.ps1 -Server localhost -Database TestDb -Credential $cred
 
     # Export with data
-    ./DB2SCRIPT.ps1 -Server localhost -Database TestDb -IncludeData -OutputPath ./exports
+    ./Export-SqlServerSchema.ps1 -Server localhost -Database TestDb -IncludeData -OutputPath ./exports
 
 .NOTES
     Requires: SQL Server Management Objects (SMO)
@@ -69,7 +73,10 @@ param(
     [switch]$IncludeData,
     
     [Parameter(HelpMessage = 'SQL Server credentials')]
-    [System.Management.Automation.PSCredential]$Credential
+    [System.Management.Automation.PSCredential]$Credential,
+    
+    [Parameter(HelpMessage = 'Path to YAML configuration file')]
+    [string]$ConfigFile
 )
 
 $ErrorActionPreference = 'Stop'
@@ -93,11 +100,11 @@ function Test-Dependencies {
         # Try to import SqlServer module if available
         if (Get-Module -ListAvailable -Name SqlServer) {
             Import-Module SqlServer -ErrorAction Stop
-            Write-Output '✓ SQL Server Management Objects (SMO) available (SqlServer module)'
+            Write-Output '[SUCCESS] SQL Server Management Objects (SMO) available (SqlServer module)'
         } else {
             # Fallback to direct assembly load
             Add-Type -AssemblyName 'Microsoft.SqlServer.Smo' -ErrorAction Stop
-            Write-Output '✓ SQL Server Management Objects (SMO) available'
+            Write-Output '[SUCCESS] SQL Server Management Objects (SMO) available'
         }
     } catch {
         throw "SQL Server Management Objects (SMO) not found. Please install SQL Server Management Studio or the SMO package.`nTo install SMO: Install-Module SqlServer -Scope CurrentUser"
@@ -136,10 +143,10 @@ function Test-DatabaseConnection {
         }
         
         $server.ConnectionContext.Disconnect()
-        Write-Output '✓ Database connection successful'
+        Write-Output '[SUCCESS] Database connection successful'
         return $true
     } catch {
-        Write-Error "✗ Connection failed: $_"
+        Write-Error "[ERROR] Connection failed: $_"
         return $false
     }
 }
@@ -157,22 +164,31 @@ function Initialize-OutputDirectory {
     Write-Host "Creating output directory: $exportDir" -ForegroundColor Gray
     
     $subdirs = @(
-        '01_Schemas',
-        '02_Types',
-        '03_Tables_PrimaryKey',
-        '04_Tables_ForeignKeys',
-        '05_Indexes',
-        '06_Defaults',
-        '07_Rules',
-        '08_Programmability/01_Assemblies',
-        '08_Programmability/02_Functions',
-        '08_Programmability/03_StoredProcedures',
-        '08_Programmability/04_Triggers',
-        '08_Programmability/05_Views',
-        '09_Synonyms',
-        '10_FullTextSearch',
-        '11_Security',
-        '12_Data'
+        '00_FileGroups',
+        '01_DatabaseConfiguration',
+        '02_Schemas',
+        '03_Sequences',
+        '04_PartitionFunctions',
+        '05_PartitionSchemes',
+        '06_Types',
+        '07_XmlSchemaCollections',
+        '08_Tables_PrimaryKey',
+        '09_Tables_ForeignKeys',
+        '10_Indexes',
+        '11_Defaults',
+        '12_Rules',
+        '13_Programmability/01_Assemblies',
+        '13_Programmability/02_Functions',
+        '13_Programmability/03_StoredProcedures',
+        '13_Programmability/04_Triggers',
+        '13_Programmability/05_Views',
+        '14_Synonyms',
+        '15_FullTextSearch',
+        '16_ExternalData',
+        '17_SearchPropertyLists',
+        '18_PlanGuides',
+        '19_Security',
+        '20_Data'
     )
     
     if (-not (Test-Path $exportDir)) {
@@ -206,6 +222,127 @@ function Get-SqlServerVersion {
     }
     
     return $versionMap[$VersionString]
+}
+
+function Import-YamlConfig {
+    <#
+    .SYNOPSIS
+        Loads and parses YAML configuration file.
+    #>
+    param([string]$ConfigFilePath)
+    
+    if (-not (Test-Path $ConfigFilePath)) {
+        throw "Configuration file not found: $ConfigFilePath"
+    }
+    
+    Write-Output "[INFO] Loading configuration from: $ConfigFilePath"
+    
+    try {
+        # Check for PowerShell-Yaml module
+        if (-not (Get-Module -ListAvailable -Name powershell-yaml)) {
+            Write-Host ""
+            Write-Host "[ERROR] PowerShell-Yaml module not found" -ForegroundColor Red
+            Write-Host "[INFO] Install with: Install-Module powershell-yaml -Scope CurrentUser" -ForegroundColor Yellow
+            Write-Host ""
+            throw "PowerShell-Yaml module is required to parse YAML configuration files"
+        }
+        
+        Import-Module powershell-yaml -ErrorAction Stop
+        $yamlContent = Get-Content $ConfigFilePath -Raw
+        $config = ConvertFrom-Yaml $yamlContent
+        
+        # Validate and set defaults for export section
+        if (-not $config.export) {
+            $config.export = @{}
+        }
+        if (-not $config.export.excludeObjectTypes) {
+            $config.export.excludeObjectTypes = @()
+        }
+        if (-not $config.export.ContainsKey('includeData')) {
+            $config.export.includeData = $false
+        }
+        if (-not $config.export.excludeObjects) {
+            $config.export.excludeObjects = @()
+        }
+        if (-not $config.export.excludeSchemas) {
+            $config.export.excludeSchemas = @()
+        }
+        
+        Write-Output "[SUCCESS] Configuration loaded successfully"
+        return $config
+        
+    } catch {
+        Write-Host "[ERROR] Failed to parse configuration file: $_" -ForegroundColor Red
+        throw
+    }
+}
+
+function Show-ExportConfiguration {
+    <#
+    .SYNOPSIS
+        Displays the active export configuration at script start.
+    #>
+    param(
+        [string]$ServerName,
+        [string]$DatabaseName,
+        [string]$OutputDirectory,
+        [hashtable]$Config = @{},
+        [bool]$DataExport = $false,
+        [string]$ConfigSource = "None (using defaults)"
+    )
+    
+    Write-Host ""
+    Write-Host "═══════════════════════════════════════════════════════════════" -ForegroundColor Cyan
+    Write-Host "Export-SqlServerSchema v2.0" -ForegroundColor Cyan
+    Write-Host "═══════════════════════════════════════════════════════════════" -ForegroundColor Cyan
+    Write-Host "Server: " -NoNewline -ForegroundColor Gray
+    Write-Host $ServerName -ForegroundColor White
+    Write-Host "Database: " -NoNewline -ForegroundColor Gray
+    Write-Host $DatabaseName -ForegroundColor White
+    Write-Host "Output: " -NoNewline -ForegroundColor Gray
+    Write-Host $OutputDirectory -ForegroundColor White
+    Write-Host ""
+    Write-Host "CONFIGURATION" -ForegroundColor Yellow
+    Write-Host "-------------" -ForegroundColor Yellow
+    Write-Host "Config File: " -NoNewline -ForegroundColor Gray
+    Write-Host $ConfigSource -ForegroundColor White
+    Write-Host "Include Data: " -NoNewline -ForegroundColor Gray
+    Write-Host $(if ($DataExport) { "Yes" } else { "No" }) -ForegroundColor White
+    
+    # Show excluded object types if any
+    if ($Config.export -and $Config.export.excludeObjectTypes -and $Config.export.excludeObjectTypes.Count -gt 0) {
+        Write-Host "Excluded Object Types: " -NoNewline -ForegroundColor Gray
+        Write-Host ($Config.export.excludeObjectTypes -join ", ") -ForegroundColor Yellow
+    } else {
+        Write-Host "Excluded Object Types: " -NoNewline -ForegroundColor Gray
+        Write-Host "None" -ForegroundColor White
+    }
+    
+    # Show excluded schemas if any
+    if ($Config.export -and $Config.export.excludeSchemas -and $Config.export.excludeSchemas.Count -gt 0) {
+        Write-Host "Excluded Schemas: " -NoNewline -ForegroundColor Gray
+        Write-Host ($Config.export.excludeSchemas -join ", ") -ForegroundColor Yellow
+    }
+    
+    Write-Host ""
+    Write-Host "EXPORT STRATEGY" -ForegroundColor Yellow
+    Write-Host "---------------" -ForegroundColor Yellow
+    Write-Host "[ENABLED] All object types exported by default" -ForegroundColor Green
+    
+    if ($Config.export -and $Config.export.excludeObjectTypes -and $Config.export.excludeObjectTypes.Count -gt 0) {
+        Write-Host "[EXCLUDED] $($Config.export.excludeObjectTypes -join ', ')" -ForegroundColor Yellow
+    }
+    
+    if ($DataExport) {
+        Write-Host "[ENABLED] Data export" -ForegroundColor Green
+    } else {
+        Write-Host "[DISABLED] Data export" -ForegroundColor Gray
+    }
+    
+    Write-Host ""
+    Write-Host "═══════════════════════════════════════════════════════════════" -ForegroundColor Cyan
+    Write-Host "Starting export..." -ForegroundColor Cyan
+    Write-Host ""
 }
 
 function New-ScriptingOptions {
@@ -281,19 +418,202 @@ function Export-DatabaseObjects {
     Write-Output 'EXPORTING DATABASE OBJECTS'
     Write-Output '═══════════════════════════════════════════════'
     
-    # 1. Schemas
+    # 0. FileGroups (Environment-specific, but captured for documentation)
+    Write-Output ''
+    Write-Output 'Exporting filegroups...'
+    $fileGroups = @($Database.FileGroups | Where-Object { $_.Name -ne 'PRIMARY' })
+    if ($fileGroups.Count -gt 0) {
+        $fgFilePath = Join-Path $OutputDir '00_FileGroups' '001_FileGroups.sql'
+        $fgScript = New-Object System.Text.StringBuilder
+        [void]$fgScript.AppendLine("-- FileGroups and Files")
+        [void]$fgScript.AppendLine("-- WARNING: Physical file paths are environment-specific")
+        [void]$fgScript.AppendLine("-- Review and update file paths before applying to target environment")
+        [void]$fgScript.AppendLine("")
+        
+        foreach ($fg in $fileGroups) {
+            # Script the filegroup creation
+            [void]$fgScript.AppendLine("-- FileGroup: $($fg.Name)")
+            [void]$fgScript.AppendLine("-- Type: $($fg.FileGroupType)")
+            
+            if ($fg.FileGroupType -eq 'RowsFileGroup') {
+                [void]$fgScript.AppendLine("ALTER DATABASE CURRENT ADD FILEGROUP [$($fg.Name)];")
+            } else {
+                [void]$fgScript.AppendLine("ALTER DATABASE CURRENT ADD FILEGROUP [$($fg.Name)] CONTAINS FILESTREAM;")
+            }
+            [void]$fgScript.AppendLine("GO")
+            
+            if ($fg.IsReadOnly) {
+                [void]$fgScript.AppendLine("ALTER DATABASE CURRENT MODIFY FILEGROUP [$($fg.Name)] READONLY;")
+                [void]$fgScript.AppendLine("GO")
+            }
+            [void]$fgScript.AppendLine("")
+            
+            # Script files in the filegroup
+            foreach ($file in $fg.Files) {
+                # Generate SQLCMD variable name from FileGroup name (e.g., FG_CURRENT -> FG_CURRENT_PATH)
+                $sqlcmdVar = "$($fg.Name)_PATH"
+                
+                # Extract just the filename without path for cross-platform compatibility
+                $fileName = Split-Path $file.FileName -Leaf
+                if (-not $fileName) { $fileName = "$($file.Name).ndf" }
+                
+                [void]$fgScript.AppendLine("-- File: $($file.Name)")
+                [void]$fgScript.AppendLine("-- Original Path: $($file.FileName)")
+                [void]$fgScript.AppendLine("-- Size: $($file.Size)KB, Growth: $($file.Growth)$(if ($file.GrowthType -eq 'KB') {'KB'} else {'%'}), MaxSize: $(if ($file.MaxSize -eq -1) {'UNLIMITED'} else {$file.MaxSize + 'KB'})")
+                [void]$fgScript.AppendLine("-- NOTE: Uses SQLCMD variable `$($sqlcmdVar) for base directory path")
+                [void]$fgScript.AppendLine("-- Target server will append appropriate path separator and filename")
+                [void]$fgScript.AppendLine("-- Configure via fileGroupPathMapping in config file or pass as SQLCMD variable")
+                [void]$fgScript.AppendLine("ALTER DATABASE CURRENT ADD FILE (")
+                [void]$fgScript.AppendLine("    NAME = N'$($file.Name)',")
+                # Use $(...)_FILE variable that will be constructed with correct separator on target
+                [void]$fgScript.AppendLine("    FILENAME = N'`$($($sqlcmdVar)_FILE)',")
+                [void]$fgScript.AppendLine("    SIZE = $($file.Size)KB")
+                
+                if ($file.Growth -gt 0) {
+                    if ($file.GrowthType -eq 'KB') {
+                        [void]$fgScript.AppendLine("    , FILEGROWTH = $($file.Growth)KB")
+                    } else {
+                        [void]$fgScript.AppendLine("    , FILEGROWTH = $($file.Growth)%")
+                    }
+                }
+                
+                if ($file.MaxSize -gt 0) {
+                    [void]$fgScript.AppendLine("    , MAXSIZE = $($file.MaxSize)KB")
+                } elseif ($file.MaxSize -eq -1) {
+                    [void]$fgScript.AppendLine("    , MAXSIZE = UNLIMITED")
+                }
+                
+                [void]$fgScript.AppendLine(") TO FILEGROUP [$($fg.Name)];")
+                [void]$fgScript.AppendLine("GO")
+                [void]$fgScript.AppendLine("")
+            }
+        }
+        
+        $fgScript.ToString() | Out-File -FilePath $fgFilePath -Encoding UTF8
+        Write-Output "  [SUCCESS] Exported $($fileGroups.Count) filegroup(s)"
+        Write-Output "  [WARNING] FileGroups contain environment-specific file paths - manual adjustment required"
+    } else {
+        Write-Output "  [INFO] No user-defined filegroups found"
+    }
+    
+    # 1. Database Scoped Configurations (Hardware-specific settings)
+    Write-Output ''
+    Write-Output 'Exporting database scoped configurations...'
+    try {
+        $dbConfigs = @($Database.DatabaseScopedConfigurations)
+        if ($dbConfigs.Count -gt 0) {
+            $configFilePath = Join-Path $OutputDir '01_DatabaseConfiguration' '001_DatabaseScopedConfigurations.sql'
+            $configScript = New-Object System.Text.StringBuilder
+            [void]$configScript.AppendLine("-- Database Scoped Configurations")
+            [void]$configScript.AppendLine("-- WARNING: These settings are hardware-specific (e.g., MAXDOP)")
+            [void]$configScript.AppendLine("-- Review and adjust for target environment before applying")
+            [void]$configScript.AppendLine("")
+            
+            foreach ($config in $dbConfigs) {
+                [void]$configScript.AppendLine("-- Configuration: $($config.Name)")
+                [void]$configScript.AppendLine("-- Current Value: $($config.Value)")
+                [void]$configScript.AppendLine("ALTER DATABASE SCOPED CONFIGURATION SET $($config.Name) = $($config.Value);")
+                [void]$configScript.AppendLine("GO")
+                [void]$configScript.AppendLine("")
+            }
+            
+            $configScript.ToString() | Out-File -FilePath $configFilePath -Encoding UTF8
+            Write-Output "  [SUCCESS] Exported $($dbConfigs.Count) database scoped configuration(s)"
+            Write-Output "  [INFO] Configurations are hardware-specific - review before applying"
+        } else {
+            Write-Output "  [INFO] No database scoped configurations found"
+        }
+    } catch {
+        Write-Output "  [INFO] Database scoped configurations not available (SQL Server 2016+)"
+    }
+    
+    # Database Scoped Credentials (Structure only - secrets cannot be exported)
+    Write-Output ''
+    Write-Output 'Exporting database scoped credentials (structure only)...'
+    try {
+        # Filter to actual credentials (collection may contain null/empty elements)
+        $dbCredentials = @($Database.Credentials | Where-Object { $null -ne $_.Name -and $_.Name -ne '' })
+        if ($dbCredentials.Count -gt 0) {
+            $credFilePath = Join-Path $OutputDir '01_DatabaseConfiguration' '002_DatabaseScopedCredentials.sql'
+            $credScript = New-Object System.Text.StringBuilder
+            [void]$credScript.AppendLine("-- Database Scoped Credentials (Structure Only)")
+            [void]$credScript.AppendLine("-- WARNING: Secrets cannot be exported and must be provided during import")
+            [void]$credScript.AppendLine("-- This file documents the credential names and identities for reference")
+            [void]$credScript.AppendLine("")
+            
+            foreach ($cred in $dbCredentials) {
+                [void]$credScript.AppendLine("-- Credential: $($cred.Name)")
+                [void]$credScript.AppendLine("-- Identity: $($cred.Identity)")
+                [void]$credScript.AppendLine("-- MANUAL ACTION REQUIRED: Create this credential with appropriate secret")
+                [void]$credScript.AppendLine("-- Example:")
+                [void]$credScript.AppendLine("/*")
+                [void]$credScript.AppendLine("CREATE DATABASE SCOPED CREDENTIAL [$($cred.Name)]")
+                [void]$credScript.AppendLine("WITH IDENTITY = '$($cred.Identity)',")
+                [void]$credScript.AppendLine("SECRET = '<PROVIDE_SECRET_HERE>';")
+                [void]$credScript.AppendLine("GO")
+                [void]$credScript.AppendLine("*/")
+                [void]$credScript.AppendLine("")
+            }
+            
+            $credScript.ToString() | Out-File -FilePath $credFilePath -Encoding UTF8
+            Write-Output "  [SUCCESS] Documented $($dbCredentials.Count) database scoped credential(s)"
+            Write-Output "  [WARNING] Credentials exported as documentation only - secrets must be provided manually"
+        } else {
+            Write-Output "  [INFO] No database scoped credentials found"
+        }
+    } catch {
+        Write-Output "  [INFO] Database scoped credentials not available (SQL Server 2016+)"
+    }
+    
+    # 2. Schemas
     Write-Output ''
     Write-Output 'Exporting schemas...'
     $schemas = @($Database.Schemas | Where-Object { -not $_.IsSystemObject -and $_.Name -ne $_.Owner })
     if ($schemas.Count -gt 0) {
         $opts = New-ScriptingOptions -TargetVersion $TargetVersion
-        $opts.FileName = Join-Path $OutputDir '01_Schemas' '001_Schemas.sql'
+        $opts.FileName = Join-Path $OutputDir '02_Schemas' '001_Schemas.sql'
         $Scripter.Options = $opts
         $Scripter.EnumScript($schemas)
-        Write-Output "  ✓ Exported $($schemas.Count) schema(s)"
+        Write-Output "  [SUCCESS] Exported $($schemas.Count) schema(s)"
     }
     
-    # 2. User-Defined Types (UDTs, UDTTs, UDDTs)
+    # 3. Sequences
+    Write-Output ''
+    Write-Output 'Exporting sequences...'
+    $sequences = @($Database.Sequences | Where-Object { -not $_.IsSystemObject })
+    if ($sequences.Count -gt 0) {
+        $opts = New-ScriptingOptions -TargetVersion $TargetVersion
+        $opts.FileName = Join-Path $OutputDir '03_Sequences' '001_Sequences.sql'
+        $Scripter.Options = $opts
+        $Scripter.EnumScript($sequences)
+        Write-Output "  [SUCCESS] Exported $($sequences.Count) sequence(s)"
+    }
+    
+    # 4. Partition Functions
+    Write-Output ''
+    Write-Output 'Exporting partition functions...'
+    $partitionFunctions = @($Database.PartitionFunctions)
+    if ($partitionFunctions.Count -gt 0) {
+        $opts = New-ScriptingOptions -TargetVersion $TargetVersion
+        $opts.FileName = Join-Path $OutputDir '04_PartitionFunctions' '001_PartitionFunctions.sql'
+        $Scripter.Options = $opts
+        $Scripter.EnumScript($partitionFunctions)
+        Write-Output "  [SUCCESS] Exported $($partitionFunctions.Count) partition function(s)"
+    }
+    
+    # 4. Partition Schemes
+    Write-Output ''
+    Write-Output 'Exporting partition schemes...'
+    $partitionSchemes = @($Database.PartitionSchemes)
+    if ($partitionSchemes.Count -gt 0) {
+        $opts = New-ScriptingOptions -TargetVersion $TargetVersion
+        $opts.FileName = Join-Path $OutputDir '05_PartitionSchemes' '001_PartitionSchemes.sql'
+        $Scripter.Options = $opts
+        $Scripter.EnumScript($partitionSchemes)
+        Write-Output "  [SUCCESS] Exported $($partitionSchemes.Count) partition scheme(s)"
+    }
+    
+    # 5. User-Defined Types (UDTs, UDTTs, UDDTs)
     Write-Output ''
     Write-Output 'Exporting user-defined types...'
     $allTypes = @()
@@ -303,13 +623,25 @@ function Export-DatabaseObjects {
     
     if ($allTypes.Count -gt 0) {
         $opts = New-ScriptingOptions -TargetVersion $TargetVersion
-        $opts.FileName = Join-Path $OutputDir '02_Types' '001_UserDefinedTypes.sql'
+        $opts.FileName = Join-Path $OutputDir '06_Types' '001_UserDefinedTypes.sql'
         $Scripter.Options = $opts
         $Scripter.EnumScript($allTypes)
-        Write-Output "  ✓ Exported $($allTypes.Count) type(s)"
+        Write-Output "  [SUCCESS] Exported $($allTypes.Count) type(s)"
     }
     
-    # 3. Tables (Primary Keys only - no FK)
+    # 6. XML Schema Collections
+    Write-Output ''
+    Write-Output 'Exporting XML schema collections...'
+    $xmlSchemaCollections = @($Database.XmlSchemaCollections | Where-Object { -not $_.IsSystemObject })
+    if ($xmlSchemaCollections.Count -gt 0) {
+        $opts = New-ScriptingOptions -TargetVersion $TargetVersion
+        $opts.FileName = Join-Path $OutputDir '07_XmlSchemaCollections' '001_XmlSchemaCollections.sql'
+        $Scripter.Options = $opts
+        $Scripter.EnumScript($xmlSchemaCollections)
+        Write-Output "  [SUCCESS] Exported $($xmlSchemaCollections.Count) XML schema collection(s)"
+    }
+    
+    # 7. Tables (Primary Keys only - no FK)
     Write-Output ''
     Write-Output 'Exporting tables (PKs only)...'
     $tables = @($Database.Tables | Where-Object { -not $_.IsSystemObject })
@@ -326,13 +658,13 @@ function Export-DatabaseObjects {
             FullTextIndexes     = $false
             Triggers            = $false
         }
-        $opts.FileName = Join-Path $OutputDir '03_Tables_PrimaryKey' '001_Tables.sql'
+        $opts.FileName = Join-Path $OutputDir '08_Tables_PrimaryKey' '001_Tables.sql'
         $Scripter.Options = $opts
         $Scripter.EnumScript($tables)
-        Write-Output "  ✓ Exported $($tables.Count) table(s)"
+        Write-Output "  [SUCCESS] Exported $($tables.Count) table(s)"
     }
     
-    # 4. Foreign Keys (separate from table creation)
+    # 8. Foreign Keys (separate from table creation)
     Write-Output ''
     Write-Output 'Exporting foreign keys...'
     $foreignKeys = @()
@@ -344,13 +676,13 @@ function Export-DatabaseObjects {
             DriAll            = $false
             DriForeignKeys    = $true
         }
-        $opts.FileName = Join-Path $OutputDir '04_Tables_ForeignKeys' '001_ForeignKeys.sql'
+        $opts.FileName = Join-Path $OutputDir '09_Tables_ForeignKeys' '001_ForeignKeys.sql'
         $Scripter.Options = $opts
         $Scripter.EnumScript($foreignKeys)
-        Write-Output "  ✓ Exported $($foreignKeys.Count) foreign key constraint(s)"
+        Write-Output "  [SUCCESS] Exported $($foreignKeys.Count) foreign key constraint(s)"
     }
     
-    # 5. Indexes
+    # 9. Indexes
     Write-Output ''
     Write-Output 'Exporting indexes...'
     $indexes = @()
@@ -370,52 +702,52 @@ function Export-DatabaseObjects {
             DriPrimaryKey   = $false
             DriUniqueKey    = $false
         }
-        $opts.FileName = Join-Path $OutputDir '05_Indexes' '001_Indexes.sql'
+        $opts.FileName = Join-Path $OutputDir '10_Indexes' '001_Indexes.sql'
         $Scripter.Options = $opts
         $Scripter.EnumScript($indexes)
-        Write-Output "  ✓ Exported $($indexes.Count) index(es)"
+        Write-Output "  [SUCCESS] Exported $($indexes.Count) index(es)"
     }
     
-    # 6. Defaults
+    # 10. Defaults
     Write-Output ''
     Write-Output 'Exporting defaults...'
     $defaults = @($Database.Defaults | Where-Object { -not $_.IsSystemObject })
     if ($defaults.Count -gt 0) {
         $opts = New-ScriptingOptions -TargetVersion $TargetVersion
-        $opts.FileName = Join-Path $OutputDir '06_Defaults' '001_Defaults.sql'
+        $opts.FileName = Join-Path $OutputDir '11_Defaults' '001_Defaults.sql'
         $Scripter.Options = $opts
         $Scripter.EnumScript($defaults)
-        Write-Output "  ✓ Exported $($defaults.Count) default constraint(s)"
+        Write-Output "  [SUCCESS] Exported $($defaults.Count) default constraint(s)"
     }
     
-    # 7. Rules
+    # 11. Rules
     Write-Output ''
     Write-Output 'Exporting rules...'
     $rules = @($Database.Rules | Where-Object { -not $_.IsSystemObject })
     if ($rules.Count -gt 0) {
         $opts = New-ScriptingOptions -TargetVersion $TargetVersion
-        $opts.FileName = Join-Path $OutputDir '07_Rules' '001_Rules.sql'
+        $opts.FileName = Join-Path $OutputDir '12_Rules' '001_Rules.sql'
         $Scripter.Options = $opts
         $Scripter.EnumScript($rules)
-        Write-Output "  ✓ Exported $($rules.Count) rule(s)"
+        Write-Output "  [SUCCESS] Exported $($rules.Count) rule(s)"
     }
     
-    # 8. Assemblies
+    # 12. Assemblies
     Write-Output ''
     Write-Output 'Exporting assemblies...'
     $assemblies = @($Database.Assemblies | Where-Object { -not $_.IsSystemObject })
     if ($assemblies.Count -gt 0) {
         $opts = New-ScriptingOptions -TargetVersion $TargetVersion
         foreach ($assembly in $assemblies) {
-            $fileName = Join-Path $OutputDir '08_Programmability/01_Assemblies' "$($assembly.Name).sql"
+            $fileName = Join-Path $OutputDir '13_Programmability/01_Assemblies' "$($assembly.Name).sql"
             $opts.FileName = $fileName
             $Scripter.Options = $opts
             $assembly.Script($opts)
         }
-        Write-Output "  ✓ Exported $($assemblies.Count) assembly(ies)"
+        Write-Output "  [SUCCESS] Exported $($assemblies.Count) assembly(ies)"
     }
     
-    # 9. User-Defined Functions
+    # 13. User-Defined Functions
     Write-Output ''
     Write-Output 'Exporting user-defined functions...'
     $functions = @($Database.UserDefinedFunctions | Where-Object { -not $_.IsSystemObject })
@@ -425,48 +757,55 @@ function Export-DatabaseObjects {
             Triggers    = $false
         }
         foreach ($function in $functions) {
-            $fileName = Join-Path $OutputDir '08_Programmability/02_Functions' "$($function.Schema).$($function.Name).sql"
+            $fileName = Join-Path $OutputDir '13_Programmability/02_Functions' "$($function.Schema).$($function.Name).sql"
             $opts.FileName = $fileName
             $Scripter.Options = $opts
             $function.Script($opts)
         }
-        Write-Output "  ✓ Exported $($functions.Count) function(s)"
+        Write-Output "  [SUCCESS] Exported $($functions.Count) function(s)"
     }
     
-    # 10. User-Defined Aggregates
+    # 14. User-Defined Aggregates
     Write-Output ''
     Write-Output 'Exporting user-defined aggregates...'
     $aggregates = @($Database.UserDefinedAggregates | Where-Object { -not $_.IsSystemObject })
     if ($aggregates.Count -gt 0) {
         $opts = New-ScriptingOptions -TargetVersion $TargetVersion
         foreach ($aggregate in $aggregates) {
-            $fileName = Join-Path $OutputDir '08_Programmability/02_Functions' "$($aggregate.Schema).$($aggregate.Name).aggregate.sql"
+            $fileName = Join-Path $OutputDir '13_Programmability/02_Functions' "$($aggregate.Schema).$($aggregate.Name).aggregate.sql"
             $opts.FileName = $fileName
             $Scripter.Options = $opts
             $aggregate.Script($opts)
         }
-        Write-Output "  ✓ Exported $($aggregates.Count) aggregate(s)"
+        Write-Output "  [SUCCESS] Exported $($aggregates.Count) aggregate(s)"
     }
     
-    # 11. Stored Procedures
+    # 15. Stored Procedures (including Extended Stored Procedures)
     Write-Output ''
     Write-Output 'Exporting stored procedures...'
     $storedProcs = @($Database.StoredProcedures | Where-Object { -not $_.IsSystemObject })
-    if ($storedProcs.Count -gt 0) {
+    $extendedProcs = @($Database.ExtendedStoredProcedures | Where-Object { -not $_.IsSystemObject })
+    if ($storedProcs.Count -gt 0 -or $extendedProcs.Count -gt 0) {
         $opts = New-ScriptingOptions -TargetVersion $TargetVersion -Overrides @{
             Indexes  = $false
             Triggers = $false
         }
         foreach ($proc in $storedProcs) {
-            $fileName = Join-Path $OutputDir '08_Programmability/03_StoredProcedures' "$($proc.Schema).$($proc.Name).sql"
+            $fileName = Join-Path $OutputDir '13_Programmability/03_StoredProcedures' "$($proc.Schema).$($proc.Name).sql"
             $opts.FileName = $fileName
             $Scripter.Options = $opts
             $proc.Script($opts)
         }
-        Write-Output "  ✓ Exported $($storedProcs.Count) stored procedure(s)"
+        foreach ($extProc in $extendedProcs) {
+            $fileName = Join-Path $OutputDir '13_Programmability/03_StoredProcedures' "$($extProc.Schema).$($extProc.Name).extended.sql"
+            $opts.FileName = $fileName
+            $Scripter.Options = $opts
+            $extProc.Script($opts)
+        }
+        Write-Output "  [SUCCESS] Exported $($storedProcs.Count) stored procedure(s) and $($extendedProcs.Count) extended stored procedure(s)"
     }
     
-    # 12. Database Triggers
+    # 16. Database Triggers
     Write-Output ''
     Write-Output 'Exporting database triggers...'
     $dbTriggers = @($Database.Triggers | Where-Object { -not $_.IsSystemObject })
@@ -474,13 +813,13 @@ function Export-DatabaseObjects {
         $opts = New-ScriptingOptions -TargetVersion $TargetVersion -Overrides @{
             Triggers = $true
         }
-        $opts.FileName = Join-Path $OutputDir '08_Programmability/04_Triggers' '001_DatabaseTriggers.sql'
+        $opts.FileName = Join-Path $OutputDir '13_Programmability/04_Triggers' '001_DatabaseTriggers.sql'
         $Scripter.Options = $opts
         $Scripter.EnumScript($dbTriggers)
-        Write-Output "  ✓ Exported $($dbTriggers.Count) database trigger(s)"
+        Write-Output "  [SUCCESS] Exported $($dbTriggers.Count) database trigger(s)"
     }
     
-    # 13. Table Triggers
+    # 17. Table Triggers
     Write-Output ''
     Write-Output 'Exporting table triggers...'
     $tableTriggers = @()
@@ -496,43 +835,43 @@ function Export-DatabaseObjects {
             Triggers         = $true
             ScriptData       = $false
         }
-        $opts.FileName = Join-Path $OutputDir '08_Programmability/04_Triggers' '002_TableTriggers.sql'
+        $opts.FileName = Join-Path $OutputDir '13_Programmability/04_Triggers' '002_TableTriggers.sql'
         $Scripter.Options = $opts
         $Scripter.EnumScript($tableTriggers)
-        Write-Output "  ✓ Exported $($tableTriggers.Count) table trigger(s)"
+        Write-Output "  [SUCCESS] Exported $($tableTriggers.Count) table trigger(s)"
     }
     
-    # 14. Views
+    # 18. Views
     Write-Output ''
     Write-Output 'Exporting views...'
     $views = @($Database.Views | Where-Object { -not $_.IsSystemObject })
     if ($views.Count -gt 0) {
         $opts = New-ScriptingOptions -TargetVersion $TargetVersion
         foreach ($view in $views) {
-            $fileName = Join-Path $OutputDir '08_Programmability/05_Views' "$($view.Schema).$($view.Name).sql"
+            $fileName = Join-Path $OutputDir '13_Programmability/05_Views' "$($view.Schema).$($view.Name).sql"
             $opts.FileName = $fileName
             $Scripter.Options = $opts
             $view.Script($opts)
         }
-        Write-Output "  ✓ Exported $($views.Count) view(s)"
+        Write-Output "  [SUCCESS] Exported $($views.Count) view(s)"
     }
     
-    # 15. Synonyms
+    # 19. Synonyms
     Write-Output ''
     Write-Output 'Exporting synonyms...'
     $synonyms = @($Database.Synonyms | Where-Object { -not $_.IsSystemObject })
     if ($synonyms.Count -gt 0) {
         $opts = New-ScriptingOptions -TargetVersion $TargetVersion
         foreach ($synonym in $synonyms) {
-            $fileName = Join-Path $OutputDir '09_Synonyms' "$($synonym.Schema).$($synonym.Name).sql"
+            $fileName = Join-Path $OutputDir '14_Synonyms' "$($synonym.Schema).$($synonym.Name).sql"
             $opts.FileName = $fileName
             $Scripter.Options = $opts
             $synonym.Script($opts)
         }
-        Write-Output "  ✓ Exported $($synonyms.Count) synonym(s)"
+        Write-Output "  [SUCCESS] Exported $($synonyms.Count) synonym(s)"
     }
     
-    # 16. Full-Text Search
+    # 20. Full-Text Search
     Write-Output ''
     Write-Output 'Exporting full-text search objects...'
     $ftCatalogs = @($Database.FullTextCatalogs | Where-Object { -not $_.IsSystemObject })
@@ -540,58 +879,186 @@ function Export-DatabaseObjects {
     
     if ($ftCatalogs.Count -gt 0) {
         $opts = New-ScriptingOptions -TargetVersion $TargetVersion
-        $opts.FileName = Join-Path $OutputDir '10_FullTextSearch' '001_FullTextCatalogs.sql'
+        $opts.FileName = Join-Path $OutputDir '15_FullTextSearch' '001_FullTextCatalogs.sql'
         $Scripter.Options = $opts
         $Scripter.EnumScript($ftCatalogs)
-        Write-Output "  ✓ Exported $($ftCatalogs.Count) full-text catalog(s)"
+        Write-Output "  [SUCCESS] Exported $($ftCatalogs.Count) full-text catalog(s)"
     }
     
     if ($ftStopLists.Count -gt 0) {
         $opts = New-ScriptingOptions -TargetVersion $TargetVersion
-        $opts.FileName = Join-Path $OutputDir '10_FullTextSearch' '002_FullTextStopLists.sql'
+        $opts.FileName = Join-Path $OutputDir '15_FullTextSearch' '002_FullTextStopLists.sql'
         $Scripter.Options = $opts
         $Scripter.EnumScript($ftStopLists)
-        Write-Output "  ✓ Exported $($ftStopLists.Count) full-text stop list(s)"
+        Write-Output "  [SUCCESS] Exported $($ftStopLists.Count) full-text stop list(s)"
     }
     
-    # 17. Security Objects
+    # 21. External Data Sources and File Formats
+    Write-Output ''
+    Write-Output 'Exporting external data sources and file formats...'
+    try {
+        $externalDataSources = @($Database.ExternalDataSources)
+        $externalFileFormats = @($Database.ExternalFileFormats)
+        
+        if ($externalDataSources.Count -gt 0) {
+            $opts = New-ScriptingOptions -TargetVersion $TargetVersion
+            $opts.FileName = Join-Path $OutputDir '16_ExternalData' '001_ExternalDataSources.sql'
+            $Scripter.Options = $opts
+            $Scripter.EnumScript($externalDataSources)
+            Write-Output "  [SUCCESS] Exported $($externalDataSources.Count) external data source(s)"
+            Write-Output "  [INFO] External data sources contain environment-specific connection strings"
+        }
+        
+        if ($externalFileFormats.Count -gt 0) {
+            $opts = New-ScriptingOptions -TargetVersion $TargetVersion
+            $opts.FileName = Join-Path $OutputDir '16_ExternalData' '002_ExternalFileFormats.sql'
+            $Scripter.Options = $opts
+            $Scripter.EnumScript($externalFileFormats)
+            Write-Output "  [SUCCESS] Exported $($externalFileFormats.Count) external file format(s)"
+        }
+        
+        if ($externalDataSources.Count -eq 0 -and $externalFileFormats.Count -eq 0) {
+            Write-Output "  [INFO] No external data sources or file formats found"
+        }
+    } catch {
+        Write-Output "  [INFO] External data objects not available (SQL Server 2016+ with PolyBase)"
+    }
+    
+    # 22. Search Property Lists
+    Write-Output ''
+    Write-Output 'Exporting search property lists...'
+    try {
+        $searchPropertyLists = @($Database.SearchPropertyLists)
+        if ($searchPropertyLists.Count -gt 0) {
+            $opts = New-ScriptingOptions -TargetVersion $TargetVersion
+            $opts.FileName = Join-Path $OutputDir '17_SearchPropertyLists' '001_SearchPropertyLists.sql'
+            $Scripter.Options = $opts
+            $Scripter.EnumScript($searchPropertyLists)
+            Write-Output "  [SUCCESS] Exported $($searchPropertyLists.Count) search property list(s)"
+        } else {
+            Write-Output "  [INFO] No search property lists found"
+        }
+    } catch {
+        Write-Output "  [INFO] Search property lists not available (SQL Server 2008+)"
+    }
+    
+    # 23. Plan Guides
+    Write-Output ''
+    Write-Output 'Exporting plan guides...'
+    try {
+        $planGuides = @($Database.PlanGuides)
+        if ($planGuides.Count -gt 0) {
+            $opts = New-ScriptingOptions -TargetVersion $TargetVersion
+            $opts.FileName = Join-Path $OutputDir '18_PlanGuides' '001_PlanGuides.sql'
+            $Scripter.Options = $opts
+            $Scripter.EnumScript($planGuides)
+            Write-Output "  [SUCCESS] Exported $($planGuides.Count) plan guide(s)"
+            Write-Output "  [INFO] Plan guides may need adjustment for target environment query patterns"
+        } else {
+            Write-Output "  [INFO] No plan guides found"
+        }
+    } catch {
+        Write-Output "  [INFO] Plan guides not available"
+    }
+    
+    # 24. Security Objects (Keys, Certificates, Roles, Users, Audit)
     Write-Output ''
     Write-Output 'Exporting security objects...'
     $asymmetricKeys = @($Database.AsymmetricKeys | Where-Object { -not $_.IsSystemObject })
     $certs = @($Database.Certificates | Where-Object { -not $_.IsSystemObject })
     $symKeys = @($Database.SymmetricKeys | Where-Object { -not $_.IsSystemObject })
     $appRoles = @($Database.ApplicationRoles | Where-Object { -not $_.IsSystemObject })
+    $dbRoles = @($Database.Roles | Where-Object { -not $_.IsSystemObject -and -not $_.IsFixedRole })
+    $dbUsers = @($Database.Users | Where-Object { -not $_.IsSystemObject })
+    $auditSpecs = @($Database.DatabaseAuditSpecifications)
     
     if ($asymmetricKeys.Count -gt 0) {
         $opts = New-ScriptingOptions -TargetVersion $TargetVersion
-        $opts.FileName = Join-Path $OutputDir '11_Security' '001_AsymmetricKeys.sql'
+        $opts.FileName = Join-Path $OutputDir '19_Security' '001_AsymmetricKeys.sql'
         $Scripter.Options = $opts
         $Scripter.EnumScript($asymmetricKeys)
-        Write-Output "  ✓ Exported $($asymmetricKeys.Count) asymmetric key(s)"
+        Write-Output "  [SUCCESS] Exported $($asymmetricKeys.Count) asymmetric key(s)"
     }
     
     if ($certs.Count -gt 0) {
         $opts = New-ScriptingOptions -TargetVersion $TargetVersion
-        $opts.FileName = Join-Path $OutputDir '11_Security' '002_Certificates.sql'
+        $opts.FileName = Join-Path $OutputDir '19_Security' '002_Certificates.sql'
         $Scripter.Options = $opts
         $Scripter.EnumScript($certs)
-        Write-Output "  ✓ Exported $($certs.Count) certificate(s)"
+        Write-Output "  [SUCCESS] Exported $($certs.Count) certificate(s)"
     }
     
     if ($symKeys.Count -gt 0) {
         $opts = New-ScriptingOptions -TargetVersion $TargetVersion
-        $opts.FileName = Join-Path $OutputDir '11_Security' '003_SymmetricKeys.sql'
+        $opts.FileName = Join-Path $OutputDir '19_Security' '003_SymmetricKeys.sql'
         $Scripter.Options = $opts
         $Scripter.EnumScript($symKeys)
-        Write-Output "  ✓ Exported $($symKeys.Count) symmetric key(s)"
+        Write-Output "  [SUCCESS] Exported $($symKeys.Count) symmetric key(s)"
     }
     
     if ($appRoles.Count -gt 0) {
         $opts = New-ScriptingOptions -TargetVersion $TargetVersion
-        $opts.FileName = Join-Path $OutputDir '11_Security' '004_ApplicationRoles.sql'
+        $opts.FileName = Join-Path $OutputDir '19_Security' '004_ApplicationRoles.sql'
         $Scripter.Options = $opts
         $Scripter.EnumScript($appRoles)
-        Write-Output "  ✓ Exported $($appRoles.Count) application role(s)"
+        Write-Output "  [SUCCESS] Exported $($appRoles.Count) application role(s)"
+    }
+    
+    if ($dbRoles.Count -gt 0) {
+        $opts = New-ScriptingOptions -TargetVersion $TargetVersion
+        $opts.FileName = Join-Path $OutputDir '19_Security' '005_DatabaseRoles.sql'
+        $Scripter.Options = $opts
+        $Scripter.EnumScript($dbRoles)
+        Write-Output "  [SUCCESS] Exported $($dbRoles.Count) database role(s)"
+    }
+    
+    if ($dbUsers.Count -gt 0) {
+        $opts = New-ScriptingOptions -TargetVersion $TargetVersion
+        $opts.FileName = Join-Path $OutputDir '19_Security' '006_DatabaseUsers.sql'
+        $Scripter.Options = $opts
+        $Scripter.EnumScript($dbUsers)
+        Write-Output "  [SUCCESS] Exported $($dbUsers.Count) database user(s)"
+    }
+    
+    if ($auditSpecs.Count -gt 0) {
+        $opts = New-ScriptingOptions -TargetVersion $TargetVersion
+        $opts.FileName = Join-Path $OutputDir '19_Security' '007_DatabaseAuditSpecifications.sql'
+        $Scripter.Options = $opts
+        $Scripter.EnumScript($auditSpecs)
+        Write-Output "  [SUCCESS] Exported $($auditSpecs.Count) database audit specification(s)"
+    }
+    
+    # Security Policies (Row-Level Security)
+    Write-Output ''
+    Write-Output 'Exporting security policies (Row-Level Security)...'
+    try {
+        $securityPolicies = @($Database.SecurityPolicies)
+        if ($securityPolicies.Count -gt 0) {
+            $policyFilePath = Join-Path $OutputDir '19_Security' '008_SecurityPolicies.sql'
+            $policyScript = New-Object System.Text.StringBuilder
+            [void]$policyScript.AppendLine("-- Row-Level Security Policies")
+            [void]$policyScript.AppendLine("-- NOTE: Ensure predicate functions are created before applying policies")
+            [void]$policyScript.AppendLine("")
+            
+            foreach ($policy in $securityPolicies) {
+                # Script the security policy
+                $opts = New-ScriptingOptions -TargetVersion $TargetVersion
+                $Scripter.Options = $opts
+                $policyDef = $Scripter.Script($policy)
+                [void]$policyScript.AppendLine("-- Security Policy: $($policy.Schema).$($policy.Name)")
+                [void]$policyScript.AppendLine($policyDef -join "`n")
+                [void]$policyScript.AppendLine("GO")
+                [void]$policyScript.AppendLine("")
+            }
+            
+            $policyScript.ToString() | Out-File -FilePath $policyFilePath -Encoding UTF8
+            Write-Output "  [SUCCESS] Exported $($securityPolicies.Count) security policy(ies)"
+            Write-Output "  [INFO] Row-Level Security policies require predicate functions to exist first"
+        } else {
+            Write-Output "  [INFO] No security policies found"
+        }
+    } catch {
+        Write-Output "  [INFO] Security policies not available (SQL Server 2016+)"
     }
 }
 
@@ -631,11 +1098,11 @@ function Export-TableData {
         $rowCount = $ds.Tables[0].Rows[0][0]
         
         if ($rowCount -gt 0) {
-            $fileName = Join-Path $OutputDir '12_Data' "$($table.Schema).$($table.Name).data.sql"
+            $fileName = Join-Path $OutputDir '20_Data' "$($table.Schema).$($table.Name).data.sql"
             $opts.FileName = $fileName
             $Scripter.Options = $opts
             $Scripter.EnumScript($table)
-            Write-Output "  ✓ Exported $rowCount row(s) from $($table.Schema).$($table.Name)"
+            Write-Output "  [SUCCESS] Exported $rowCount row(s) from $($table.Schema).$($table.Name)"
         }
     }
 }
@@ -651,67 +1118,208 @@ function New-DeploymentManifest {
         [string]$ServerName
     )
     
-    $manifestContent = @"
-# Database Schema Export: $DatabaseName
-
-**Export Date**: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
-**Source Server**: $ServerName
-**Source Database**: $DatabaseName
-
-## Deployment Order
-
-Scripts must be applied in the following order to ensure all dependencies are satisfied:
-
-1. **01_Schemas** - Create database schemas
-2. **02_Types** - Create user-defined types
-3. **03_Tables_PrimaryKey** - Create tables with primary keys (no foreign keys)
-4. **04_Tables_ForeignKeys** - Add foreign key constraints
-5. **05_Indexes** - Create indexes
-6. **06_Defaults** - Create default constraints
-7. **07_Rules** - Create rules
-8. **08_Programmability** - Create assemblies, functions, procedures, triggers, views (in subfolder order)
-9. **09_Synonyms** - Create synonyms
-10. **10_FullTextSearch** - Create full-text search objects
-11. **11_Security** - Create security objects
-12. **12_Data** - Load data
-
-## Using Apply-Schema.ps1
-
-To apply this schema to a target database:
-
-\`\`\`powershell
-# Basic usage (Windows authentication)
-./Apply-Schema.ps1 -Server "target-server" -Database "target-db" -SourcePath "$(Split-Path -Leaf $OutputDir)"
-
-# With SQL authentication
-\$cred = Get-Credential
-./Apply-Schema.ps1 -Server "target-server" -Database "target-db" -SourcePath "$(Split-Path -Leaf $OutputDir)" -Credential \$cred
-
-# Include data
-./Apply-Schema.ps1 -Server "target-server" -Database "target-db" -SourcePath "$(Split-Path -Leaf $OutputDir)" -IncludeData
-
-# Create database if it doesn't exist
-./Apply-Schema.ps1 -Server "target-server" -Database "target-db" -SourcePath "$(Split-Path -Leaf $OutputDir)" -CreateDatabase
-
-# Force apply even if schema already exists
-./Apply-Schema.ps1 -Server "target-server" -Database "target-db" -SourcePath "$(Split-Path -Leaf $OutputDir)" -Force
-
-# Continue on errors (useful for idempotency)
-./Apply-Schema.ps1 -Server "target-server" -Database "target-db" -SourcePath "$(Split-Path -Leaf $OutputDir)" -ContinueOnError
-\`\`\`
-
-## Notes
-
-- Scripts are in dependency order for initial deployment
-- Foreign keys are separated from table creation to ensure all referenced tables exist first
-- Triggers and views are deployed after all underlying objects
-- Data scripts are optional and can be skipped if desired
-- Use -Force flag to redeploy schema even if objects already exist
-"@
+    $exportDate = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+    
+    # Build manifest content (avoid PowerShell parsing issues with numbered lists)
+    $sb = [System.Text.StringBuilder]::new()
+    [void]$sb.AppendLine("# Database Schema Export: $DatabaseName")
+    [void]$sb.AppendLine("")
+    [void]$sb.AppendLine("Export Date: $exportDate")
+    [void]$sb.AppendLine("Source Server: $ServerName")
+    [void]$sb.AppendLine("Source Database: $DatabaseName")
+    [void]$sb.AppendLine("")
+    [void]$sb.AppendLine("## Deployment Order")
+    [void]$sb.AppendLine("")
+    [void]$sb.AppendLine("Scripts must be applied in the following order to ensure all dependencies are satisfied:")
+    [void]$sb.AppendLine("")
+    [void]$sb.AppendLine("0. 00_FileGroups - Create filegroups (review paths for target environment)")
+    [void]$sb.AppendLine("1. 01_DatabaseConfiguration - Apply database scoped configurations (review hardware-specific settings)")
+    [void]$sb.AppendLine("2. 02_Schemas - Create database schemas")
+    [void]$sb.AppendLine("3. 03_Sequences - Create sequences")
+    [void]$sb.AppendLine("4. 04_PartitionFunctions - Create partition functions")
+    [void]$sb.AppendLine("5. 05_PartitionSchemes - Create partition schemes")
+    [void]$sb.AppendLine("6. 06_Types - Create user-defined types")
+    [void]$sb.AppendLine("7. 07_XmlSchemaCollections - Create XML schema collections")
+    [void]$sb.AppendLine("8. 08_Tables_PrimaryKey - Create tables with primary keys (no foreign keys)")
+    [void]$sb.AppendLine("9. 09_Tables_ForeignKeys - Add foreign key constraints")
+    [void]$sb.AppendLine("10. 10_Indexes - Create indexes")
+    [void]$sb.AppendLine("11. 11_Defaults - Create default constraints")
+    [void]$sb.AppendLine("12. 12_Rules - Create rules")
+    [void]$sb.AppendLine("13. 13_Programmability - Create assemblies, functions, procedures, triggers, views (in subfolder order)")
+    [void]$sb.AppendLine("14. 14_Synonyms - Create synonyms")
+    [void]$sb.AppendLine("15. 15_FullTextSearch - Create full-text search objects")
+    [void]$sb.AppendLine("16. 16_ExternalData - Create external data sources and file formats (review connection strings)")
+    [void]$sb.AppendLine("17. 17_SearchPropertyLists - Create search property lists")
+    [void]$sb.AppendLine("18. 18_PlanGuides - Create plan guides")
+    [void]$sb.AppendLine("19. 19_Security - Create security objects (keys, certificates, roles, users, audit, Row-Level Security)")
+    [void]$sb.AppendLine("20. 20_Data - Load data")
+    [void]$sb.AppendLine("")
+    [void]$sb.AppendLine("## Important Notes")
+    [void]$sb.AppendLine("")
+    [void]$sb.AppendLine("- FileGroups (00): Environment-specific file paths - review and adjust for target server's storage configuration")
+    [void]$sb.AppendLine("- Database Configuration (01): Hardware-specific settings like MAXDOP - review for target server capabilities")
+    [void]$sb.AppendLine("- External Data (16): Connection strings and URLs are environment-specific - configure for target environment")
+    [void]$sb.AppendLine("- Database Scoped Credentials: Always excluded from export (secrets cannot be scripted safely)")
+    [void]$sb.AppendLine("")
+    [void]$sb.AppendLine("## Using Import-SqlServerSchema.ps1")
+    [void]$sb.AppendLine("")
+    [void]$sb.AppendLine("To apply this schema to a target database:")
+    [void]$sb.AppendLine("")
+    [void]$sb.AppendLine("``````powershell")
+    [void]$sb.AppendLine("# Basic usage (Windows authentication) - Dev mode")
+    [void]$sb.AppendLine("./Import-SqlServerSchema.ps1 -Server `"target-server`" -Database `"target-db`" -SourcePath `"$(Split-Path -Leaf $OutputDir)`"")
+    [void]$sb.AppendLine("")
+    [void]$sb.AppendLine("# With SQL authentication")
+    [void]$sb.AppendLine("`$cred = Get-Credential")
+    [void]$sb.AppendLine("./Import-SqlServerSchema.ps1 -Server `"target-server`" -Database `"target-db`" -SourcePath `"$(Split-Path -Leaf $OutputDir)`" -Credential `$cred")
+    [void]$sb.AppendLine("")
+    [void]$sb.AppendLine("# Production mode (includes FileGroups, DB Configurations, External Data)")
+    [void]$sb.AppendLine("./Import-SqlServerSchema.ps1 -Server `"target-server`" -Database `"target-db`" -SourcePath `"$(Split-Path -Leaf $OutputDir)`" -ImportMode Prod")
+    [void]$sb.AppendLine("")
+    [void]$sb.AppendLine("# Include data")
+    [void]$sb.AppendLine("./Import-SqlServerSchema.ps1 -Server `"target-server`" -Database `"target-db`" -SourcePath `"$(Split-Path -Leaf $OutputDir)`" -IncludeData")
+    [void]$sb.AppendLine("")
+    [void]$sb.AppendLine("# Create database if it doesn't exist")
+    [void]$sb.AppendLine("./Import-SqlServerSchema.ps1 -Server `"target-server`" -Database `"target-db`" -SourcePath `"$(Split-Path -Leaf $OutputDir)`" -CreateDatabase")
+    [void]$sb.AppendLine("")
+    [void]$sb.AppendLine("# Force apply even if schema already exists")
+    [void]$sb.AppendLine("./Import-SqlServerSchema.ps1 -Server `"target-server`" -Database `"target-db`" -SourcePath `"$(Split-Path -Leaf $OutputDir)`" -Force")
+    [void]$sb.AppendLine("")
+    [void]$sb.AppendLine("# Continue on errors (useful for idempotency)")
+    [void]$sb.AppendLine("./Import-SqlServerSchema.ps1 -Server `"target-server`" -Database `"target-db`" -SourcePath `"$(Split-Path -Leaf $OutputDir)`" -ContinueOnError")
+    [void]$sb.AppendLine("``````")
+    [void]$sb.AppendLine("")
+    [void]$sb.AppendLine("## Notes")
+    [void]$sb.AppendLine("")
+    [void]$sb.AppendLine("- Scripts are in dependency order for initial deployment")
+    [void]$sb.AppendLine("- Foreign keys are separated from table creation to ensure all referenced tables exist first")
+    [void]$sb.AppendLine("- Triggers and views are deployed after all underlying objects")
+    [void]$sb.AppendLine("- Data scripts are optional and can be skipped if desired")
+    [void]$sb.AppendLine("- Use -Force flag to redeploy schema even if objects already exist")
+    [void]$sb.AppendLine("- Use -ImportMode Dev (default) for development, -ImportMode Prod for production deployments")
+    
+    $manifestContent = $sb.ToString()
     
     $manifestPath = Join-Path $OutputDir '_DEPLOYMENT_README.md'
     $manifestContent | Out-File -FilePath $manifestPath -Encoding UTF8
-    Write-Output "✓ Deployment manifest created: $(Split-Path -Leaf $manifestPath)"
+    Write-Output "[SUCCESS] Deployment manifest created: $(Split-Path -Leaf $manifestPath)"
+}
+
+function Show-ExportSummary {
+    <#
+    .SYNOPSIS
+        Displays summary of exported objects and manual actions required.
+    #>
+    param(
+        [string]$OutputDir,
+        [string]$DatabaseName,
+        [string]$ServerName,
+        [bool]$DataExported
+    )
+    
+    Write-Output ''
+    Write-Output '═══════════════════════════════════════════════'
+    Write-Output 'EXPORT SUMMARY'
+    Write-Output '═══════════════════════════════════════════════'
+    Write-Output ''
+    
+    # Count folders and files
+    $folders = Get-ChildItem -Path $OutputDir -Directory | Where-Object { $_.Name -match '^\d{2}_' }
+    $totalFiles = 0
+    $folderSummary = @()
+    
+    foreach ($folder in $folders | Sort-Object Name) {
+        $files = @(Get-ChildItem -Path $folder.FullName -Filter '*.sql' -Recurse)
+        if ($files.Count -gt 0) {
+            $totalFiles += $files.Count
+            $folderName = $folder.Name -replace '^\d{2}_', ''
+            $folderSummary += "  [$($files.Count.ToString().PadLeft(3))] $folderName"
+        }
+    }
+    
+    Write-Output "Exported from: $ServerName\$DatabaseName"
+    Write-Output "Output location: $OutputDir"
+    Write-Output ''
+    Write-Output "Files created by category:"
+    $folderSummary | ForEach-Object { Write-Output $_ }
+    Write-Output "  ─────────────────────────"
+    Write-Output "  [$($totalFiles.ToString().PadLeft(3))] Total SQL files"
+    Write-Output ''
+    
+    # Check for specific object types requiring manual action
+    $manualActions = @()
+    
+    # Check for Database Scoped Credentials
+    $credsPath = Join-Path $OutputDir '01_DatabaseConfiguration' '002_DatabaseScopedCredentials.sql'
+    if (Test-Path $credsPath) {
+        $credsContent = Get-Content $credsPath -Raw
+        if ($credsContent -match 'CREATE DATABASE SCOPED CREDENTIAL') {
+            $manualActions += "[ACTION REQUIRED] Database Scoped Credentials"
+            $manualActions += "  Location: 01_DatabaseConfiguration\002_DatabaseScopedCredentials.sql"
+            $manualActions += "  Action: Uncomment credential definitions and provide SECRET values"
+            $manualActions += "  Note: Secrets cannot be exported - must be manually configured"
+        }
+    }
+    
+    # Check for FileGroups
+    $fgPath = Join-Path $OutputDir '00_FileGroups'
+    if (Test-Path $fgPath) {
+        $fgFiles = @(Get-ChildItem -Path $fgPath -Filter '*.sql' -Recurse)
+        if ($fgFiles.Count -gt 0) {
+            $manualActions += "[ACTION REQUIRED] FileGroups"
+            $manualActions += "  Location: 00_FileGroups\"
+            $manualActions += "  Action: Review and adjust file paths for target server storage configuration"
+            $manualActions += "  Note: Physical file paths are environment-specific"
+        }
+    }
+    
+    # Check for Database Configurations
+    $dbConfigPath = Join-Path $OutputDir '01_DatabaseConfiguration' '001_DatabaseScopedConfigurations.sql'
+    if (Test-Path $dbConfigPath) {
+        $manualActions += "[REVIEW RECOMMENDED] Database Scoped Configurations"
+        $manualActions += "  Location: 01_DatabaseConfiguration\001_DatabaseScopedConfigurations.sql"
+        $manualActions += "  Action: Review MAXDOP and other hardware-specific settings for target server"
+    }
+    
+    # Check for External Data
+    $extDataPath = Join-Path $OutputDir '16_ExternalData'
+    if (Test-Path $extDataPath) {
+        $extFiles = @(Get-ChildItem -Path $extDataPath -Filter '*.sql' -Recurse)
+        if ($extFiles.Count -gt 0) {
+            $manualActions += "[ACTION REQUIRED] External Data Sources"
+            $manualActions += "  Location: 16_ExternalData\"
+            $manualActions += "  Action: Review connection strings and URLs for target environment"
+            $manualActions += "  Note: External data sources are environment-specific"
+        }
+    }
+    
+    # Check for Security Policies (RLS)
+    $rlsPath = Join-Path $OutputDir '19_Security' '008_SecurityPolicies.sql'
+    if (Test-Path $rlsPath) {
+        $rlsContent = Get-Content $rlsPath -Raw
+        if ($rlsContent -match 'CREATE SECURITY POLICY') {
+            $manualActions += "[INFO] Row-Level Security Policies"
+            $manualActions += "  Location: 19_Security\008_SecurityPolicies.sql"
+            $manualActions += "  Note: Ensure predicate functions are deployed before applying RLS policies"
+        }
+    }
+    
+    if ($manualActions.Count -gt 0) {
+        Write-Output "Manual actions and reviews:"
+        Write-Output ''
+        $manualActions | ForEach-Object { Write-Output $_ }
+        Write-Output ''
+    }
+    
+    Write-Output "Next steps:"
+    Write-Output "  1. Review _DEPLOYMENT_README.md for deployment instructions"
+    Write-Output "  2. Complete any manual actions listed above"
+    if ($DataExported) {
+        Write-Output "  3. Use Import-SqlServerSchema.ps1 with -ImportMode Dev or -ImportMode Prod"
+    } else {
+        Write-Output "  3. Use Import-SqlServerSchema.ps1 to deploy to target database"
+    }
+    Write-Output ''
 }
 
 #endregion
@@ -719,6 +1327,26 @@ To apply this schema to a target database:
 #region Main Script
 
 try {
+    # Load configuration if provided
+    $config = @{ export = @{ excludeObjectTypes = @(); includeData = $false; excludeObjects = @() } }
+    $configSource = "None (using defaults)"
+    
+    if ($ConfigFile) {
+        if (Test-Path $ConfigFile) {
+            $config = Import-YamlConfig -ConfigFilePath $ConfigFile
+            $configSource = $ConfigFile
+            
+            # Override IncludeData if specified in config
+            if ($config.export.includeData -and -not $IncludeData) {
+                $IncludeData = $config.export.includeData
+                Write-Output "[INFO] Data export enabled from config file"
+            }
+        } else {
+            Write-Warning "Config file not found: $ConfigFile"
+            Write-Warning "Continuing with default settings..."
+        }
+    }
+    
     # Validate dependencies
     Test-Dependencies
     
@@ -730,8 +1358,16 @@ try {
     # Initialize output directory
     $exportDir = Initialize-OutputDirectory -Path $OutputPath
     
+    # Display configuration
+    Show-ExportConfiguration `
+        -ServerName $Server `
+        -DatabaseName $Database `
+        -OutputDirectory $exportDir `
+        -Config $config `
+        -DataExport $IncludeData `
+        -ConfigSource $configSource
+    
     # Connect to SQL Server
-    Write-Output ''
     Write-Output 'Connecting to SQL Server...'
     
     if ($Credential) {
@@ -751,7 +1387,7 @@ try {
         throw "Database '$Database' not found"
     }
     
-    Write-Output "✓ Connected to $Server\$Database"
+    Write-Output "[SUCCESS] Connected to $Server\$Database"
     
     # Create scripter
     $sqlVersion = Get-SqlServerVersion -VersionString $TargetSqlVersion
@@ -772,15 +1408,16 @@ try {
     # Disconnect
     $smServer.ConnectionContext.Disconnect()
     
-    Write-Output ''
+    # Show export summary
+    Show-ExportSummary -OutputDir $exportDir -DatabaseName $Database -ServerName $Server -DataExported $IncludeData
+    
     Write-Output '═══════════════════════════════════════════════'
     Write-Output 'EXPORT COMPLETE'
     Write-Output '═══════════════════════════════════════════════'
-    Write-Output "Exported to: $exportDir"
     Write-Output ''
     
 } catch {
-    Write-Error "✗ Script failed: $_"
+    Write-Error "[ERROR] Script failed: $_"
     exit 1
 }
 

@@ -1,0 +1,144 @@
+# Export-SqlServerSchema Configuration File
+# This file controls which objects are exported and how they are imported
+
+# JSON Schema for validation
+$schema: "./export-import-config.schema.json"
+
+# ═══════════════════════════════════════════════════════════════
+# EXPORT CONFIGURATION
+# ═══════════════════════════════════════════════════════════════
+export:
+  # Include table data in export (generates INSERT statements)
+  includeData: false
+  
+  # Object types to exclude from export
+  # By default, ALL object types are exported
+  # Uncomment items below to exclude them
+  excludeObjectTypes: []
+    # - FileGroups                     # Physical storage layout
+    # - DatabaseScopedConfigurations   # Performance/optimizer settings
+    # - DatabaseScopedCredentials      # External resource credentials
+    # - SecurityPolicies               # Row-Level Security
+    # - ExternalDataSources            # PolyBase/External data
+    # - ExternalFileFormats            # External data file definitions
+    # - SearchPropertyLists            # Full-text search properties
+    # - PlanGuides                     # Query hint overrides
+    # - ExternalLibraries              # ML Services R/Python packages
+    # - ExternalLanguages              # Custom language runtimes
+    # - Synonyms                       # Object aliases
+    # - Views                          # Database views
+    # - StoredProcedures               # Stored procedures
+    # - Functions                      # User-defined functions
+    # - Triggers                       # Table/database triggers
+    # - Indexes                        # Non-clustered indexes
+    # - ForeignKeys                    # Foreign key constraints
+  
+  # Specific objects to exclude (supports wildcards)
+  # Pattern: schema.objectname
+  excludeObjects: []
+    # - "dbo.LegacyTable"              # Exclude specific table
+    # - "staging.*"                    # Exclude all objects in staging schema
+    # - "*.TempTable"                  # Exclude all TempTable objects
+  
+  # Schemas to exclude entirely
+  excludeSchemas: []
+    # - "staging"                      # Temporary staging area
+    # - "temp"                         # Temporary objects
+    # - "archive"                      # Old/archived objects
+
+# ═══════════════════════════════════════════════════════════════
+# IMPORT CONFIGURATION
+# ═══════════════════════════════════════════════════════════════
+import:
+  # Default import mode: Dev or Prod
+  # Dev = simplified for local development (default)
+  # Prod = full production deployment
+  defaultMode: Dev
+  
+  # ─────────────────────────────────────────────────────────────
+  # DEVELOPER MODE SETTINGS (Local Development)
+  # ─────────────────────────────────────────────────────────────
+  developerMode:
+    # Skip FileGroups and remap all objects to PRIMARY
+    # Reason: Simplifies local setup, no need for multiple data files
+    includeFileGroups: false
+    
+    # Skip database scoped configurations (use server defaults)
+    # Reason: MAXDOP and other settings are hardware-specific
+    includeConfigurations: false
+    
+    # ALWAYS FALSE: Credentials require manual setup with actual secrets
+    includeDatabaseScopedCredentials: false
+    
+    # Skip external data sources
+    # Reason: Developers may not have access to production Azure resources
+    includeExternalData: false
+    
+    # Import security policies but keep them DISABLED (STATE=OFF)
+    # Reason: Developers need to see all data for debugging
+    enableSecurityPolicies: false
+    
+    # Skip data import by default (can override with -IncludeData)
+    includeData: false
+    
+    # Object types to exclude in developer mode
+    excludeObjectTypes: []
+      # - PlanGuides                   # Environment-specific query hints
+      # - ExternalLibraries            # ML Services packages
+
+  # ─────────────────────────────────────────────────────────────
+  # PRODUCTION MODE SETTINGS (Production Deployment)
+  # ─────────────────────────────────────────────────────────────
+  productionMode:
+    # Import FileGroups with path mappings
+    includeFileGroups: true
+    
+    # Import database scoped configurations
+    includeConfigurations: true
+    
+    # ALWAYS FALSE: Credentials require manual setup with actual secrets
+    includeDatabaseScopedCredentials: false
+    
+    # Import external data sources
+    includeExternalData: true
+    
+    # Enable Row-Level Security policies (STATE=ON)
+    enableSecurityPolicies: true
+    
+    # Skip data import by default (can override with -IncludeData)
+    includeData: false
+    
+    # No object types excluded in production mode
+    excludeObjectTypes: []
+    
+    # FileGroup path mappings (REQUIRED if includeFileGroups=true)
+    # Map logical FileGroup names to physical paths on target server
+    fileGroupPathMapping:
+      FG_CURRENT: "E:\\SQLData\\Current"
+      FG_ARCHIVE: "F:\\SQLArchive\\Archive"
+      FG_HISTORICAL: "G:\\SQLHistory\\Data"
+    
+    # External data source URL replacements
+    # Map logical names to environment-specific connection strings
+    externalConnectionStrings:
+      AzureDataLake: "https://proddatalake.blob.core.windows.net/data"
+      AzureBackup: "https://prodbackup.blob.core.windows.net/backup"
+      OnPremDataSource: "sqlserver://onprem-server.domain.com/database"
+
+# ═══════════════════════════════════════════════════════════════
+# USAGE EXAMPLES
+# ═══════════════════════════════════════════════════════════════
+
+# Export with config file:
+# .\Export-SqlServerSchema.ps1 -Server localhost -Database MyDb -ConfigFile export-import-config.yml
+
+# Import in developer mode (default):
+# .\Import-SqlServerSchema.ps1 -Server localhost -Database MyDb_Dev -SourcePath .\export -ConfigFile export-import-config.yml
+
+# Import in production mode:
+# .\Import-SqlServerSchema.ps1 -Server prodserver -Database MyDb -SourcePath .\export -ImportMode Prod -ConfigFile export-import-config.yml
+
+# Override config file with command-line parameters:
+# .\Import-SqlServerSchema.ps1 -Server localhost -Database MyDb_Dev -SourcePath .\export -ConfigFile export-import-config.yml -IncludeConfigurations -EnableSecurityPolicies
+
+# NOTE: Command-line parameters always override config file settings

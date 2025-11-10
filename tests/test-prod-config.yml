@@ -1,0 +1,24 @@
+# Production Mode Configuration for Integration Tests
+# Full database deployment including infrastructure and environment-specific settings
+
+importMode: Prod
+includeData: true
+
+# FileGroup path mapping for target environment
+# Base directory paths (without trailing separator) for each FileGroup
+# Script will automatically add correct path separator based on target OS
+# and append database-specific filenames to prevent conflicts
+fileGroupPathMapping:
+  FG_CURRENT: "/var/opt/mssql/data"
+  FG_ARCHIVE: "/var/opt/mssql/data"
+
+# Prod mode includes:
+# - FileGroups (with path mapping from above)
+# - Database Scoped Configurations
+# - Row-Level Security Policies
+# - All schema objects
+# - Data (if includeData: true)
+
+# Always skipped (regardless of mode):
+# - Database Scoped Credentials (secrets required)
+# - External Data Sources (environment-specific connection strings)

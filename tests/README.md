@@ -58,8 +58,48 @@ If you want to test individual components:
 
 - **run-integration-test.ps1** - Comprehensive end-to-end test (8 steps)
 - **setup-test-db.ps1** - Creates test database with sample schema
-- **test-schema.sql** - Test database schema definition
+- **test-schema.sql** - Test database schema definition with comprehensive object coverage
 - **.env** - Configuration file (copy from .env.example)
+
+## Test Database Coverage
+
+The test database (`test-schema.sql`) includes examples of all major SQL Server object types:
+
+### Infrastructure Objects
+- **FileGroups**: 3 filegroups (PRIMARY, FG_CURRENT, FG_ARCHIVE)
+- **Database Scoped Configurations**: MAXDOP, cardinality estimator, parameter sniffing, query optimizer hotfixes
+- **Database Scoped Credentials**: 2 credentials (with test secrets for export/import testing)
+
+### Schema Objects
+- **Schemas**: 3 (dbo, Sales, Warehouse)
+- **Tables**: 5 with various constraints, defaults, and foreign keys
+- **Views**: 1 multi-table join
+- **Functions**: 3 (2 scalar functions + 1 table-valued function for RLS)
+- **Stored Procedures**: 2 with parameters and error handling
+- **Triggers**: 2 (AFTER UPDATE and AFTER INSERT)
+- **Sequences**: 1 with custom range
+- **User-Defined Types**: 1 table type
+- **Indexes**: 4 non-clustered indexes
+
+### Advanced Features
+- **Security Policies**: 1 Row-Level Security policy (disabled for testing, can be enabled)
+- **Synonyms**: 2 object aliases
+- **Search Property Lists**: 1 list with 2 custom properties for full-text search
+- **Plan Guides**: 1 query hint example
+
+### Sample Data
+- 5 customers, 6 products, 3 orders, 6 order details, 6 inventory records
+
+### Objects NOT Included
+The following objects require external resources or complex setup unsuitable for Docker-based integration tests:
+- External Data Sources (requires Azure/external resources)
+- External File Formats (depends on External Data Sources)
+- External Libraries (requires ML Services configuration)
+- External Languages (requires custom language runtime)
+- Always Encrypted objects (requires certificate store configuration)
+- Certificates with private keys (complex key management)
+
+This comprehensive coverage ensures the export/import scripts handle all common database object types correctly.
 
 ## Stopping
 
