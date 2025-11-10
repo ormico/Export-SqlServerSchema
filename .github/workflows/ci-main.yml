@@ -70,11 +70,17 @@ jobs:
       
       - name: Install SQL Server command-line tools
         run: |
-          curl https://packages.microsoft.com/keys/microsoft.asc | sudo tee /etc/apt/trusted.gpg.d/microsoft.asc
-          sudo add-apt-repository "$(wget -qO- https://packages.microsoft.com/config/ubuntu/$(lsb_release -rs)/prod.list)"
+          # Download and install Microsoft signing key
+          curl https://packages.microsoft.com/keys/microsoft.asc | sudo apt-key add -
+          
+          # Add Microsoft SQL Server repository
+          curl https://packages.microsoft.com/config/ubuntu/22.04/prod.list | sudo tee /etc/apt/sources.list.d/msprod.list
+          
+          # Update and install mssql-tools18
           sudo apt-get update
           sudo ACCEPT_EULA=Y apt-get install -y mssql-tools18 unixodbc-dev
-          echo 'export PATH="$PATH:/opt/mssql-tools18/bin"' >> ~/.bashrc
+          
+          # Add to PATH
           echo "/opt/mssql-tools18/bin" >> $GITHUB_PATH
       
       - name: Install PowerShell modules
