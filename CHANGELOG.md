@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [1.2.2] - 2025-11-19
 
 ### Fixed
-- **SMO "Folder path specified does not exist" errors**: corrected handling of relative paths that was causing error
+- **SMO "Folder path specified does not exist" errors**: corrected handling of relative paths that were causing errors
 
 ## [1.2.1] - 2025-11-19
 
