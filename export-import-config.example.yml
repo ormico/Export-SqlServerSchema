@@ -8,6 +8,25 @@ $schema: "./export-import-config.schema.json"
 # CONNECTION SETTINGS
 # ═══════════════════════════════════════════════════════════════
 
+# Connection timeout in seconds (default: 30)
+# How long to wait when establishing initial connection to SQL Server
+connectionTimeout: 30
+
+# Command/query timeout in seconds (default: 300 = 5 minutes)
+# How long to wait for individual SQL commands to complete
+# Increase for large databases or slow operations
+commandTimeout: 300
+
+# Maximum retry attempts for transient failures (default: 3)
+# Handles network timeouts, Azure SQL throttling, deadlocks
+# Set to 1 to disable retries
+maxRetries: 3
+
+# Initial retry delay in seconds (default: 2)
+# Uses exponential backoff - each retry doubles the delay
+# Example: 2s, 4s, 8s for 3 retries
+retryDelaySeconds: 2
+
 # Trust server certificate (for self-signed certificates)
 # Set to true for:
 #   - Local development environments
@@ -34,20 +53,33 @@ export:
     # - FileGroups                     # Physical storage layout
     # - DatabaseScopedConfigurations   # Performance/optimizer settings
     # - DatabaseScopedCredentials      # External resource credentials
-    # - SecurityPolicies               # Row-Level Security
-    # - ExternalDataSources            # PolyBase/External data
+    # - Schemas                        # CREATE SCHEMA statements
+    # - Sequences                      # Sequence objects
+    # - PartitionFunctions             # Table partitioning functions
+    # - PartitionSchemes               # Partition scheme mappings
+    # - UserDefinedTypes               # User-defined data types
+    # - XmlSchemaCollections           # XML schema definitions
+    # - Tables                         # Table definitions (PKs only)
+    # - ForeignKeys                    # Foreign key constraints
+    # - Indexes                        # Non-clustered indexes
+    # - Defaults                       # Default constraints
+    # - Rules                          # Rule constraints
+    # - Assemblies                     # CLR assemblies
+    # - Functions                      # User-defined functions
+    # - UserDefinedAggregates          # CLR aggregates
+    # - StoredProcedures               # Stored procedures
+    # - DatabaseTriggers               # Database-level triggers
+    # - TableTriggers                  # Table-level triggers
+    # - Views                          # Database views
+    # - Synonyms                       # Object aliases
+    # - FullTextCatalogs               # Full-text search catalogs
+    # - ExternalDataSources            # PolyBase/External data sources
     # - ExternalFileFormats            # External data file definitions
     # - SearchPropertyLists            # Full-text search properties
     # - PlanGuides                     # Query hint overrides
-    # - ExternalLibraries              # ML Services R/Python packages
-    # - ExternalLanguages              # Custom language runtimes
-    # - Synonyms                       # Object aliases
-    # - Views                          # Database views
-    # - StoredProcedures               # Stored procedures
-    # - Functions                      # User-defined functions
-    # - Triggers                       # Table/database triggers
-    # - Indexes                        # Non-clustered indexes
-    # - ForeignKeys                    # Foreign key constraints
+    # - SecurityObjects                # Keys, certificates, roles, users
+    # - SecurityPolicies               # Row-Level Security
+    # - Data                           # Table data (INSERT statements)
   
   # Specific objects to exclude (supports wildcards)
   # Pattern: schema.objectname

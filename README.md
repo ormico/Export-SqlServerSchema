@@ -1,12 +1,38 @@
 # SQL Server Database Scripting Toolkit
 
-PowerShell toolkit for exporting and importing SQL Server database schemas with proper dependency ordering, two-mode deployment system, and comprehensive object type support.
+PowerShell toolkit for exporting and importing SQL Server database schemas with proper dependency ordering, two-mode deployment system, comprehensive object type support, and enterprise-grade reliability features.
 
-**Version**: 1.1.0  
-**Released**: November 10, 2025  
-**Status**: Production Ready
+## Installation
 
-## Quick Start
+### Option 1: Download Latest Release
+
+```powershell
+# Download latest release
+Invoke-WebRequest -Uri "https://github.com/ormico/Export-SqlServerSchema/releases/latest/download/Export-SqlServerSchema.zip" -OutFile "Export-SqlServerSchema.zip"
+
+# Extract and unblock
+Expand-Archive -Path "Export-SqlServerSchema.zip" -DestinationPath "."
+Get-ChildItem -Path ".\Export-SqlServerSchema" -Recurse | Unblock-File
+
+# Install required modules
+Install-Module SqlServer -Scope CurrentUser
+Install-Module powershell-yaml -Scope CurrentUser  # Optional, for YAML config
+```
+
+### Option 2: Git Clone (Recommended for Development)
+
+```powershell
+# Clone the repository
+git clone https://github.com/ormico/Export-SqlServerSchema.git
+cd Export-SqlServerSchema
+
+# Unblock downloaded files
+Get-ChildItem -Recurse | Unblock-File
+
+# Install required modules
+Install-Module SqlServer -Scope CurrentUser
+Install-Module powershell-yaml -Scope CurrentUser  # Optional, for YAML config
+```
 
 ### Prerequisites
 
@@ -15,13 +41,11 @@ PowerShell toolkit for exporting and importing SQL Server database schemas with 
 - SQL Server Management Objects (SMO): `Install-Module SqlServer -Scope CurrentUser`
 - PowerShell YAML module (optional): `Install-Module powershell-yaml -Scope CurrentUser`
 
+## Quick Start
+
 ### Export Database
 
 ```powershell
-# Install required modules
-Install-Module SqlServer -Scope CurrentUser
-Install-Module powershell-yaml -Scope CurrentUser  # Optional, for YAML config support
-
 # Basic export
 ./Export-SqlServerSchema.ps1 -Server "localhost" -Database "MyDatabase"
 
@@ -65,6 +89,9 @@ $cred = Get-Credential
 - Optional data export with INSERT statements
 - Cross-platform path handling
 - Supports SQL Server 2012-2022, Azure SQL
+- **Automatic retry logic** for transient failures (network timeouts, Azure SQL throttling, deadlocks)
+- **Configurable timeouts** for slow networks and long-running operations
+- **Comprehensive error logging** to file for diagnostics
 
 **Import-SqlServerSchema.ps1**
 - **Two import modes**: Dev (default) vs Prod (opt-in)
@@ -77,6 +104,9 @@ $cred = Get-Credential
 - Comprehensive startup configuration display
 - Detailed completion summaries
 - Command-line parameters override config files
+- **Automatic retry logic** for transient failures with exponential backoff
+- **Configurable timeouts** and retry settings via config file or parameters
+- **Comprehensive error logging** with connection cleanup guarantees
 
 ## Testing
 
@@ -131,6 +161,11 @@ DbScripts/
 | `-IncludeData` | No | Export table data as INSERT statements |
 | `-Credential` | No | SQL authentication credentials |
 | `-TargetSqlVersion` | No | Target SQL version (default: Sql2022) |
+| `-ConnectionTimeout` | No | Connection timeout in seconds (default: 0 = use config/30) |
+| `-CommandTimeout` | No | Command timeout in seconds (default: 0 = use config/300) |
+| `-MaxRetries` | No | Max retry attempts for transient failures (default: 0 = use config/3) |
+| `-RetryDelaySeconds` | No | Initial retry delay in seconds (default: 0 = use config/2) |
+| `-ConfigFile` | No | Path to YAML configuration file |
 
 ### Import-SqlServerSchema.ps1
 
@@ -146,7 +181,10 @@ DbScripts/
 | `-Credential` | No | SQL authentication credentials |
 | `-Force` | No | Skip existing schema check |
 | `-ContinueOnError` | No | Continue on script errors |
-| `-CommandTimeout` | No | Timeout in seconds (default: 300) |
+| `-ConnectionTimeout` | No | Connection timeout in seconds (default: 0 = use config/30) |
+| `-CommandTimeout` | No | Command timeout in seconds (default: 0 = use config/300) |
+| `-MaxRetries` | No | Max retry attempts for transient failures (default: 0 = use config/3) |
+| `-RetryDelaySeconds` | No | Initial retry delay in seconds (default: 0 = use config/2) |
 
 ## Import Modes Explained
 
@@ -174,6 +212,12 @@ Two formats supported:
 ```yaml
 importMode: Dev  # or Prod
 includeData: true
+
+# Reliability settings (optional, defaults shown):
+connectionTimeout: 30      # Connection timeout in seconds
+commandTimeout: 300        # Command execution timeout in seconds
+maxRetries: 3              # Retry attempts for transient failures
+retryDelaySeconds: 2       # Initial delay, uses exponential backoff
 
 # Only needed for Prod mode with FileGroups:
 fileGroupPathMapping:
@@ -210,6 +254,42 @@ When importing data, the Import script automatically:
 
 This eliminates data import dependency errors and ensures data integrity.
 
+## Reliability & Error Handling
+
+**Automatic Retry Logic**:
+- Detects and automatically retries transient failures:
+  - Network timeouts and connection issues
+  - Azure SQL throttling (error codes 40501, 40613, 49918, 10928, 10929, 40197, 40540, 40143)
+  - Deadlocks (error code 1205)
+  - Connection pool exhaustion
+  - Transport-level errors (error codes 53, 233, 64)
+- Uses exponential backoff strategy (default: 2s → 4s → 8s)
+- Configurable retry count (1-10, default: 3) and delay (1-60 seconds, default: 2)
+- Non-transient errors skip retry logic and fail immediately
+
+**Configurable Timeouts**:
+- `connectionTimeout`: Time to establish SQL Server connection (default: 30 seconds)
+- `commandTimeout`: Time for long-running commands to complete (default: 300 seconds)
+- Configure via YAML file or command-line parameters
+- Three-tier precedence: parameter > config file > hardcoded default
+
+**Comprehensive Error Logging**:
+- All errors logged to timestamped log file in output directory
+- Dual output: console for immediate feedback + file for diagnostics
+- Includes full error details, script names, retry attempts
+- Connection cleanup guaranteed via finally blocks (prevents resource leaks)
+
+**Example Configuration**:
+```yaml
+# For slow networks or Azure SQL
+connectionTimeout: 60
+commandTimeout: 600
+
+# For high-latency environments
+maxRetries: 5
+retryDelaySeconds: 3  # 3s → 6s → 12s → 24s → 48s
+```
+
 ## Cross-Platform Support
 
 **FileGroups**: 
@@ -228,18 +308,6 @@ This eliminates data import dependency errors and ensures data integrity.
 - **MISSING_OBJECTS_ANALYSIS.md**: SQL Server object type coverage analysis
 - **tests/README.md**: Integration testing with Docker
 - **.github/copilot-instructions.md**: Code style conventions
-
-## Project Status
-
-**Version 1.1.0** (November 10, 2025)
-
-All features complete and production-ready:
-- ✅ YAML configuration system with JSON Schema validation
-- ✅ 10+ new object types (FileGroups, DB Configs, Security Policies, etc.)
-- ✅ Two-mode import system (Dev/Prod) with intelligent defaults
-- ✅ Cross-platform FileGroups with SQLCMD variables
-- ✅ Comprehensive completion summaries
-- ✅ Full integration test coverage (ALL TESTS PASSED)
 
 See [CHANGELOG.md](CHANGELOG.md) for complete release notes and [EXPORT_IMPORT_STRATEGY.md](EXPORT_IMPORT_STRATEGY.md) for detailed feature documentation.
 

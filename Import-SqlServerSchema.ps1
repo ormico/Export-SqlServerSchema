@@ -2,7 +2,6 @@
 
 <#
 .NOTES
-    Version: 1.1.0
     License: MIT
     Repository: https://github.com/ormico/Export-SqlServerSchema
 
@@ -107,8 +106,11 @@ param(
     [Parameter(HelpMessage = 'Continue on script errors')]
     [switch]$ContinueOnError,
     
-    [Parameter(HelpMessage = 'Command timeout in seconds')]
-    [int]$CommandTimeout = 300,
+    [Parameter(HelpMessage = 'Command timeout in seconds (overrides config file)')]
+    [int]$CommandTimeout = 0,
+    
+    [Parameter(HelpMessage = 'Connection timeout in seconds (overrides config file)')]
+    [int]$ConnectionTimeout = 0,
     
     [Parameter(HelpMessage = 'Show SQL scripts during execution')]
     [switch]$ShowSQL,
@@ -118,12 +120,133 @@ param(
     [string]$ImportMode = 'Dev',
     
     [Parameter(HelpMessage = 'Path to YAML configuration file')]
-    [string]$ConfigFile
+    [string]$ConfigFile,
+    
+    [Parameter(HelpMessage = 'Maximum retry attempts for transient failures (overrides config file)')]
+    [int]$MaxRetries = 0,
+    
+    [Parameter(HelpMessage = 'Initial retry delay in seconds (overrides config file)')]
+    [int]$RetryDelaySeconds = 0
 )
 
 $ErrorActionPreference = if ($ContinueOnError) { 'Continue' } else { 'Stop' }
+$script:LogFile = $null  # Will be set during import
 
 #region Helper Functions
+
+function Write-Log {
+    <#
+    .SYNOPSIS
+        Writes log entry to console and log file.
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Message,
+        
+        [Parameter()]
+        [ValidateSet('INFO', 'SUCCESS', 'WARNING', 'ERROR')]
+        [string]$Severity = 'INFO'
+    )
+    
+    $timestamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+    $logEntry = "[$timestamp] [$Severity] $Message"
+    
+    # Write to console (consistent with Export script)
+    switch ($Severity) {
+        'SUCCESS' { Write-Host $Message -ForegroundColor Green }
+        'WARNING' { Write-Warning $Message }
+        'ERROR'   { Write-Host $Message -ForegroundColor Red }
+        default   { Write-Output $Message }
+    }
+    
+    # Write to log file if available
+    if ($script:LogFile) {
+        try {
+            Add-Content -Path $script:LogFile -Value $logEntry -ErrorAction SilentlyContinue
+        } catch {
+            # Silently ignore file write errors
+        }
+    }
+}
+
+function Invoke-WithRetry {
+    <#
+    .SYNOPSIS
+        Executes a script block with retry logic for transient failures.
+    .DESCRIPTION
+        Implements exponential backoff retry strategy for handling transient errors
+        like network timeouts, Azure SQL throttling, and connection pool issues.
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [scriptblock]$ScriptBlock,
+        
+        [Parameter()]
+        [int]$MaxAttempts = 3,
+        
+        [Parameter()]
+        [int]$InitialDelaySeconds = 2,
+        
+        [Parameter()]
+        [string]$OperationName = 'Operation'
+    )
+    
+    $attempt = 0
+    $delay = $InitialDelaySeconds
+    
+    while ($attempt -lt $MaxAttempts) {
+        $attempt++
+        
+        try {
+            Write-Verbose "[$OperationName] Attempt $attempt of $MaxAttempts"
+            return & $ScriptBlock
+        } catch {
+            $isTransient = $false
+            $errorMessage = $_.Exception.Message
+            
+            # Check for transient error patterns
+            if ($errorMessage -match 'timeout|timed out|connection.*lost|connection.*closed') {
+                $isTransient = $true
+                $errorType = 'Network timeout'
+            } elseif ($errorMessage -match '40501|40613|49918|10928|10929|40197|40540|40143') {
+                # Azure SQL throttling error codes
+                $isTransient = $true
+                $errorType = 'Azure SQL throttling'
+            } elseif ($errorMessage -match '1205') {
+                # Deadlock victim
+                $isTransient = $true
+                $errorType = 'Deadlock'
+            } elseif ($errorMessage -match 'pooling|connection pool') {
+                $isTransient = $true
+                $errorType = 'Connection pool issue'
+            } elseif ($errorMessage -match '\b(53|233|64)\b') {
+                # Transport-level errors (error codes 53, 233, 64)
+                $isTransient = $true
+                $errorType = 'Transport error'
+            }
+            
+            if ($isTransient -and $attempt -lt $MaxAttempts) {
+                Write-Warning "[$OperationName] $errorType detected on attempt $attempt of $MaxAttempts"
+                Write-Warning "  Error: $errorMessage"
+                Write-Warning "  Retrying in $delay seconds..."
+                Write-Log "$OperationName failed (attempt $attempt): $errorType - $errorMessage" -Severity WARNING
+                
+                Start-Sleep -Seconds $delay
+                
+                # Exponential backoff: double the delay for next attempt
+                $delay = $delay * 2
+            } else {
+                # Non-transient error or final attempt - rethrow
+                if ($isTransient) {
+                    Write-Error "[$OperationName] Failed after $MaxAttempts attempts: $errorMessage"
+                    Write-Log "$OperationName failed after $MaxAttempts attempts: $errorMessage" -Severity ERROR
+                }
+                throw
+            }
+        }
+    }
+}
+
 
 function Test-Dependencies {
     <#
@@ -209,14 +332,16 @@ function Test-DatabaseConnection {
     param(
         [string]$ServerName,
         [pscredential]$Cred,
-        [hashtable]$Config
+        [hashtable]$Config,
+        [int]$Timeout = 30
     )
     
     Write-Host "Testing connection to $ServerName..."
     
+    $server = $null
     try {
         $server = [Microsoft.SqlServer.Management.Smo.Server]::new($ServerName)
-        $server.ConnectionContext.ConnectTimeout = 10
+        $server.ConnectionContext.ConnectTimeout = $Timeout
         
         # Apply TrustServerCertificate from config if specified
         if ($Config -and $Config.ContainsKey('trustServerCertificate')) {
@@ -230,7 +355,6 @@ function Test-DatabaseConnection {
         }
         
         $server.ConnectionContext.Connect()
-        $server.ConnectionContext.Disconnect()
         Write-Host '[SUCCESS] Connection successful' -ForegroundColor Green
         return $true
     } catch {
@@ -252,6 +376,10 @@ For more details, see: https://go.microsoft.com/fwlink/?linkid=2226722
             Write-Error "[ERROR] Connection failed: $_"
         }
         return $false
+    } finally {
+        if ($server -and $server.ConnectionContext.IsOpen) {
+            $server.ConnectionContext.Disconnect()
+        }
     }
 }
 
@@ -264,9 +392,11 @@ function Test-DatabaseExists {
         [string]$ServerName,
         [string]$DatabaseName,
         [pscredential]$Cred,
-        [hashtable]$Config
+        [hashtable]$Config,
+        [int]$Timeout = 30
     )
     
+    $server = $null
     try {
         $server = [Microsoft.SqlServer.Management.Smo.Server]::new($ServerName)
         if ($Cred) {
@@ -280,13 +410,17 @@ function Test-DatabaseExists {
             $server.ConnectionContext.TrustServerCertificate = $Config.trustServerCertificate
         }
         
+        $server.ConnectionContext.ConnectTimeout = $Timeout
         $server.ConnectionContext.Connect()
         $exists = $null -ne $server.Databases[$DatabaseName]
-        $server.ConnectionContext.Disconnect()
         return $exists
     } catch {
         Write-Error "[ERROR] Error checking database: $_"
         return $false
+    } finally {
+        if ($server -and $server.ConnectionContext.IsOpen) {
+            $server.ConnectionContext.Disconnect()
+        }
     }
 }
 
@@ -299,9 +433,11 @@ function Test-SchemaExists {
         [string]$ServerName,
         [string]$DatabaseName,
         [pscredential]$Cred,
-        [hashtable]$Config
+        [hashtable]$Config,
+        [int]$Timeout = 30
     )
     
+    $server = $null
     try {
         $server = [Microsoft.SqlServer.Management.Smo.Server]::new($ServerName)
         if ($Cred) {
@@ -315,11 +451,11 @@ function Test-SchemaExists {
             $server.ConnectionContext.TrustServerCertificate = $Config.trustServerCertificate
         }
         
+        $server.ConnectionContext.ConnectTimeout = $Timeout
         $server.ConnectionContext.Connect()
         
         $db = $server.Databases[$DatabaseName]
         if ($null -eq $db) {
-            $server.ConnectionContext.Disconnect()
             return $false
         }
         
@@ -328,11 +464,14 @@ function Test-SchemaExists {
         $userViews = @($db.Views | Where-Object { -not $_.IsSystemObject })
         $userProcs = @($db.StoredProcedures | Where-Object { -not $_.IsSystemObject })
         $hasObjects = ($userTables.Count -gt 0) -or ($userViews.Count -gt 0) -or ($userProcs.Count -gt 0)
-        $server.ConnectionContext.Disconnect()
         return $hasObjects
     } catch {
         Write-Error "[ERROR] Error checking schema: $_"
         return $false
+    } finally {
+        if ($server -and $server.ConnectionContext.IsOpen) {
+            $server.ConnectionContext.Disconnect()
+        }
     }
 }
 
@@ -345,11 +484,13 @@ function New-Database {
         [string]$ServerName,
         [string]$DatabaseName,
         [pscredential]$Cred,
-        [hashtable]$Config
+        [hashtable]$Config,
+        [int]$Timeout = 30
     )
     
     Write-Host "Creating database $DatabaseName..."
     
+    $server = $null
     try {
         $server = [Microsoft.SqlServer.Management.Smo.Server]::new($ServerName)
         if ($Cred) {
@@ -363,16 +504,20 @@ function New-Database {
             $server.ConnectionContext.TrustServerCertificate = $Config.trustServerCertificate
         }
         
+        $server.ConnectionContext.ConnectTimeout = $Timeout
         $server.ConnectionContext.Connect()
         
         $db = [Microsoft.SqlServer.Management.Smo.Database]::new($server, $DatabaseName)
         $db.Create()
-        $server.ConnectionContext.Disconnect()
         Write-Host "[SUCCESS] Database $DatabaseName created" -ForegroundColor Green
         return $true
     } catch {
         Write-Error "[ERROR] Failed to create database: $_"
         return $false
+    } finally {
+        if ($server -and $server.ConnectionContext.IsOpen) {
+            $server.ConnectionContext.Disconnect()
+        }
     }
 }
 
@@ -891,6 +1036,45 @@ try {
         }
     }
     
+    # Apply timeout settings from config or use defaults
+    # Parameters override config values (if non-zero)
+    $effectiveConnectionTimeout = if ($ConnectionTimeout -gt 0) { 
+        $ConnectionTimeout 
+    } elseif ($config -and $config.ContainsKey('connectionTimeout')) { 
+        $config.connectionTimeout 
+    } else { 
+        30 
+    }
+    
+    $effectiveCommandTimeout = if ($CommandTimeout -gt 0) { 
+        $CommandTimeout 
+    } elseif ($config -and $config.ContainsKey('commandTimeout')) { 
+        $config.commandTimeout 
+    } else { 
+        300 
+    }
+    
+    $effectiveMaxRetries = if ($MaxRetries -gt 0) {
+        $MaxRetries
+    } elseif ($config -and $config.ContainsKey('maxRetries')) {
+        $config.maxRetries
+    } else {
+        3
+    }
+    
+    $effectiveRetryDelay = if ($RetryDelaySeconds -gt 0) {
+        $RetryDelaySeconds
+    } elseif ($config -and $config.ContainsKey('retryDelaySeconds')) {
+        $config.retryDelaySeconds
+    } else {
+        2
+    }
+    
+    Write-Verbose "Using connection timeout: $effectiveConnectionTimeout seconds"
+    Write-Verbose "Using command timeout: $effectiveCommandTimeout seconds"
+    Write-Verbose "Using max retries: $effectiveMaxRetries attempts"
+    Write-Verbose "Using retry delay: $effectiveRetryDelay seconds"
+    
     # Display configuration
     Show-ImportConfiguration `
         -ServerName $Server `
@@ -902,22 +1086,33 @@ try {
         -DatabaseCreation $CreateDatabase `
         -ConfigSource $configSource
     
+    # Initialize log file
+    $script:LogFile = Join-Path $SourcePath 'import-log.txt'
+    Write-Log "Import started" -Severity INFO
+    Write-Log "Server: $Server" -Severity INFO
+    Write-Log "Database: $Database" -Severity INFO
+    Write-Log "Source: $SourcePath" -Severity INFO
+    Write-Log "Import mode: $ImportMode" -Severity INFO
+    Write-Log "Configuration source: $configSource" -Severity INFO
+    
     # Validate dependencies
     $execMethod = Test-Dependencies
     Write-Output ''
     
     # Test connection to server
-    if (-not (Test-DatabaseConnection -ServerName $Server -Cred $Credential -Config $config)) {
+    if (-not (Test-DatabaseConnection -ServerName $Server -Cred $Credential -Config $config -Timeout $effectiveConnectionTimeout)) {
+        Write-Log "Connection test failed to $Server" -Severity ERROR
         exit 1
     }
+    Write-Log "Connection test successful to $Server" -Severity INFO
     Write-Output ''
     
     # Check if database exists
-    $dbExists = Test-DatabaseExists -ServerName $Server -DatabaseName $Database -Cred $Credential -Config $config
+    $dbExists = Test-DatabaseExists -ServerName $Server -DatabaseName $Database -Cred $Credential -Config $config -Timeout $effectiveConnectionTimeout
     
     if (-not $dbExists) {
         if ($CreateDatabase) {
-            if (-not (New-Database -ServerName $Server -DatabaseName $Database -Cred $Credential -Config $config)) {
+            if (-not (New-Database -ServerName $Server -DatabaseName $Database -Cred $Credential -Config $config -Timeout $effectiveConnectionTimeout)) {
                 exit 1
             }
         } else {
@@ -930,7 +1125,7 @@ try {
     Write-Output ''
     
     # Check for existing schema
-    if (Test-SchemaExists -ServerName $Server -DatabaseName $Database -Cred $Credential -Config $config) {
+    if (Test-SchemaExists -ServerName $Server -DatabaseName $Database -Cred $Credential -Config $config -Timeout $effectiveConnectionTimeout) {
         if (-not $Force) {
             Write-Output "[INFO[ Database $Database already contains schema objects."
             Write-Output "Use -Force to proceed with redeployment."
@@ -1035,6 +1230,7 @@ try {
     # Apply scripts
     Write-Output 'Applying scripts...'
     Write-Output '───────────────────────────────────────────────'
+    Write-Log "Starting script execution - $($scripts.Count) total scripts" -Severity INFO
     Write-Verbose "Total scripts to process: $($scripts.Count)"
     if ($scripts.Count -gt 0) {
         Write-Verbose "First script: $($scripts[0].FullName)"
@@ -1054,9 +1250,11 @@ try {
     
     # Process non-data scripts first
     foreach ($script in $nonDataScripts) {
-        $result = Invoke-SqlScript -FilePath $script.FullName -ServerName $Server `
-            -DatabaseName $Database -Cred $Credential -Timeout $CommandTimeout -Show:$ShowSQL `
-            -SqlCmdVariables $sqlCmdVars -Config $config
+        $result = Invoke-WithRetry -MaxAttempts $effectiveMaxRetries -InitialDelaySeconds $effectiveRetryDelay -OperationName "Script: $($script.Name)" -ScriptBlock {
+            Invoke-SqlScript -FilePath $script.FullName -ServerName $Server `
+                -DatabaseName $Database -Cred $Credential -Timeout $effectiveCommandTimeout -Show:$ShowSQL `
+                -SqlCmdVariables $sqlCmdVars -Config $config
+        }
         
         if ($result -eq $true) {
             $successCount++
@@ -1079,6 +1277,7 @@ try {
         
         # Disable all foreign key constraints  
         # Get list of FKs and disable them individually
+        $smServer = $null
         try {
             Write-Verbose "Connecting to $Server database $Database to disable FKs..."
             $smServer = [Microsoft.SqlServer.Management.Smo.Server]::new($Server)
@@ -1087,7 +1286,7 @@ try {
                 $smServer.ConnectionContext.set_Login($Credential.UserName)
                 $smServer.ConnectionContext.set_SecurePassword($Credential.Password)
             }
-            $smServer.ConnectionContext.ConnectTimeout = 15
+            $smServer.ConnectionContext.ConnectTimeout = $effectiveConnectionTimeout
             $smServer.ConnectionContext.DatabaseName = $Database
             
             # Apply TrustServerCertificate from config if specified
@@ -1115,8 +1314,6 @@ try {
                 }
             }
             
-            $smServer.ConnectionContext.Disconnect()
-            
             if ($fkCount -gt 0) {
                 Write-Output "[SUCCESS] Disabled $fkCount foreign key constraint(s) for data import"
             } else {
@@ -1126,6 +1323,10 @@ try {
             Write-Warning "[WARNING] Could not disable foreign keys: $_"
             Write-Warning '  Data import may fail if files are not in dependency order'
             Write-Warning '  Attempting to continue with data import...'
+        } finally {
+            if ($smServer -and $smServer.ConnectionContext.IsOpen) {
+                $smServer.ConnectionContext.Disconnect()
+            }
         }
         
         Write-Output ''
@@ -1133,9 +1334,11 @@ try {
         
         # Process data scripts
         foreach ($script in $dataScripts) {
-            $result = Invoke-SqlScript -FilePath $script.FullName -ServerName $Server `
-                -DatabaseName $Database -Cred $Credential -Timeout $CommandTimeout -Show:$ShowSQL `
-                -SqlCmdVariables $sqlCmdVars -Config $config
+            $result = Invoke-WithRetry -MaxAttempts $effectiveMaxRetries -InitialDelaySeconds $effectiveRetryDelay -OperationName "Data Script: $($script.Name)" -ScriptBlock {
+                Invoke-SqlScript -FilePath $script.FullName -ServerName $Server `
+                    -DatabaseName $Database -Cred $Credential -Timeout $effectiveCommandTimeout -Show:$ShowSQL `
+                    -SqlCmdVariables $sqlCmdVars -Config $config
+            }
             
             if ($result -eq $true) {
                 $successCount++
@@ -1150,6 +1353,7 @@ try {
         }
         
         # Re-enable all foreign key constraints and validate data
+        $smServer = $null
         try {
             $smServer = [Microsoft.SqlServer.Management.Smo.Server]::new($Server)
             if ($Credential) {
@@ -1157,7 +1361,7 @@ try {
                 $smServer.ConnectionContext.set_Login($Credential.UserName)
                 $smServer.ConnectionContext.set_SecurePassword($Credential.Password)
             }
-            $smServer.ConnectionContext.ConnectTimeout = 15
+            $smServer.ConnectionContext.ConnectTimeout = $effectiveConnectionTimeout
             $smServer.ConnectionContext.DatabaseName = $Database
             
             # Apply TrustServerCertificate from config if specified
@@ -1186,8 +1390,6 @@ try {
                 }
             }
             
-            $smServer.ConnectionContext.Disconnect()
-            
             if ($errorCount -gt 0) {
                 Write-Error "[ERROR] Foreign key constraint validation failed ($errorCount errors) - data may violate referential integrity"
                 $failureCount++
@@ -1199,6 +1401,10 @@ try {
         } catch {
             Write-Error "[ERROR] Error re-enabling foreign keys: $_"
             $failureCount++
+        } finally {
+            if ($smServer -and $smServer.ConnectionContext.IsOpen) {
+                $smServer.ConnectionContext.Disconnect()
+            }
         }
     }
     
@@ -1306,9 +1512,11 @@ try {
     if ($failureCount -gt 0) {
         Write-Output '[ERROR] Import completed with errors - review output above'
         Write-Output ''
+        Write-Log "Import completed with $failureCount error(s)" -Severity ERROR
     } else {
         Write-Output '[SUCCESS] Import completed successfully'
         Write-Output ''
+        Write-Log "Import completed successfully - $successCount script(s) executed" -Severity INFO
     }
     
     Write-Output '═══════════════════════════════════════════════'
@@ -1322,6 +1530,7 @@ try {
     
 } catch {
     Write-Error "[ERROR] Script error: $_"
+    Write-Log "Script error: $_" -Severity ERROR
     exit 1
 }
 

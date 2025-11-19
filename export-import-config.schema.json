@@ -5,6 +5,34 @@
   "description": "Configuration schema for SQL Server schema export and import operations",
   "type": "object",
   "properties": {
+    "connectionTimeout": {
+      "type": "integer",
+      "description": "Connection timeout in seconds (time to wait when establishing connection)",
+      "default": 30,
+      "minimum": 1,
+      "maximum": 300
+    },
+    "commandTimeout": {
+      "type": "integer",
+      "description": "Command/query timeout in seconds (time to wait for SQL commands to complete)",
+      "default": 300,
+      "minimum": 1,
+      "maximum": 3600
+    },
+    "maxRetries": {
+      "type": "integer",
+      "description": "Maximum retry attempts for transient failures (network timeouts, Azure SQL throttling, deadlocks)",
+      "default": 3,
+      "minimum": 1,
+      "maximum": 10
+    },
+    "retryDelaySeconds": {
+      "type": "integer",
+      "description": "Initial retry delay in seconds (uses exponential backoff - doubles each retry)",
+      "default": 2,
+      "minimum": 1,
+      "maximum": 60
+    },
     "trustServerCertificate": {
       "type": "boolean",
       "description": "Trust server certificate (required for SQL Server with self-signed certificates). Set to true for local/dev environments with self-signed certs, false for production with valid certificates.",
@@ -23,21 +51,33 @@
               "FileGroups",
               "DatabaseScopedConfigurations",
               "DatabaseScopedCredentials",
-              "SecurityPolicies",
+              "Schemas",
+              "Sequences",
+              "PartitionFunctions",
+              "PartitionSchemes",
+              "UserDefinedTypes",
+              "XmlSchemaCollections",
+              "Tables",
+              "ForeignKeys",
+              "Indexes",
+              "Defaults",
+              "Rules",
+              "Assemblies",
+              "Functions",
+              "UserDefinedAggregates",
+              "StoredProcedures",
+              "DatabaseTriggers",
+              "TableTriggers",
+              "Views",
+              "Synonyms",
+              "FullTextCatalogs",
               "ExternalDataSources",
               "ExternalFileFormats",
               "SearchPropertyLists",
               "PlanGuides",
-              "ExternalLibraries",
-              "ExternalLanguages",
-              "Sequences",
-              "Synonyms",
-              "Views",
-              "StoredProcedures",
-              "Functions",
-              "Triggers",
-              "Indexes",
-              "ForeignKeys"
+              "SecurityObjects",
+              "SecurityPolicies",
+              "Data"
             ]
           },
           "uniqueItems": true
