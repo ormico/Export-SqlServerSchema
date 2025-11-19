@@ -219,8 +219,8 @@ function Invoke-WithRetry {
             } elseif ($errorMessage -match 'pooling|connection pool') {
                 $isTransient = $true
                 $errorType = 'Connection pool issue'
-            } elseif ($errorMessage -match '53|233|64') {
-                # Transport-level errors
+            } elseif ($errorMessage -match '\b(53|233|64)\b') {
+                # Transport-level errors (error codes 53, 233, 64)
                 $isTransient = $true
                 $errorType = 'Transport error'
             }
