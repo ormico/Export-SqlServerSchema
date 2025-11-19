@@ -144,12 +144,20 @@ function Write-Log {
         [string]$Message,
         
         [Parameter()]
-        [ValidateSet('INFO', 'WARNING', 'ERROR')]
+        [ValidateSet('INFO', 'SUCCESS', 'WARNING', 'ERROR')]
         [string]$Severity = 'INFO'
     )
     
     $timestamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
     $logEntry = "[$timestamp] [$Severity] $Message"
+    
+    # Write to console (consistent with Export script)
+    switch ($Severity) {
+        'SUCCESS' { Write-Host $Message -ForegroundColor Green }
+        'WARNING' { Write-Warning $Message }
+        'ERROR'   { Write-Host $Message -ForegroundColor Red }
+        default   { Write-Output $Message }
+    }
     
     # Write to log file if available
     if ($script:LogFile) {

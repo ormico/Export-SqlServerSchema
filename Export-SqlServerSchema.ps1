@@ -1075,6 +1075,11 @@ function Export-DatabaseObjects {
     if (Test-ObjectTypeExcluded -ObjectType 'ForeignKeys') {
         Write-Output '  [SKIPPED] ForeignKeys excluded by configuration' -ForegroundColor Yellow
     } else {
+    # Initialize tables collection if not already defined (in case Tables were excluded)
+    if (-not (Get-Variable -Name tables -Scope Local -ErrorAction SilentlyContinue)) {
+        $tables = @($Database.Tables | Where-Object { -not $_.IsSystemObject })
+    }
+    
     $foreignKeys = @()
     foreach ($table in $tables) {
         try {
@@ -1123,6 +1128,11 @@ function Export-DatabaseObjects {
     if (Test-ObjectTypeExcluded -ObjectType 'Indexes') {
         Write-Output '  [SKIPPED] Indexes excluded by configuration' -ForegroundColor Yellow
     } else {
+    # Initialize tables collection if not already defined (in case Tables were excluded)
+    if (-not (Get-Variable -Name tables -Scope Local -ErrorAction SilentlyContinue)) {
+        $tables = @($Database.Tables | Where-Object { -not $_.IsSystemObject })
+    }
+    
     $indexes = @()
     foreach ($table in $tables) {
         try {
