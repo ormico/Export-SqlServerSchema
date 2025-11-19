@@ -441,6 +441,11 @@ function Initialize-OutputDirectory {
     #>
     param([string]$Path)
     
+    # Convert to absolute path if relative
+    if (-not [System.IO.Path]::IsPathRooted($Path)) {
+        $Path = Join-Path (Get-Location).Path $Path
+    }
+    
     $timestamp = Get-Date -Format 'yyyyMMdd_HHmmss'
     $exportDir = Join-Path $Path "${Server}_${Database}_${timestamp}"
     
