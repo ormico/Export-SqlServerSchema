@@ -899,7 +899,13 @@ function Export-DatabaseObjects {
                 Write-Host ("  [{0,3}%]{1}..." -f $percentComplete, $schema.Name)
                 $safeName = Get-SafeFileName $schema.Name
                 $fileName = Join-Path $OutputDir '02_Schemas' "$safeName.sql"
+                
+                # Ensure directory exists and validate path
                 Ensure-DirectoryExists $fileName
+                if (-not (Test-Path (Split-Path $fileName -Parent))) {
+                    throw "Failed to create directory: $(Split-Path $fileName -Parent)"
+                }
+                
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
                 $schema.Script($opts) | Out-Null
@@ -908,6 +914,11 @@ function Export-DatabaseObjects {
             } catch {
                 Write-Host "        [FAILED]" -ForegroundColor Red
                 Write-ExportError -ObjectType 'Schema' -ObjectName $schema.Name -ErrorRecord $_ -FilePath $fileName
+                Write-Host "  [DEBUG] Original name: [$($schema.Name)]" -ForegroundColor Yellow
+                Write-Host "  [DEBUG] Safe name: [$safeName]" -ForegroundColor Yellow
+                Write-Host "  [DEBUG] Target file: [$fileName]" -ForegroundColor Yellow
+                Write-Host "  [DEBUG] Target dir: [$(Split-Path $fileName -Parent)]" -ForegroundColor Yellow
+                Write-Host "  [DEBUG] Dir exists: $(Test-Path (Split-Path $fileName -Parent))" -ForegroundColor Yellow
                 $failCount++
             }
         }
@@ -936,8 +947,16 @@ function Export-DatabaseObjects {
             $percentComplete = [math]::Round(($currentItem / $sequences.Count) * 100)
             try {
                 Write-Host ("  [{0,3}%]{1}.{2}..." -f $percentComplete, $sequence.Schema, $sequence.Name)
-                $fileName = Join-Path $OutputDir '03_Sequences' "$(Get-SafeFileName $($sequence.Schema)).$(Get-SafeFileName $($sequence.Name)).sql"
+                $safeSchema = Get-SafeFileName $sequence.Schema
+                $safeName = Get-SafeFileName $sequence.Name
+                $fileName = Join-Path $OutputDir '03_Sequences' "$safeSchema.$safeName.sql"
+                
+                # Ensure directory exists and validate path
                 Ensure-DirectoryExists $fileName
+                if (-not (Test-Path (Split-Path $fileName -Parent))) {
+                    throw "Failed to create directory: $(Split-Path $fileName -Parent)"
+                }
+                
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
                 $sequence.Script($opts) | Out-Null
@@ -945,7 +964,7 @@ function Export-DatabaseObjects {
                 $successCount++
             } catch {
                 Write-Host "        [FAILED]" -ForegroundColor Red
-                Write-ExportError -ObjectType 'Sequence' -ObjectName "$($sequence.Schema).$($sequence.Name)" -ErrorRecord $_ -FilePath $fileName -FilePath $fileName
+                Write-ExportError -ObjectType 'Sequence' -ObjectName "$($sequence.Schema).$($sequence.Name)" -ErrorRecord $_ -FilePath $fileName
                 $failCount++
             }
         }
@@ -1076,7 +1095,9 @@ function Export-DatabaseObjects {
             $percentComplete = [math]::Round(($currentItem / $xmlSchemaCollections.Count) * 100)
             try {
                 Write-Host ("  [{0,3}%]{1}.{2}..." -f $percentComplete, $xsc.Schema, $xsc.Name)
-                $fileName = Join-Path $OutputDir '07_XmlSchemaCollections' "$(Get-SafeFileName $($xsc.Schema)).$(Get-SafeFileName $($xsc.Name)).sql"
+                $safeSchema = Get-SafeFileName $xsc.Schema
+                $safeName = Get-SafeFileName $xsc.Name
+                $fileName = Join-Path $OutputDir '07_XmlSchemaCollections' "$safeSchema.$safeName.sql"
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
@@ -1132,7 +1153,7 @@ function Export-DatabaseObjects {
                 $successCount++
             } catch {
                 Write-Host "        [FAILED]" -ForegroundColor Red
-                Write-ExportError -ObjectType 'Table' -ObjectName "$($table.Schema).$($table.Name)" -ErrorRecord $_ -FilePath $fileName -AdditionalContext "Exporting table structure with primary keys"
+                Write-ExportError -ObjectType 'Table' -ObjectName "$($table.Schema).$($table.Name)" -ErrorRecord $_ -AdditionalContext "Exporting table structure with primary keys"
                 $failCount++
             }
         }
@@ -1159,7 +1180,7 @@ function Export-DatabaseObjects {
                 $foreignKeys += @($table.ForeignKeys)
             }
         } catch {
-            Write-ExportError -ObjectType 'ForeignKeyCollection' -ObjectName "$($table.Schema).$($table.Name)" -ErrorRecord $_ -FilePath $fileName -AdditionalContext "Accessing foreign keys collection"
+            Write-ExportError -ObjectType 'ForeignKeyCollection' -ObjectName "$($table.Schema).$($table.Name)" -ErrorRecord $_ -AdditionalContext "Accessing foreign keys collection"
         }
     }
     if ($foreignKeys.Count -gt 0) {
@@ -1218,7 +1239,7 @@ function Export-DatabaseObjects {
                 })
             }
         } catch {
-            Write-ExportError -ObjectType 'IndexCollection' -ObjectName "$($table.Schema).$($table.Name)" -ErrorRecord $_ -FilePath $fileName -AdditionalContext "Accessing indexes collection"
+            Write-ExportError -ObjectType 'IndexCollection' -ObjectName "$($table.Schema).$($table.Name)" -ErrorRecord $_ -AdditionalContext "Accessing indexes collection"
         }
     }
     if ($indexes.Count -gt 0) {
@@ -1531,7 +1552,7 @@ function Export-DatabaseObjects {
                 $tableTriggers += @($table.Triggers | Where-Object { -not $_.IsSystemObject })
             }
         } catch {
-            Write-ExportError -ObjectType 'TriggerCollection' -ObjectName "$($table.Schema).$($table.Name)" -ErrorRecord $_ -FilePath $fileName -AdditionalContext "Accessing triggers collection"
+            Write-ExportError -ObjectType 'TriggerCollection' -ObjectName "$($table.Schema).$($table.Name)" -ErrorRecord $_ -AdditionalContext "Accessing triggers collection"
         }
     }
     if ($tableTriggers.Count -gt 0) {
@@ -2181,7 +2202,7 @@ function Export-TableData {
             }
         } catch {
             Write-Host "        [FAILED]" -ForegroundColor Red
-            Write-ExportError -ObjectType 'TableData' -ObjectName "$($table.Schema).$($table.Name)" -ErrorRecord $_ -FilePath $fileName -AdditionalContext "Exporting $rowCount row(s)"
+            Write-ExportError -ObjectType 'TableData' -ObjectName "$($table.Schema).$($table.Name)" -ErrorRecord $_ -AdditionalContext "Exporting $rowCount row(s)"
             $failCount++
         }
     }
