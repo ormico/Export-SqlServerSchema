@@ -46,6 +46,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Transient failures causing complete script abortion (now retries automatically)
 - Missing diagnostic information when errors occur (now logged to file with full context)
 
+### Known Issues
+- **excludeObjectTypes Partially Implemented**: The `excludeObjectTypes` configuration setting is only enforced for 10 of 30 object types (FileGroups, DatabaseScopedConfigurations, DatabaseScopedCredentials, Schemas, Sequences, Tables, ForeignKeys, Indexes, Functions, Views). The remaining 20 object types will still be exported even if excluded in configuration. Full implementation tracked in [Issue #12](https://github.com/ormico/Export-SqlServerSchema/issues/12).
+
 ---
 
 ## [1.1.0] - 2025-11-10
