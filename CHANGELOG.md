@@ -5,6 +5,49 @@ All notable changes to Export-SqlServerSchema will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - 2025-11-19
+
+### Added
+
+**Reliability & Error Handling**
+- **Retry Logic for Transient Failures**: Automatic retry with exponential backoff for network timeouts, Azure SQL throttling, deadlocks
+  - Detects 7 categories of transient errors (network timeouts, Azure SQL error codes 40501/40613/49918/etc., deadlocks, connection pool issues, transport errors)
+  - Exponential backoff strategy (2s → 4s → 8s for default 3 retries)
+  - Configurable via `maxRetries` (1-10) and `retryDelaySeconds` (1-60) in YAML config
+  - Command-line parameter overrides: `-MaxRetries` and `-RetryDelaySeconds`
+  - Verbose logging of retry attempts with error types
+- **Connection Timeout Management**: Configurable connection timeouts for slow networks or Azure SQL
+  - `connectionTimeout` parameter (1-300 seconds, default 30)
+  - `commandTimeout` parameter (1-3600 seconds, default 300)
+  - Three-tier precedence: command-line parameter > config file > hardcoded default
+- **Error Logging Infrastructure**: Comprehensive error logging to file for diagnostics
+  - `Write-Log` function with timestamps and severity levels (INFO, WARNING, ERROR)
+  - Error log file created in output directory with timestamp
+  - All errors logged with full details including script names and line numbers
+  - Dual output: console for immediate feedback + file for post-mortem analysis
+- **Connection Cleanup**: Finally blocks ensure connections always close, even on errors
+  - Implemented in 8+ connection functions across both scripts
+  - Prevents connection leaks and SQL Server resource exhaustion
+  - IsOpen checks before disconnect to avoid errors
+
+**Export Status Messages**
+- Updated export status format to show percentage progress: "Exported X object(s) (Y%)" for all 35+ object types
+- Improved readability with consistent [SUCCESS] prefix format
+
+### Changed
+- Configuration system expanded: Added 4 new settings (connectionTimeout, commandTimeout, maxRetries, retryDelaySeconds)
+- JSON schema updated with validation rules for all new configuration parameters
+- Main SQL Server connections wrapped with retry logic in both Export and Import scripts
+- All script execution (Invoke-SqlScript) wrapped with retry logic for transient failure resilience
+
+### Fixed
+- Connection timeout errors on slow networks or during Azure SQL throttling
+- Connection leaks when errors occur during database operations
+- Transient failures causing complete script abortion (now retries automatically)
+- Missing diagnostic information when errors occur (now logged to file with full context)
+
+---
+
 ## [1.1.0] - 2025-11-10
 
 ### Added
@@ -78,5 +121,6 @@ Initial release:
 - Cross-platform PowerShell 7.0+
 - 12 numbered folders for object organization
 
+[1.2.0]: https://github.com/ormico/Export-SqlServerSchema/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/ormico/Export-SqlServerSchema/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/ormico/Export-SqlServerSchema/releases/tag/v1.0.0

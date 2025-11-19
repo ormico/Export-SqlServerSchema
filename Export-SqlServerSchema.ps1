@@ -2,7 +2,6 @@
 
 <#
 .NOTES
-    Version: 1.1.0
     License: MIT
     Repository: https://github.com/ormico/Export-SqlServerSchema
 
@@ -76,12 +75,135 @@ param(
     [System.Management.Automation.PSCredential]$Credential,
     
     [Parameter(HelpMessage = 'Path to YAML configuration file')]
-    [string]$ConfigFile
+    [string]$ConfigFile,
+    
+    [Parameter(HelpMessage = 'Connection timeout in seconds (overrides config file)')]
+    [int]$ConnectionTimeout = 0,
+    
+    [Parameter(HelpMessage = 'Command timeout in seconds (overrides config file)')]
+    [int]$CommandTimeout = 0,
+    
+    [Parameter(HelpMessage = 'Maximum retry attempts for transient failures (overrides config file)')]
+    [int]$MaxRetries = 0,
+    
+    [Parameter(HelpMessage = 'Initial retry delay in seconds (overrides config file)')]
+    [int]$RetryDelaySeconds = 0
 )
 
 $ErrorActionPreference = 'Stop'
+$script:LogFile = $null  # Will be set after output directory is created
 
 #region Helper Functions
+
+function Write-Log {
+    <#
+    .SYNOPSIS
+        Writes message to console and log file with timestamp.
+    #>
+    param(
+        [string]$Message,
+        [ValidateSet('INFO', 'SUCCESS', 'WARNING', 'ERROR')]
+        [string]$Level = 'INFO'
+    )
+    
+    $timestamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+    $logEntry = "[$timestamp] [$Level] $Message"
+    
+    # Write to console (existing behavior)
+    switch ($Level) {
+        'SUCCESS' { Write-Host $Message -ForegroundColor Green }
+        'WARNING' { Write-Warning $Message }
+        'ERROR'   { Write-Host $Message -ForegroundColor Red }
+        default   { Write-Output $Message }
+    }
+    
+    # Also write to log file if available
+    if ($script:LogFile -and (Test-Path (Split-Path $script:LogFile -Parent))) {
+        try {
+            Add-Content -Path $script:LogFile -Value $logEntry -Encoding UTF8 -ErrorAction SilentlyContinue
+        } catch {
+            # Silently fail if log write fails - don't interrupt main operation
+        }
+    }
+}
+
+function Invoke-WithRetry {
+    <#
+    .SYNOPSIS
+        Executes a script block with retry logic for transient failures.
+    .DESCRIPTION
+        Implements exponential backoff retry strategy for handling transient errors
+        like network timeouts, Azure SQL throttling, and connection pool issues.
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [scriptblock]$ScriptBlock,
+        
+        [Parameter()]
+        [int]$MaxAttempts = 3,
+        
+        [Parameter()]
+        [int]$InitialDelaySeconds = 2,
+        
+        [Parameter()]
+        [string]$OperationName = 'Operation'
+    )
+    
+    $attempt = 0
+    $delay = $InitialDelaySeconds
+    
+    while ($attempt -lt $MaxAttempts) {
+        $attempt++
+        
+        try {
+            Write-Verbose "[$OperationName] Attempt $attempt of $MaxAttempts"
+            return & $ScriptBlock
+        } catch {
+            $isTransient = $false
+            $errorMessage = $_.Exception.Message
+            
+            # Check for transient error patterns
+            if ($errorMessage -match 'timeout|timed out|connection.*lost|connection.*closed') {
+                $isTransient = $true
+                $errorType = 'Network timeout'
+            } elseif ($errorMessage -match '40501|40613|49918|10928|10929|40197|40540|40143') {
+                # Azure SQL throttling error codes
+                $isTransient = $true
+                $errorType = 'Azure SQL throttling'
+            } elseif ($errorMessage -match '1205') {
+                # Deadlock victim
+                $isTransient = $true
+                $errorType = 'Deadlock'
+            } elseif ($errorMessage -match 'pooling|connection pool') {
+                $isTransient = $true
+                $errorType = 'Connection pool issue'
+            } elseif ($errorMessage -match '53|233|64') {
+                # Transport-level errors
+                $isTransient = $true
+                $errorType = 'Transport error'
+            }
+            
+            if ($isTransient -and $attempt -lt $MaxAttempts) {
+                Write-Warning "[$OperationName] $errorType detected on attempt $attempt of $MaxAttempts"
+                Write-Warning "  Error: $errorMessage"
+                Write-Warning "  Retrying in $delay seconds..."
+                Write-Log "$OperationName failed (attempt $attempt): $errorType - $errorMessage" -Severity WARNING
+                
+                Start-Sleep -Seconds $delay
+                
+                # Exponential backoff: double the delay for next attempt
+                $delay = $delay * 2
+            } else {
+                # Non-transient error or final attempt - rethrow
+                if ($isTransient) {
+                    Write-Error "[$OperationName] Failed after $MaxAttempts attempts: $errorMessage"
+                    Write-Log "$OperationName failed after $MaxAttempts attempts: $errorMessage" -Severity ERROR
+                }
+                throw
+            }
+        }
+    }
+}
 
 function Write-ExportError {
     <#
@@ -95,16 +217,18 @@ function Write-ExportError {
         [string]$AdditionalContext = ''
     )
     
-    Write-Host "[ERROR] Failed to export $ObjectType" -ForegroundColor Red -NoNewline
-    if ($ObjectName) {
-        Write-Host ": $ObjectName" -ForegroundColor Red
-    } else {
-        Write-Host "" -ForegroundColor Red
-    }
+    $errorMsg = "Failed to export $ObjectType$(if ($ObjectName) { ": $ObjectName" })"
+    Write-Host "[ERROR] $errorMsg" -ForegroundColor Red
     
     if ($AdditionalContext) {
         Write-Host "  Context: $AdditionalContext" -ForegroundColor Yellow
     }
+    
+    # Build detailed log entry
+    $logDetails = @"
+[ERROR] $errorMsg
+$(if ($AdditionalContext) { "Context: $AdditionalContext" })
+"@
     
     # Walk the exception chain
     $currentException = $ErrorRecord.Exception
@@ -114,19 +238,29 @@ function Write-ExportError {
         $indent = '  ' + ('  ' * $depth)
         
         if ($depth -eq 0) {
-            Write-Host "${indent}Exception: $($currentException.GetType().FullName)" -ForegroundColor Red
+            $exMsg = "${indent}Exception: $($currentException.GetType().FullName)"
+            Write-Host $exMsg -ForegroundColor Red
+            $logDetails += "`n$exMsg"
         } else {
-            Write-Host "${indent}Inner Exception: $($currentException.GetType().FullName)" -ForegroundColor Yellow
+            $exMsg = "${indent}Inner Exception: $($currentException.GetType().FullName)"
+            Write-Host $exMsg -ForegroundColor Yellow
+            $logDetails += "`n$exMsg"
         }
         
-        Write-Host "${indent}Message: $($currentException.Message)" -ForegroundColor Gray
+        $msgLine = "${indent}Message: $($currentException.Message)"
+        Write-Host $msgLine -ForegroundColor Gray
+        $logDetails += "`n$msgLine"
         
         # Show SQL-specific information if available
         if ($currentException -is [Microsoft.SqlServer.Management.Common.ExecutionFailureException]) {
-            Write-Host "${indent}SQL Server Error" -ForegroundColor Yellow
+            $sqlMsg = "${indent}SQL Server Error"
+            Write-Host $sqlMsg -ForegroundColor Yellow
+            $logDetails += "`n$sqlMsg"
         }
         if ($currentException.InnerException -is [Microsoft.SqlServer.Management.Smo.FailedOperationException]) {
-            Write-Host "${indent}SMO Operation Failed" -ForegroundColor Yellow
+            $smoMsg = "${indent}SMO Operation Failed"
+            Write-Host $smoMsg -ForegroundColor Yellow
+            $logDetails += "`n$smoMsg"
         }
         
         $currentException = $currentException.InnerException
@@ -134,14 +268,27 @@ function Write-ExportError {
         
         # Prevent infinite loops
         if ($depth -gt 10) {
-            Write-Host "${indent}... (exception chain truncated)" -ForegroundColor Gray
+            $truncMsg = "${indent}... (exception chain truncated)"
+            Write-Host $truncMsg -ForegroundColor Gray
+            $logDetails += "`n$truncMsg"
             break
         }
     }
     
     # Show script stack trace for first level only
     if ($ErrorRecord.ScriptStackTrace) {
-        Write-Host "  Stack: $($ErrorRecord.ScriptStackTrace.Split("`n")[0])" -ForegroundColor DarkGray
+        $stackMsg = "  Stack: $($ErrorRecord.ScriptStackTrace.Split("`n")[0])"
+        Write-Host $stackMsg -ForegroundColor DarkGray
+        $logDetails += "`n$stackMsg"
+    }
+    
+    # Write to log file
+    if ($script:LogFile -and (Test-Path (Split-Path $script:LogFile -Parent))) {
+        try {
+            Add-Content -Path $script:LogFile -Value "`n$logDetails`n" -Encoding UTF8 -ErrorAction SilentlyContinue
+        } catch {
+            # Silently fail if log write fails
+        }
     }
 }
 
@@ -182,11 +329,13 @@ function Test-DatabaseConnection {
         [string]$ServerName,
         [string]$DatabaseName,
         [pscredential]$Cred,
-        [hashtable]$Config
+        [hashtable]$Config,
+        [int]$Timeout = 30
     )
     
     Write-Output "Testing connection to $ServerName\$DatabaseName..."
     
+    $server = $null
     try {
         if ($Cred) {
             $server = [Microsoft.SqlServer.Management.Smo.Server]::new($ServerName)
@@ -197,7 +346,7 @@ function Test-DatabaseConnection {
             $server = [Microsoft.SqlServer.Management.Smo.Server]::new($ServerName)
         }
         
-        $server.ConnectionContext.ConnectTimeout = 15
+        $server.ConnectionContext.ConnectTimeout = $Timeout
         
         # Apply TrustServerCertificate from config if specified
         if ($Config -and $Config.ContainsKey('trustServerCertificate')) {
@@ -211,12 +360,15 @@ function Test-DatabaseConnection {
             throw "Database '$DatabaseName' not found on server '$ServerName'"
         }
         
-        $server.ConnectionContext.Disconnect()
         Write-Output '[SUCCESS] Database connection successful'
         return $true
     } catch {
         Write-Error "[ERROR] Connection failed: $_"
         return $false
+    } finally {
+        if ($server -and $server.ConnectionContext.IsOpen) {
+            $server.ConnectionContext.Disconnect()
+        }
     }
 }
 
@@ -470,6 +622,24 @@ function New-ScriptingOptions {
     return $options
 }
 
+function Test-ObjectTypeExcluded {
+    <#
+    .SYNOPSIS
+        Checks if an object type should be excluded from export based on configuration.
+    #>
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$ObjectType
+    )
+    
+    # Use script-level $Config variable
+    if ($script:Config -and $script:Config.export -and $script:Config.export.excludeObjectTypes) {
+        return $script:Config.export.excludeObjectTypes -contains $ObjectType
+    }
+    
+    return $false
+}
+
 function Export-DatabaseObjects {
     <#
     .SYNOPSIS
@@ -490,8 +660,11 @@ function Export-DatabaseObjects {
     # 0. FileGroups (Environment-specific, but captured for documentation)
     Write-Output ''
     Write-Output 'Exporting filegroups...'
-    $fileGroups = @($Database.FileGroups | Where-Object { $_.Name -ne 'PRIMARY' })
-    if ($fileGroups.Count -gt 0) {
+    if (Test-ObjectTypeExcluded -ObjectType 'FileGroups') {
+        Write-Output '  [SKIPPED] FileGroups excluded by configuration' -ForegroundColor Yellow
+    } else {
+        $fileGroups = @($Database.FileGroups | Where-Object { $_.Name -ne 'PRIMARY' })
+        if ($fileGroups.Count -gt 0) {
         $fgFilePath = Join-Path $OutputDir '00_FileGroups' '001_FileGroups.sql'
         $fgScript = New-Object System.Text.StringBuilder
         [void]$fgScript.AppendLine("-- FileGroups and Files")
@@ -568,6 +741,9 @@ function Export-DatabaseObjects {
     # 1. Database Scoped Configurations (Hardware-specific settings)
     Write-Output ''
     Write-Output 'Exporting database scoped configurations...'
+    if (Test-ObjectTypeExcluded -ObjectType 'DatabaseScopedConfigurations') {
+        Write-Output '  [SKIPPED] DatabaseScopedConfigurations excluded by configuration' -ForegroundColor Yellow
+    } else {
     try {
         $dbConfigs = @($Database.DatabaseScopedConfigurations)
         if ($dbConfigs.Count -gt 0) {
@@ -595,10 +771,14 @@ function Export-DatabaseObjects {
     } catch {
         Write-Output "  [INFO] Database scoped configurations not available (SQL Server 2016+)"
     }
+    }
     
     # Database Scoped Credentials (Structure only - secrets cannot be exported)
     Write-Output ''
     Write-Output 'Exporting database scoped credentials (structure only)...'
+    if (Test-ObjectTypeExcluded -ObjectType 'DatabaseScopedCredentials') {
+        Write-Output '  [SKIPPED] DatabaseScopedCredentials excluded by configuration' -ForegroundColor Yellow
+    } else {
     try {
         # Filter to actual credentials (collection may contain null/empty elements)
         $dbCredentials = @($Database.Credentials | Where-Object { $null -ne $_.Name -and $_.Name -ne '' })
@@ -633,10 +813,14 @@ function Export-DatabaseObjects {
     } catch {
         Write-Output "  [INFO] Database scoped credentials not available (SQL Server 2016+)"
     }
+    }
     
     # 2. Schemas
     Write-Output ''
     Write-Output 'Exporting schemas...'
+    if (Test-ObjectTypeExcluded -ObjectType 'Schemas') {
+        Write-Output '  [SKIPPED] Schemas excluded by configuration' -ForegroundColor Yellow
+    } else {
     $schemas = @($Database.Schemas | Where-Object { -not $_.IsSystemObject -and $_.Name -ne $_.Owner })
     if ($schemas.Count -gt 0) {
         Write-Output "  Found $($schemas.Count) schema(s) to export"
@@ -663,12 +847,17 @@ function Export-DatabaseObjects {
                 $failCount++
             }
         }
-        Write-Output "  [SUMMARY] Exported $successCount/$($schemas.Count) schema(s) successfully" + $(if ($failCount -gt 0) { " ($failCount failed)" } else { "" })
+            Write-Output "  [SUMMARY] Exported $successCount/$($schemas.Count) schema(s) successfully" + $(if ($failCount -gt 0) { " ($failCount failed)" } else { "" })
+        }
+    }
     }
     
     # 3. Sequences
     Write-Output ''
     Write-Output 'Exporting sequences...'
+    if (Test-ObjectTypeExcluded -ObjectType 'Sequences') {
+        Write-Output '  [SKIPPED] Sequences excluded by configuration' -ForegroundColor Yellow
+    } else {
     $sequences = @($Database.Sequences | Where-Object { -not $_.IsSystemObject })
     if ($sequences.Count -gt 0) {
         Write-Output "  Found $($sequences.Count) sequence(s) to export"
@@ -696,6 +885,7 @@ function Export-DatabaseObjects {
             }
         }
         Write-Output "  [SUMMARY] Exported $successCount/$($sequences.Count) sequence(s) successfully" + $(if ($failCount -gt 0) { " ($failCount failed)" } else { "" })
+    }
     }
     
     # 4. Partition Functions
@@ -835,6 +1025,9 @@ function Export-DatabaseObjects {
     # 8. Tables (Primary Keys only - no FK)
     Write-Output ''
     Write-Output 'Exporting tables (PKs only)...'
+    if (Test-ObjectTypeExcluded -ObjectType 'Tables') {
+        Write-Output '  [SKIPPED] Tables excluded by configuration' -ForegroundColor Yellow
+    } else {
     $tables = @($Database.Tables | Where-Object { -not $_.IsSystemObject })
     if ($tables.Count -gt 0) {
         Write-Output "  Found $($tables.Count) table(s) to export"
@@ -874,10 +1067,14 @@ function Export-DatabaseObjects {
         }
         Write-Output "  [SUMMARY] Exported $successCount/$($tables.Count) table(s) successfully" + $(if ($failCount -gt 0) { " ($failCount failed)" } else { "" })
     }
+    }
     
     # 9. Foreign Keys (separate from table creation)
     Write-Output ''
     Write-Output 'Exporting foreign keys...'
+    if (Test-ObjectTypeExcluded -ObjectType 'ForeignKeys') {
+        Write-Output '  [SKIPPED] ForeignKeys excluded by configuration' -ForegroundColor Yellow
+    } else {
     $foreignKeys = @()
     foreach ($table in $tables) {
         try {
@@ -923,6 +1120,9 @@ function Export-DatabaseObjects {
     # 10. Indexes
     Write-Output ''
     Write-Output 'Exporting indexes...'
+    if (Test-ObjectTypeExcluded -ObjectType 'Indexes') {
+        Write-Output '  [SKIPPED] Indexes excluded by configuration' -ForegroundColor Yellow
+    } else {
     $indexes = @()
     foreach ($table in $tables) {
         try {
@@ -970,6 +1170,7 @@ function Export-DatabaseObjects {
             }
         }
         Write-Output "  [SUMMARY] Exported $successCount/$($indexes.Count) index(es) successfully" + $(if ($failCount -gt 0) { " ($failCount failed)" } else { "" })
+    }
     }
     
     # 11. Defaults
@@ -1071,6 +1272,9 @@ function Export-DatabaseObjects {
     # 14. User-Defined Functions
     Write-Output ''
     Write-Output 'Exporting user-defined functions...'
+    if (Test-ObjectTypeExcluded -ObjectType 'Functions') {
+        Write-Output '  [SKIPPED] Functions excluded by configuration' -ForegroundColor Yellow
+    } else {
     $functions = @($Database.UserDefinedFunctions | Where-Object { -not $_.IsSystemObject })
     if ($functions.Count -gt 0) {
         Write-Output "  Found $($functions.Count) function(s) to export"
@@ -1101,6 +1305,7 @@ function Export-DatabaseObjects {
             }
         }
         Write-Output "  [SUMMARY] Exported $successCount/$($functions.Count) function(s) successfully" + $(if ($failCount -gt 0) { " ($failCount failed)" } else { "" })
+    }
     }
     
     # 15. User-Defined Aggregates
@@ -1275,6 +1480,9 @@ function Export-DatabaseObjects {
     # 19. Views
     Write-Output ''
     Write-Output 'Exporting views...'
+    if (Test-ObjectTypeExcluded -ObjectType 'Views') {
+        Write-Output '  [SKIPPED] Views excluded by configuration' -ForegroundColor Yellow
+    } else {
     $views = @($Database.Views | Where-Object { -not $_.IsSystemObject })
     if ($views.Count -gt 0) {
         Write-Output "  Found $($views.Count) view(s) to export"
@@ -1302,6 +1510,7 @@ function Export-DatabaseObjects {
             }
         }
         Write-Output "  [SUMMARY] Exported $successCount/$($views.Count) view(s) successfully" + $(if ($failCount -gt 0) { " ($failCount failed)" } else { "" })
+    }
     }
     
     # 20. Synonyms
@@ -1334,6 +1543,7 @@ function Export-DatabaseObjects {
             }
         }
         Write-Output "  [SUMMARY] Exported $successCount/$($synonyms.Count) synonym(s) successfully" + $(if ($failCount -gt 0) { " ($failCount failed)" } else { "" })
+    }
     }
     
     # 21. Full-Text Search
@@ -2115,16 +2325,63 @@ try {
         }
     }
     
+    # Apply timeout settings from config or use defaults
+    # Parameters override config values (if non-zero)
+    $effectiveConnectionTimeout = if ($ConnectionTimeout -gt 0) { 
+        $ConnectionTimeout 
+    } elseif ($config -and $config.ContainsKey('connectionTimeout')) { 
+        $config.connectionTimeout 
+    } else { 
+        30 
+    }
+    
+    $effectiveCommandTimeout = if ($CommandTimeout -gt 0) { 
+        $CommandTimeout 
+    } elseif ($config -and $config.ContainsKey('commandTimeout')) { 
+        $config.commandTimeout 
+    } else { 
+        300 
+    }
+    
+    $effectiveMaxRetries = if ($MaxRetries -gt 0) {
+        $MaxRetries
+    } elseif ($config -and $config.ContainsKey('maxRetries')) {
+        $config.maxRetries
+    } else {
+        3
+    }
+    
+    $effectiveRetryDelay = if ($RetryDelaySeconds -gt 0) {
+        $RetryDelaySeconds
+    } elseif ($config -and $config.ContainsKey('retryDelaySeconds')) {
+        $config.retryDelaySeconds
+    } else {
+        2
+    }
+    
+    Write-Verbose "Using connection timeout: $effectiveConnectionTimeout seconds"
+    Write-Verbose "Using command timeout: $effectiveCommandTimeout seconds"
+    Write-Verbose "Using max retries: $effectiveMaxRetries attempts"
+    Write-Verbose "Using retry delay: $effectiveRetryDelay seconds"
+    
     # Validate dependencies
     Test-Dependencies
     
     # Test database connection
-    if (-not (Test-DatabaseConnection -ServerName $Server -DatabaseName $Database -Cred $Credential -Config $config)) {
+    if (-not (Test-DatabaseConnection -ServerName $Server -DatabaseName $Database -Cred $Credential -Config $config -Timeout $effectiveConnectionTimeout)) {
         exit 1
     }
     
     # Initialize output directory
     $exportDir = Initialize-OutputDirectory -Path $OutputPath
+    
+    # Initialize log file
+    $script:LogFile = Join-Path $exportDir 'export-log.txt'
+    Write-Log "Export started" -Severity INFO
+    Write-Log "Server: $Server" -Severity INFO
+    Write-Log "Database: $Database" -Severity INFO
+    Write-Log "Output: $exportDir" -Severity INFO
+    Write-Log "Configuration source: $configSource" -Severity INFO
     
     # Display configuration
     Show-ExportConfiguration `
@@ -2138,6 +2395,7 @@ try {
     # Connect to SQL Server
     Write-Output 'Connecting to SQL Server...'
     
+    $smServer = $null
     if ($Credential) {
         $smServer = [Microsoft.SqlServer.Management.Smo.Server]::new($Server)
         $smServer.ConnectionContext.LoginSecure = $false
@@ -2147,15 +2405,21 @@ try {
         $smServer = [Microsoft.SqlServer.Management.Smo.Server]::new($Server)
     }
     
-    $smServer.ConnectionContext.ConnectTimeout = 15
+    $smServer.ConnectionContext.ConnectTimeout = $effectiveConnectionTimeout
     
     # Apply TrustServerCertificate from config if specified
     if ($config -and $config.ContainsKey('trustServerCertificate')) {
         $smServer.ConnectionContext.TrustServerCertificate = $config.trustServerCertificate
     }
     
+    # Connect with retry logic
     try {
-        $smServer.ConnectionContext.Connect()
+        Invoke-WithRetry -MaxAttempts $effectiveMaxRetries -InitialDelaySeconds $effectiveRetryDelay -OperationName "SQL Server Connection" -ScriptBlock {
+            $smServer.ConnectionContext.Connect()
+            
+            # Validate connection by attempting to read server version
+            $null = $smServer.Version
+        }
     } catch {
         if ($_.Exception.Message -match 'certificate|SSL|TLS') {
             Write-Error @"
@@ -2181,6 +2445,7 @@ For more details, see: https://go.microsoft.com/fwlink/?linkid=2226722
     }
     
     Write-Output "[SUCCESS] Connected to $Server\$Database"
+    Write-Log "Connected successfully to $Server\$Database" -Severity INFO
     
     # Create scripter
     $sqlVersion = Get-SqlServerVersion -VersionString $TargetSqlVersion
@@ -2198,9 +2463,6 @@ For more details, see: https://go.microsoft.com/fwlink/?linkid=2226722
     # Create deployment manifest
     New-DeploymentManifest -OutputDir $exportDir -DatabaseName $Database -ServerName $Server
     
-    # Disconnect
-    $smServer.ConnectionContext.Disconnect()
-    
     # Show export summary
     Show-ExportSummary -OutputDir $exportDir -DatabaseName $Database -ServerName $Server -DataExported $IncludeData
     
@@ -2208,10 +2470,19 @@ For more details, see: https://go.microsoft.com/fwlink/?linkid=2226722
     Write-Output 'EXPORT COMPLETE'
     Write-Output '═══════════════════════════════════════════════'
     Write-Output ''
+    Write-Log "Export completed successfully" -Severity INFO
     
 } catch {
     Write-Error "[ERROR] Script failed: $_"
+    Write-Log "Script failed: $_" -Severity ERROR
     exit 1
+} finally {
+    # Ensure database connection is closed
+    if ($smServer -and $smServer.ConnectionContext.IsOpen) {
+        Write-Output 'Disconnecting from SQL Server...'
+        $smServer.ConnectionContext.Disconnect()
+        Write-Log "Disconnected from SQL Server" -Severity INFO
+    }
 }
 
 exit 0
