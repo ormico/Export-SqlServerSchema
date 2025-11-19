@@ -83,6 +83,68 @@ $ErrorActionPreference = 'Stop'
 
 #region Helper Functions
 
+function Write-ExportError {
+    <#
+    .SYNOPSIS
+        Logs detailed error information including all nested exceptions and context.
+    #>
+    param(
+        [string]$ObjectType,
+        [string]$ObjectName,
+        [System.Management.Automation.ErrorRecord]$ErrorRecord,
+        [string]$AdditionalContext = ''
+    )
+    
+    Write-Host "[ERROR] Failed to export $ObjectType" -ForegroundColor Red -NoNewline
+    if ($ObjectName) {
+        Write-Host ": $ObjectName" -ForegroundColor Red
+    } else {
+        Write-Host "" -ForegroundColor Red
+    }
+    
+    if ($AdditionalContext) {
+        Write-Host "  Context: $AdditionalContext" -ForegroundColor Yellow
+    }
+    
+    # Walk the exception chain
+    $currentException = $ErrorRecord.Exception
+    $depth = 0
+    
+    while ($null -ne $currentException) {
+        $indent = '  ' + ('  ' * $depth)
+        
+        if ($depth -eq 0) {
+            Write-Host "${indent}Exception: $($currentException.GetType().FullName)" -ForegroundColor Red
+        } else {
+            Write-Host "${indent}Inner Exception: $($currentException.GetType().FullName)" -ForegroundColor Yellow
+        }
+        
+        Write-Host "${indent}Message: $($currentException.Message)" -ForegroundColor Gray
+        
+        # Show SQL-specific information if available
+        if ($currentException -is [Microsoft.SqlServer.Management.Common.ExecutionFailureException]) {
+            Write-Host "${indent}SQL Server Error" -ForegroundColor Yellow
+        }
+        if ($currentException.InnerException -is [Microsoft.SqlServer.Management.Smo.FailedOperationException]) {
+            Write-Host "${indent}SMO Operation Failed" -ForegroundColor Yellow
+        }
+        
+        $currentException = $currentException.InnerException
+        $depth++
+        
+        # Prevent infinite loops
+        if ($depth -gt 10) {
+            Write-Host "${indent}... (exception chain truncated)" -ForegroundColor Gray
+            break
+        }
+    }
+    
+    # Show script stack trace for first level only
+    if ($ErrorRecord.ScriptStackTrace) {
+        Write-Host "  Stack: $($ErrorRecord.ScriptStackTrace.Split("`n")[0])" -ForegroundColor DarkGray
+    }
+}
+
 function Test-Dependencies {
     <#
     .SYNOPSIS
@@ -577,11 +639,31 @@ function Export-DatabaseObjects {
     Write-Output 'Exporting schemas...'
     $schemas = @($Database.Schemas | Where-Object { -not $_.IsSystemObject -and $_.Name -ne $_.Owner })
     if ($schemas.Count -gt 0) {
+        Write-Output "  Found $($schemas.Count) schema(s) to export"
+        $successCount = 0
+        $failCount = 0
+        $currentItem = 0
         $opts = New-ScriptingOptions -TargetVersion $TargetVersion
-        $opts.FileName = Join-Path $OutputDir '02_Schemas' '001_Schemas.sql'
         $Scripter.Options = $opts
-        $Scripter.EnumScript($schemas)
-        Write-Output "  [SUCCESS] Exported $($schemas.Count) schema(s)"
+        
+        foreach ($schema in $schemas) {
+            $currentItem++
+            $percentComplete = [math]::Round(($currentItem / $schemas.Count) * 100)
+            try {
+                Write-Host ("  [{0,3}%]{1}..." -f $percentComplete, $schema.Name)
+                $fileName = Join-Path $OutputDir '02_Schemas' "$($schema.Name).sql"
+                $opts.FileName = $fileName
+                $Scripter.Options = $opts
+                $schema.Script($opts) | Out-Null
+                Write-Host "        [SUCCESS]" -ForegroundColor Green
+                $successCount++
+            } catch {
+                Write-Host "        [FAILED]" -ForegroundColor Red
+                Write-ExportError -ObjectType 'Schema' -ObjectName $schema.Name -ErrorRecord $_
+                $failCount++
+            }
+        }
+        Write-Output "  [SUMMARY] Exported $successCount/$($schemas.Count) schema(s) successfully" + $(if ($failCount -gt 0) { " ($failCount failed)" } else { "" })
     }
     
     # 3. Sequences
@@ -589,11 +671,31 @@ function Export-DatabaseObjects {
     Write-Output 'Exporting sequences...'
     $sequences = @($Database.Sequences | Where-Object { -not $_.IsSystemObject })
     if ($sequences.Count -gt 0) {
+        Write-Output "  Found $($sequences.Count) sequence(s) to export"
+        $successCount = 0
+        $failCount = 0
+        $currentItem = 0
         $opts = New-ScriptingOptions -TargetVersion $TargetVersion
-        $opts.FileName = Join-Path $OutputDir '03_Sequences' '001_Sequences.sql'
         $Scripter.Options = $opts
-        $Scripter.EnumScript($sequences)
-        Write-Output "  [SUCCESS] Exported $($sequences.Count) sequence(s)"
+        
+        foreach ($sequence in $sequences) {
+            $currentItem++
+            $percentComplete = [math]::Round(($currentItem / $sequences.Count) * 100)
+            try {
+                Write-Host ("  [{0,3}%]{1}.{2}..." -f $percentComplete, $sequence.Schema, $sequence.Name)
+                $fileName = Join-Path $OutputDir '03_Sequences' "$($sequence.Schema).$($sequence.Name).sql"
+                $opts.FileName = $fileName
+                $Scripter.Options = $opts
+                $sequence.Script($opts) | Out-Null
+                Write-Host "        [SUCCESS]" -ForegroundColor Green
+                $successCount++
+            } catch {
+                Write-Host "        [FAILED]" -ForegroundColor Red
+                Write-ExportError -ObjectType 'Sequence' -ObjectName "$($sequence.Schema).$($sequence.Name)" -ErrorRecord $_
+                $failCount++
+            }
+        }
+        Write-Output "  [SUMMARY] Exported $successCount/$($sequences.Count) sequence(s) successfully" + $(if ($failCount -gt 0) { " ($failCount failed)" } else { "" })
     }
     
     # 4. Partition Functions
@@ -601,26 +703,66 @@ function Export-DatabaseObjects {
     Write-Output 'Exporting partition functions...'
     $partitionFunctions = @($Database.PartitionFunctions)
     if ($partitionFunctions.Count -gt 0) {
+        Write-Output "  Found $($partitionFunctions.Count) partition function(s) to export"
+        $successCount = 0
+        $failCount = 0
+        $currentItem = 0
         $opts = New-ScriptingOptions -TargetVersion $TargetVersion
-        $opts.FileName = Join-Path $OutputDir '04_PartitionFunctions' '001_PartitionFunctions.sql'
         $Scripter.Options = $opts
-        $Scripter.EnumScript($partitionFunctions)
-        Write-Output "  [SUCCESS] Exported $($partitionFunctions.Count) partition function(s)"
+        
+        foreach ($pf in $partitionFunctions) {
+            $currentItem++
+            $percentComplete = [math]::Round(($currentItem / $partitionFunctions.Count) * 100)
+            try {
+                Write-Host ("  [{0,3}%]{1}..." -f $percentComplete, $pf.Name)
+                $fileName = Join-Path $OutputDir '04_PartitionFunctions' "$($pf.Name).sql"
+                $opts.FileName = $fileName
+                $Scripter.Options = $opts
+                $pf.Script($opts) | Out-Null
+                Write-Host "        [SUCCESS]" -ForegroundColor Green
+                $successCount++
+            } catch {
+                Write-Host "        [FAILED]" -ForegroundColor Red
+                Write-ExportError -ObjectType 'PartitionFunction' -ObjectName $pf.Name -ErrorRecord $_
+                $failCount++
+            }
+        }
+        Write-Output "  [SUMMARY] Exported $successCount/$($partitionFunctions.Count) partition function(s) successfully" + $(if ($failCount -gt 0) { " ($failCount failed)" } else { "" })
     }
     
-    # 4. Partition Schemes
+    # 5. Partition Schemes
     Write-Output ''
     Write-Output 'Exporting partition schemes...'
     $partitionSchemes = @($Database.PartitionSchemes)
     if ($partitionSchemes.Count -gt 0) {
+        Write-Output "  Found $($partitionSchemes.Count) partition scheme(s) to export"
+        $successCount = 0
+        $failCount = 0
+        $currentItem = 0
         $opts = New-ScriptingOptions -TargetVersion $TargetVersion
-        $opts.FileName = Join-Path $OutputDir '05_PartitionSchemes' '001_PartitionSchemes.sql'
         $Scripter.Options = $opts
-        $Scripter.EnumScript($partitionSchemes)
-        Write-Output "  [SUCCESS] Exported $($partitionSchemes.Count) partition scheme(s)"
+        
+        foreach ($ps in $partitionSchemes) {
+            $currentItem++
+            $percentComplete = [math]::Round(($currentItem / $partitionSchemes.Count) * 100)
+            try {
+                Write-Host ("  [{0,3}%]{1}..." -f $percentComplete, $ps.Name)
+                $fileName = Join-Path $OutputDir '05_PartitionSchemes' "$($ps.Name).sql"
+                $opts.FileName = $fileName
+                $Scripter.Options = $opts
+                $ps.Script($opts) | Out-Null
+                Write-Host "        [SUCCESS]" -ForegroundColor Green
+                $successCount++
+            } catch {
+                Write-Host "        [FAILED]" -ForegroundColor Red
+                Write-ExportError -ObjectType 'PartitionScheme' -ObjectName $ps.Name -ErrorRecord $_
+                $failCount++
+            }
+        }
+        Write-Output "  [SUMMARY] Exported $successCount/$($partitionSchemes.Count) partition scheme(s) successfully" + $(if ($failCount -gt 0) { " ($failCount failed)" } else { "" })
     }
     
-    # 5. User-Defined Types (UDTs, UDTTs, UDDTs)
+    # 6. User-Defined Types (UDTs, UDTTs, UDDTs)
     Write-Output ''
     Write-Output 'Exporting user-defined types...'
     $allTypes = @()
@@ -629,30 +771,76 @@ function Export-DatabaseObjects {
     $allTypes += @($Database.UserDefinedTypes | Where-Object { -not $_.IsSystemObject })
     
     if ($allTypes.Count -gt 0) {
+        Write-Output "  Found $($allTypes.Count) type(s) to export"
+        $successCount = 0
+        $failCount = 0
+        $currentItem = 0
         $opts = New-ScriptingOptions -TargetVersion $TargetVersion
-        $opts.FileName = Join-Path $OutputDir '06_Types' '001_UserDefinedTypes.sql'
         $Scripter.Options = $opts
-        $Scripter.EnumScript($allTypes)
-        Write-Output "  [SUCCESS] Exported $($allTypes.Count) type(s)"
+        
+        foreach ($type in $allTypes) {
+            $currentItem++
+            $percentComplete = [math]::Round(($currentItem / $allTypes.Count) * 100)
+            try {
+                $typeName = if ($type.Schema) { "$($type.Schema).$($type.Name)" } else { $type.Name }
+                Write-Host ("  [{0,3}%]{1}..." -f $percentComplete, $typeName)
+                $fileName = Join-Path $OutputDir '06_Types' "$typeName.sql"
+                $opts.FileName = $fileName
+                $Scripter.Options = $opts
+                $type.Script($opts) | Out-Null
+                Write-Host "        [SUCCESS]" -ForegroundColor Green
+                $successCount++
+            } catch {
+                Write-Host "        [FAILED]" -ForegroundColor Red
+                $typeName = if ($type.Schema) { "$($type.Schema).$($type.Name)" } else { $type.Name }
+                Write-ExportError -ObjectType 'UserDefinedType' -ObjectName $typeName -ErrorRecord $_
+                $failCount++
+            }
+        }
+        Write-Output "  [SUMMARY] Exported $successCount/$($allTypes.Count) type(s) successfully" + $(if ($failCount -gt 0) { " ($failCount failed)" } else { "" })
     }
     
-    # 6. XML Schema Collections
+    # 7. XML Schema Collections
     Write-Output ''
     Write-Output 'Exporting XML schema collections...'
     $xmlSchemaCollections = @($Database.XmlSchemaCollections | Where-Object { -not $_.IsSystemObject })
     if ($xmlSchemaCollections.Count -gt 0) {
+        Write-Output "  Found $($xmlSchemaCollections.Count) XML schema collection(s) to export"
+        $successCount = 0
+        $failCount = 0
+        $currentItem = 0
         $opts = New-ScriptingOptions -TargetVersion $TargetVersion
-        $opts.FileName = Join-Path $OutputDir '07_XmlSchemaCollections' '001_XmlSchemaCollections.sql'
         $Scripter.Options = $opts
-        $Scripter.EnumScript($xmlSchemaCollections)
-        Write-Output "  [SUCCESS] Exported $($xmlSchemaCollections.Count) XML schema collection(s)"
+        
+        foreach ($xsc in $xmlSchemaCollections) {
+            $currentItem++
+            $percentComplete = [math]::Round(($currentItem / $xmlSchemaCollections.Count) * 100)
+            try {
+                Write-Host ("  [{0,3}%]{1}.{2}..." -f $percentComplete, $xsc.Schema, $xsc.Name)
+                $fileName = Join-Path $OutputDir '07_XmlSchemaCollections' "$($xsc.Schema).$($xsc.Name).sql"
+                $opts.FileName = $fileName
+                $Scripter.Options = $opts
+                $xsc.Script($opts) | Out-Null
+                Write-Host "        [SUCCESS]" -ForegroundColor Green
+                $successCount++
+            } catch {
+                Write-Host "        [FAILED]" -ForegroundColor Red
+                Write-ExportError -ObjectType 'XmlSchemaCollection' -ObjectName "$($xsc.Schema).$($xsc.Name)" -ErrorRecord $_
+                $failCount++
+            }
+        }
+        Write-Output "  [SUMMARY] Exported $successCount/$($xmlSchemaCollections.Count) XML schema collection(s) successfully" + $(if ($failCount -gt 0) { " ($failCount failed)" } else { "" })
     }
     
-    # 7. Tables (Primary Keys only - no FK)
+    # 8. Tables (Primary Keys only - no FK)
     Write-Output ''
     Write-Output 'Exporting tables (PKs only)...'
     $tables = @($Database.Tables | Where-Object { -not $_.IsSystemObject })
     if ($tables.Count -gt 0) {
+        Write-Output "  Found $($tables.Count) table(s) to export"
+        $successCount = 0
+        $failCount = 0
+        $currentItem = 0
         $opts = New-ScriptingOptions -TargetVersion $TargetVersion -Overrides @{
             DriAll              = $false
             DriPrimaryKey       = $true
@@ -665,175 +853,394 @@ function Export-DatabaseObjects {
             FullTextIndexes     = $false
             Triggers            = $false
         }
-        $opts.FileName = Join-Path $OutputDir '08_Tables_PrimaryKey' '001_Tables.sql'
         $Scripter.Options = $opts
-        $Scripter.EnumScript($tables)
-        Write-Output "  [SUCCESS] Exported $($tables.Count) table(s)"
+        
+        foreach ($table in $tables) {
+            $currentItem++
+            $percentComplete = [math]::Round(($currentItem / $tables.Count) * 100)
+            try {
+                Write-Host ("  [{0,3}%]{1}.{2}..." -f $percentComplete, $table.Schema, $table.Name)
+                $fileName = Join-Path $OutputDir '08_Tables_PrimaryKey' "$($table.Schema).$($table.Name).sql"
+                $opts.FileName = $fileName
+                $Scripter.Options = $opts
+                $table.Script($opts) | Out-Null
+                Write-Host "        [SUCCESS]" -ForegroundColor Green
+                $successCount++
+            } catch {
+                Write-Host "        [FAILED]" -ForegroundColor Red
+                Write-ExportError -ObjectType 'Table' -ObjectName "$($table.Schema).$($table.Name)" -ErrorRecord $_ -AdditionalContext "Exporting table structure with primary keys"
+                $failCount++
+            }
+        }
+        Write-Output "  [SUMMARY] Exported $successCount/$($tables.Count) table(s) successfully" + $(if ($failCount -gt 0) { " ($failCount failed)" } else { "" })
     }
     
-    # 8. Foreign Keys (separate from table creation)
+    # 9. Foreign Keys (separate from table creation)
     Write-Output ''
     Write-Output 'Exporting foreign keys...'
     $foreignKeys = @()
     foreach ($table in $tables) {
-        $foreignKeys += @($table.ForeignKeys)
+        try {
+            # Access foreign keys collection safely
+            if ($table.ForeignKeys -and $table.ForeignKeys.Count -gt 0) {
+                $foreignKeys += @($table.ForeignKeys)
+            }
+        } catch {
+            Write-ExportError -ObjectType 'ForeignKeyCollection' -ObjectName "$($table.Schema).$($table.Name)" -ErrorRecord $_ -AdditionalContext "Accessing foreign keys collection"
+        }
     }
     if ($foreignKeys.Count -gt 0) {
+        Write-Output "  Found $($foreignKeys.Count) foreign key constraint(s) to export"
+        $successCount = 0
+        $failCount = 0
+        $currentItem = 0
         $opts = New-ScriptingOptions -TargetVersion $TargetVersion -Overrides @{
             DriAll            = $false
             DriForeignKeys    = $true
         }
-        $opts.FileName = Join-Path $OutputDir '09_Tables_ForeignKeys' '001_ForeignKeys.sql'
         $Scripter.Options = $opts
-        $Scripter.EnumScript($foreignKeys)
-        Write-Output "  [SUCCESS] Exported $($foreignKeys.Count) foreign key constraint(s)"
+        
+        foreach ($fk in $foreignKeys) {
+            $currentItem++
+            $percentComplete = [math]::Round(($currentItem / $foreignKeys.Count) * 100)
+            try {
+                Write-Host ("  [{0,3}%]{1}.{2}.{3}..." -f $percentComplete, $fk.Parent.Schema, $fk.Parent.Name, $fk.Name)
+                $fileName = Join-Path $OutputDir '09_Tables_ForeignKeys' "$($fk.Parent.Schema).$($fk.Parent.Name).$($fk.Name).sql"
+                $opts.FileName = $fileName
+                $Scripter.Options = $opts
+                $fk.Script($opts) | Out-Null
+                Write-Host "        [SUCCESS]" -ForegroundColor Green
+                $successCount++
+            } catch {
+                Write-Host "        [FAILED]" -ForegroundColor Red
+                Write-ExportError -ObjectType 'ForeignKey' -ObjectName "$($fk.Parent.Schema).$($fk.Parent.Name).$($fk.Name)" -ErrorRecord $_
+                $failCount++
+            }
+        }
+        Write-Output "  [SUMMARY] Exported $successCount/$($foreignKeys.Count) foreign key constraint(s) successfully" + $(if ($failCount -gt 0) { " ($failCount failed)" } else { "" })
     }
     
-    # 9. Indexes
+    # 10. Indexes
     Write-Output ''
     Write-Output 'Exporting indexes...'
     $indexes = @()
     foreach ($table in $tables) {
-        # Filter out indexes that are part of primary keys or unique constraints
-        # These are already scripted with the table definition
-        $indexes += @($table.Indexes | Where-Object {
-            -not $_.IsSystemObject -and
-            -not $_.IndexKeyType -eq [Microsoft.SqlServer.Management.Smo.IndexKeyType]::DriPrimaryKey -and
-            -not $_.IndexKeyType -eq [Microsoft.SqlServer.Management.Smo.IndexKeyType]::DriUniqueKey
-        })
+        try {
+            # Filter out indexes that are part of primary keys or unique constraints
+            # These are already scripted with the table definition
+            if ($table.Indexes -and $table.Indexes.Count -gt 0) {
+                $indexes += @($table.Indexes | Where-Object {
+                    -not $_.IsSystemObject -and
+                    -not $_.IndexKeyType -eq [Microsoft.SqlServer.Management.Smo.IndexKeyType]::DriPrimaryKey -and
+                    -not $_.IndexKeyType -eq [Microsoft.SqlServer.Management.Smo.IndexKeyType]::DriUniqueKey
+                })
+            }
+        } catch {
+            Write-ExportError -ObjectType 'IndexCollection' -ObjectName "$($table.Schema).$($table.Name)" -ErrorRecord $_ -AdditionalContext "Accessing indexes collection"
+        }
     }
     if ($indexes.Count -gt 0) {
+        Write-Output "  Found $($indexes.Count) index(es) to export"
+        $successCount = 0
+        $failCount = 0
+        $currentItem = 0
         $opts = New-ScriptingOptions -TargetVersion $TargetVersion -Overrides @{
             Indexes         = $true
             ClusteredIndexes = $false
             DriPrimaryKey   = $false
             DriUniqueKey    = $false
         }
-        $opts.FileName = Join-Path $OutputDir '10_Indexes' '001_Indexes.sql'
         $Scripter.Options = $opts
-        $Scripter.EnumScript($indexes)
-        Write-Output "  [SUCCESS] Exported $($indexes.Count) index(es)"
+        
+        foreach ($index in $indexes) {
+            $currentItem++
+            $percentComplete = [math]::Round(($currentItem / $indexes.Count) * 100)
+            try {
+                Write-Host ("  [{0,3}%]{1}.{2}.{3}..." -f $percentComplete, $index.Parent.Schema, $index.Parent.Name, $index.Name)
+                $fileName = Join-Path $OutputDir '10_Indexes' "$($index.Parent.Schema).$($index.Parent.Name).$($index.Name).sql"
+                $opts.FileName = $fileName
+                $Scripter.Options = $opts
+                $index.Script($opts) | Out-Null
+                Write-Host "        [SUCCESS]" -ForegroundColor Green
+                $successCount++
+            } catch {
+                Write-Host "        [FAILED]" -ForegroundColor Red
+                Write-ExportError -ObjectType 'Index' -ObjectName "$($index.Parent.Schema).$($index.Parent.Name).$($index.Name)" -ErrorRecord $_
+                $failCount++
+            }
+        }
+        Write-Output "  [SUMMARY] Exported $successCount/$($indexes.Count) index(es) successfully" + $(if ($failCount -gt 0) { " ($failCount failed)" } else { "" })
     }
     
-    # 10. Defaults
+    # 11. Defaults
     Write-Output ''
     Write-Output 'Exporting defaults...'
     $defaults = @($Database.Defaults | Where-Object { -not $_.IsSystemObject })
     if ($defaults.Count -gt 0) {
+        Write-Output "  Found $($defaults.Count) default constraint(s) to export"
+        $successCount = 0
+        $failCount = 0
+        $currentItem = 0
         $opts = New-ScriptingOptions -TargetVersion $TargetVersion
-        $opts.FileName = Join-Path $OutputDir '11_Defaults' '001_Defaults.sql'
         $Scripter.Options = $opts
-        $Scripter.EnumScript($defaults)
-        Write-Output "  [SUCCESS] Exported $($defaults.Count) default constraint(s)"
+        
+        foreach ($default in $defaults) {
+            $currentItem++
+            $percentComplete = [math]::Round(($currentItem / $defaults.Count) * 100)
+            try {
+                Write-Host ("  [{0,3}%]{1}.{2}..." -f $percentComplete, $default.Schema, $default.Name)
+                $fileName = Join-Path $OutputDir '11_Defaults' "$($default.Schema).$($default.Name).sql"
+                $opts.FileName = $fileName
+                $Scripter.Options = $opts
+                $default.Script($opts) | Out-Null
+                Write-Host "        [SUCCESS]" -ForegroundColor Green
+                $successCount++
+            } catch {
+                Write-Host "        [FAILED]" -ForegroundColor Red
+                Write-ExportError -ObjectType 'Default' -ObjectName "$($default.Schema).$($default.Name)" -ErrorRecord $_
+                $failCount++
+            }
+        }
+        Write-Output "  [SUMMARY] Exported $successCount/$($defaults.Count) default constraint(s) successfully" + $(if ($failCount -gt 0) { " ($failCount failed)" } else { "" })
     }
     
-    # 11. Rules
+    # 12. Rules
     Write-Output ''
     Write-Output 'Exporting rules...'
     $rules = @($Database.Rules | Where-Object { -not $_.IsSystemObject })
     if ($rules.Count -gt 0) {
+        Write-Output "  Found $($rules.Count) rule(s) to export"
+        $successCount = 0
+        $failCount = 0
+        $currentItem = 0
         $opts = New-ScriptingOptions -TargetVersion $TargetVersion
-        $opts.FileName = Join-Path $OutputDir '12_Rules' '001_Rules.sql'
         $Scripter.Options = $opts
-        $Scripter.EnumScript($rules)
-        Write-Output "  [SUCCESS] Exported $($rules.Count) rule(s)"
+        
+        foreach ($rule in $rules) {
+            $currentItem++
+            $percentComplete = [math]::Round(($currentItem / $rules.Count) * 100)
+            try {
+                Write-Host ("  [{0,3}%]{1}.{2}..." -f $percentComplete, $rule.Schema, $rule.Name)
+                $fileName = Join-Path $OutputDir '12_Rules' "$($rule.Schema).$($rule.Name).sql"
+                $opts.FileName = $fileName
+                $Scripter.Options = $opts
+                $rule.Script($opts) | Out-Null
+                Write-Host "        [SUCCESS]" -ForegroundColor Green
+                $successCount++
+            } catch {
+                Write-Host "        [FAILED]" -ForegroundColor Red
+                Write-ExportError -ObjectType 'Rule' -ObjectName "$($rule.Schema).$($rule.Name)" -ErrorRecord $_
+                $failCount++
+            }
+        }
+        Write-Output "  [SUMMARY] Exported $successCount/$($rules.Count) rule(s) successfully" + $(if ($failCount -gt 0) { " ($failCount failed)" } else { "" })
     }
     
-    # 12. Assemblies
+    # 13. Assemblies
     Write-Output ''
     Write-Output 'Exporting assemblies...'
     $assemblies = @($Database.Assemblies | Where-Object { -not $_.IsSystemObject })
     if ($assemblies.Count -gt 0) {
+        Write-Output "  Found $($assemblies.Count) assembly(ies) to export"
+        $successCount = 0
+        $failCount = 0
+        $currentItem = 0
         $opts = New-ScriptingOptions -TargetVersion $TargetVersion
+        $Scripter.Options = $opts
+        
         foreach ($assembly in $assemblies) {
-            $fileName = Join-Path $OutputDir '13_Programmability/01_Assemblies' "$($assembly.Name).sql"
-            $opts.FileName = $fileName
-            $Scripter.Options = $opts
-            $assembly.Script($opts)
+            $currentItem++
+            $percentComplete = [math]::Round(($currentItem / $assemblies.Count) * 100)
+            try {
+                Write-Host ("  [{0,3}%]{1}..." -f $percentComplete, $assembly.Name)
+                $fileName = Join-Path $OutputDir '13_Programmability/01_Assemblies' "$($assembly.Name).sql"
+                $opts.FileName = $fileName
+                $Scripter.Options = $opts
+                $assembly.Script($opts) | Out-Null
+                Write-Host "        [SUCCESS]" -ForegroundColor Green
+                $successCount++
+            } catch {
+                Write-Host "        [FAILED]" -ForegroundColor Red
+                Write-ExportError -ObjectType 'Assembly' -ObjectName $assembly.Name -ErrorRecord $_
+                $failCount++
+            }
         }
-        Write-Output "  [SUCCESS] Exported $($assemblies.Count) assembly(ies)"
+        Write-Output "  [SUMMARY] Exported $successCount/$($assemblies.Count) assembly(ies) successfully" + $(if ($failCount -gt 0) { " ($failCount failed)" } else { "" })
     }
     
-    # 13. User-Defined Functions
+    # 14. User-Defined Functions
     Write-Output ''
     Write-Output 'Exporting user-defined functions...'
     $functions = @($Database.UserDefinedFunctions | Where-Object { -not $_.IsSystemObject })
     if ($functions.Count -gt 0) {
+        Write-Output "  Found $($functions.Count) function(s) to export"
+        $successCount = 0
+        $failCount = 0
+        $currentItem = 0
         $opts = New-ScriptingOptions -TargetVersion $TargetVersion -Overrides @{
             Indexes     = $false
             Triggers    = $false
         }
+        $Scripter.Options = $opts
+        
         foreach ($function in $functions) {
-            $fileName = Join-Path $OutputDir '13_Programmability/02_Functions' "$($function.Schema).$($function.Name).sql"
-            $opts.FileName = $fileName
-            $Scripter.Options = $opts
-            $function.Script($opts)
+            $currentItem++
+            $percentComplete = [math]::Round(($currentItem / $functions.Count) * 100)
+            try {
+                Write-Host ("  [{0,3}%]{1}.{2}..." -f $percentComplete, $function.Schema, $function.Name)
+                $fileName = Join-Path $OutputDir '13_Programmability/02_Functions' "$($function.Schema).$($function.Name).sql"
+                $opts.FileName = $fileName
+                $Scripter.Options = $opts
+                $function.Script($opts) | Out-Null
+                Write-Host "        [SUCCESS]" -ForegroundColor Green
+                $successCount++
+            } catch {
+                Write-Host "        [FAILED]" -ForegroundColor Red
+                Write-ExportError -ObjectType 'Function' -ObjectName "$($function.Schema).$($function.Name)" -ErrorRecord $_
+                $failCount++
+            }
         }
-        Write-Output "  [SUCCESS] Exported $($functions.Count) function(s)"
+        Write-Output "  [SUMMARY] Exported $successCount/$($functions.Count) function(s) successfully" + $(if ($failCount -gt 0) { " ($failCount failed)" } else { "" })
     }
     
-    # 14. User-Defined Aggregates
+    # 15. User-Defined Aggregates
     Write-Output ''
     Write-Output 'Exporting user-defined aggregates...'
     $aggregates = @($Database.UserDefinedAggregates | Where-Object { -not $_.IsSystemObject })
     if ($aggregates.Count -gt 0) {
+        Write-Output "  Found $($aggregates.Count) aggregate(s) to export"
+        $successCount = 0
+        $failCount = 0
+        $currentItem = 0
         $opts = New-ScriptingOptions -TargetVersion $TargetVersion
+        $Scripter.Options = $opts
+        
         foreach ($aggregate in $aggregates) {
-            $fileName = Join-Path $OutputDir '13_Programmability/02_Functions' "$($aggregate.Schema).$($aggregate.Name).aggregate.sql"
-            $opts.FileName = $fileName
-            $Scripter.Options = $opts
-            $aggregate.Script($opts)
+            $currentItem++
+            $percentComplete = [math]::Round(($currentItem / $aggregates.Count) * 100)
+            try {
+                Write-Host ("  [{0,3}%]{1}.{2}..." -f $percentComplete, $aggregate.Schema, $aggregate.Name)
+                $fileName = Join-Path $OutputDir '13_Programmability/02_Functions' "$($aggregate.Schema).$($aggregate.Name).aggregate.sql"
+                $opts.FileName = $fileName
+                $Scripter.Options = $opts
+                $aggregate.Script($opts) | Out-Null
+                Write-Host "        [SUCCESS]" -ForegroundColor Green
+                $successCount++
+            } catch {
+                Write-Host "        [FAILED]" -ForegroundColor Red
+                Write-ExportError -ObjectType 'Aggregate' -ObjectName "$($aggregate.Schema).$($aggregate.Name)" -ErrorRecord $_
+                $failCount++
+            }
         }
-        Write-Output "  [SUCCESS] Exported $($aggregates.Count) aggregate(s)"
+        Write-Output "  [SUMMARY] Exported $successCount/$($aggregates.Count) aggregate(s) successfully" + $(if ($failCount -gt 0) { " ($failCount failed)" } else { "" })
     }
     
-    # 15. Stored Procedures (including Extended Stored Procedures)
+    # 16. Stored Procedures (including Extended Stored Procedures)
     Write-Output ''
     Write-Output 'Exporting stored procedures...'
     $storedProcs = @($Database.StoredProcedures | Where-Object { -not $_.IsSystemObject })
     $extendedProcs = @($Database.ExtendedStoredProcedures | Where-Object { -not $_.IsSystemObject })
-    if ($storedProcs.Count -gt 0 -or $extendedProcs.Count -gt 0) {
+    $totalProcs = $storedProcs.Count + $extendedProcs.Count
+    if ($totalProcs -gt 0) {
+        Write-Output "  Found $($storedProcs.Count) stored procedure(s) and $($extendedProcs.Count) extended stored procedure(s) to export"
+        $successCount = 0
+        $failCount = 0
+        $currentItem = 0
         $opts = New-ScriptingOptions -TargetVersion $TargetVersion -Overrides @{
             Indexes  = $false
             Triggers = $false
         }
+        $Scripter.Options = $opts
+        
         foreach ($proc in $storedProcs) {
-            $fileName = Join-Path $OutputDir '13_Programmability/03_StoredProcedures' "$($proc.Schema).$($proc.Name).sql"
-            $opts.FileName = $fileName
-            $Scripter.Options = $opts
-            $proc.Script($opts)
+            $currentItem++
+            $percentComplete = [math]::Round(($currentItem / $totalProcs) * 100)
+            try {
+                Write-Host ("  [{0,3}%]{1}.{2}..." -f $percentComplete, $proc.Schema, $proc.Name)
+                $fileName = Join-Path $OutputDir '13_Programmability/03_StoredProcedures' "$($proc.Schema).$($proc.Name).sql"
+                $opts.FileName = $fileName
+                $Scripter.Options = $opts
+                $proc.Script($opts) | Out-Null
+                Write-Host "        [SUCCESS]" -ForegroundColor Green
+                $successCount++
+            } catch {
+                Write-Host "        [FAILED]" -ForegroundColor Red
+                Write-ExportError -ObjectType 'StoredProcedure' -ObjectName "$($proc.Schema).$($proc.Name)" -ErrorRecord $_
+                $failCount++
+            }
         }
+        
         foreach ($extProc in $extendedProcs) {
-            $fileName = Join-Path $OutputDir '13_Programmability/03_StoredProcedures' "$($extProc.Schema).$($extProc.Name).extended.sql"
-            $opts.FileName = $fileName
-            $Scripter.Options = $opts
-            $extProc.Script($opts)
+            $currentItem++
+            $percentComplete = [math]::Round(($currentItem / $totalProcs) * 100)
+            try {
+                Write-Host ("  [{0,3}%]{1}.{2}..." -f $percentComplete, $extProc.Schema, $extProc.Name)
+                $fileName = Join-Path $OutputDir '13_Programmability/03_StoredProcedures' "$($extProc.Schema).$($extProc.Name).extended.sql"
+                $opts.FileName = $fileName
+                $Scripter.Options = $opts
+                $extProc.Script($opts) | Out-Null
+                Write-Host "        [SUCCESS]" -ForegroundColor Green
+                $successCount++
+            } catch {
+                Write-Host "        [FAILED]" -ForegroundColor Red
+                Write-ExportError -ObjectType 'ExtendedStoredProcedure' -ObjectName "$($extProc.Schema).$($extProc.Name)" -ErrorRecord $_
+                $failCount++
+            }
         }
-        Write-Output "  [SUCCESS] Exported $($storedProcs.Count) stored procedure(s) and $($extendedProcs.Count) extended stored procedure(s)"
+        Write-Output "  [SUMMARY] Exported $successCount/$totalProcs stored procedure(s) successfully" + $(if ($failCount -gt 0) { " ($failCount failed)" } else { "" })
     }
     
-    # 16. Database Triggers
+    # 17. Database Triggers
     Write-Output ''
     Write-Output 'Exporting database triggers...'
     $dbTriggers = @($Database.Triggers | Where-Object { -not $_.IsSystemObject })
     if ($dbTriggers.Count -gt 0) {
+        Write-Output "  Found $($dbTriggers.Count) database trigger(s) to export"
+        $successCount = 0
+        $failCount = 0
+        $currentItem = 0
         $opts = New-ScriptingOptions -TargetVersion $TargetVersion -Overrides @{
             Triggers = $true
         }
-        $opts.FileName = Join-Path $OutputDir '13_Programmability/04_Triggers' '001_DatabaseTriggers.sql'
         $Scripter.Options = $opts
-        $Scripter.EnumScript($dbTriggers)
-        Write-Output "  [SUCCESS] Exported $($dbTriggers.Count) database trigger(s)"
+        
+        foreach ($trigger in $dbTriggers) {
+            $currentItem++
+            $percentComplete = [math]::Round(($currentItem / $dbTriggers.Count) * 100)
+            try {
+                Write-Host ("  [{0,3}%]{1}..." -f $percentComplete, $trigger.Name)
+                $fileName = Join-Path $OutputDir '13_Programmability/04_Triggers' "Database.$($trigger.Name).sql"
+                $opts.FileName = $fileName
+                $Scripter.Options = $opts
+                $trigger.Script($opts) | Out-Null
+                Write-Host "        [SUCCESS]" -ForegroundColor Green
+                $successCount++
+            } catch {
+                Write-Host "        [FAILED]" -ForegroundColor Red
+                Write-ExportError -ObjectType 'DatabaseTrigger' -ObjectName $trigger.Name -ErrorRecord $_
+                $failCount++
+            }
+        }
+        Write-Output "  [SUMMARY] Exported $successCount/$($dbTriggers.Count) database trigger(s) successfully" + $(if ($failCount -gt 0) { " ($failCount failed)" } else { "" })
     }
     
-    # 17. Table Triggers
+    # 18. Table Triggers
     Write-Output ''
     Write-Output 'Exporting table triggers...'
     $tableTriggers = @()
     foreach ($table in $tables) {
-        $tableTriggers += @($table.Triggers | Where-Object { -not $_.IsSystemObject })
+        try {
+            if ($table.Triggers -and $table.Triggers.Count -gt 0) {
+                $tableTriggers += @($table.Triggers | Where-Object { -not $_.IsSystemObject })
+            }
+        } catch {
+            Write-ExportError -ObjectType 'TriggerCollection' -ObjectName "$($table.Schema).$($table.Name)" -ErrorRecord $_ -AdditionalContext "Accessing triggers collection"
+        }
     }
     if ($tableTriggers.Count -gt 0) {
+        Write-Output "  Found $($tableTriggers.Count) table trigger(s) to export"
+        $successCount = 0
+        $failCount = 0
         $opts = New-ScriptingOptions -TargetVersion $TargetVersion -Overrides @{
             ClusteredIndexes = $false
             Default          = $false
@@ -842,65 +1249,156 @@ function Export-DatabaseObjects {
             Triggers         = $true
             ScriptData       = $false
         }
-        $opts.FileName = Join-Path $OutputDir '13_Programmability/04_Triggers' '002_TableTriggers.sql'
         $Scripter.Options = $opts
-        $Scripter.EnumScript($tableTriggers)
-        Write-Output "  [SUCCESS] Exported $($tableTriggers.Count) table trigger(s)"
+        
+        $currentItem = 0
+        foreach ($trigger in $tableTriggers) {
+            $currentItem++
+            $percentComplete = [math]::Round(($currentItem / $tableTriggers.Count) * 100)
+            try {
+                Write-Host ("  [{0,3}%]{1}.{2}.{3}..." -f $percentComplete, $trigger.Parent.Schema, $trigger.Parent.Name, $trigger.Name)
+                $fileName = Join-Path $OutputDir '13_Programmability/04_Triggers' "$($trigger.Parent.Schema).$($trigger.Parent.Name).$($trigger.Name).sql"
+                $opts.FileName = $fileName
+                $Scripter.Options = $opts
+                $trigger.Script($opts) | Out-Null
+                Write-Host "        [SUCCESS]" -ForegroundColor Green
+                $successCount++
+            } catch {
+                Write-Host "        [FAILED]" -ForegroundColor Red
+                Write-ExportError -ObjectType 'TableTrigger' -ObjectName "$($trigger.Parent.Schema).$($trigger.Parent.Name).$($trigger.Name)" -ErrorRecord $_
+                $failCount++
+            }
+        }
+        Write-Output "  [SUMMARY] Exported $successCount/$($tableTriggers.Count) table trigger(s) successfully" + $(if ($failCount -gt 0) { " ($failCount failed)" } else { "" })
     }
     
-    # 18. Views
+    # 19. Views
     Write-Output ''
     Write-Output 'Exporting views...'
     $views = @($Database.Views | Where-Object { -not $_.IsSystemObject })
     if ($views.Count -gt 0) {
+        Write-Output "  Found $($views.Count) view(s) to export"
+        $successCount = 0
+        $failCount = 0
         $opts = New-ScriptingOptions -TargetVersion $TargetVersion
+        $Scripter.Options = $opts
+        
+        $currentItem = 0
         foreach ($view in $views) {
-            $fileName = Join-Path $OutputDir '13_Programmability/05_Views' "$($view.Schema).$($view.Name).sql"
-            $opts.FileName = $fileName
-            $Scripter.Options = $opts
-            $view.Script($opts)
+            $currentItem++
+            $percentComplete = [math]::Round(($currentItem / $views.Count) * 100)
+            try {
+                Write-Host ("  [{0,3}%]{1}.{2}..." -f $percentComplete, $view.Schema, $view.Name)
+                $fileName = Join-Path $OutputDir '13_Programmability/05_Views' "$($view.Schema).$($view.Name).sql"
+                $opts.FileName = $fileName
+                $Scripter.Options = $opts
+                $view.Script($opts) | Out-Null
+                Write-Host "        [SUCCESS]" -ForegroundColor Green
+                $successCount++
+            } catch {
+                Write-Host "        [FAILED]" -ForegroundColor Red
+                Write-ExportError -ObjectType 'View' -ObjectName "$($view.Schema).$($view.Name)" -ErrorRecord $_
+                $failCount++
+            }
         }
-        Write-Output "  [SUCCESS] Exported $($views.Count) view(s)"
+        Write-Output "  [SUMMARY] Exported $successCount/$($views.Count) view(s) successfully" + $(if ($failCount -gt 0) { " ($failCount failed)" } else { "" })
     }
     
-    # 19. Synonyms
+    # 20. Synonyms
     Write-Output ''
     Write-Output 'Exporting synonyms...'
     $synonyms = @($Database.Synonyms | Where-Object { -not $_.IsSystemObject })
     if ($synonyms.Count -gt 0) {
+        Write-Output "  Found $($synonyms.Count) synonym(s) to export"
+        $successCount = 0
+        $failCount = 0
+        $currentItem = 0
         $opts = New-ScriptingOptions -TargetVersion $TargetVersion
+        $Scripter.Options = $opts
+        
         foreach ($synonym in $synonyms) {
-            $fileName = Join-Path $OutputDir '14_Synonyms' "$($synonym.Schema).$($synonym.Name).sql"
-            $opts.FileName = $fileName
-            $Scripter.Options = $opts
-            $synonym.Script($opts)
+            $currentItem++
+            $percentComplete = [math]::Round(($currentItem / $synonyms.Count) * 100)
+            try {
+                Write-Host ("  [{0,3}%]{1}.{2}..." -f $percentComplete, $synonym.Schema, $synonym.Name)
+                $fileName = Join-Path $OutputDir '14_Synonyms' "$($synonym.Schema).$($synonym.Name).sql"
+                $opts.FileName = $fileName
+                $Scripter.Options = $opts
+                $synonym.Script($opts) | Out-Null
+                Write-Host "        [SUCCESS]" -ForegroundColor Green
+                $successCount++
+            } catch {
+                Write-Host "        [FAILED]" -ForegroundColor Red
+                Write-ExportError -ObjectType 'Synonym' -ObjectName "$($synonym.Schema).$($synonym.Name)" -ErrorRecord $_
+                $failCount++
+            }
         }
-        Write-Output "  [SUCCESS] Exported $($synonyms.Count) synonym(s)"
+        Write-Output "  [SUMMARY] Exported $successCount/$($synonyms.Count) synonym(s) successfully" + $(if ($failCount -gt 0) { " ($failCount failed)" } else { "" })
     }
     
-    # 20. Full-Text Search
+    # 21. Full-Text Search
     Write-Output ''
     Write-Output 'Exporting full-text search objects...'
     $ftCatalogs = @($Database.FullTextCatalogs | Where-Object { -not $_.IsSystemObject })
     $ftStopLists = @($Database.FullTextStopLists | Where-Object { -not $_.IsSystemObject })
     
     if ($ftCatalogs.Count -gt 0) {
+        Write-Output "  Found $($ftCatalogs.Count) full-text catalog(s) to export"
+        $successCount = 0
+        $failCount = 0
+        $currentItem = 0
         $opts = New-ScriptingOptions -TargetVersion $TargetVersion
-        $opts.FileName = Join-Path $OutputDir '15_FullTextSearch' '001_FullTextCatalogs.sql'
         $Scripter.Options = $opts
-        $Scripter.EnumScript($ftCatalogs)
-        Write-Output "  [SUCCESS] Exported $($ftCatalogs.Count) full-text catalog(s)"
+        
+        foreach ($ftc in $ftCatalogs) {
+            $currentItem++
+            $percentComplete = [math]::Round(($currentItem / $ftCatalogs.Count) * 100)
+            try {
+                Write-Host ("  [{0,3}%]{1}..." -f $percentComplete, $ftc.Name)
+                $fileName = Join-Path $OutputDir '15_FullTextSearch' "$($ftc.Name).catalog.sql"
+                $opts.FileName = $fileName
+                $Scripter.Options = $opts
+                $ftc.Script($opts) | Out-Null
+                Write-Host "        [SUCCESS]" -ForegroundColor Green
+                $successCount++
+            } catch {
+                Write-Host "        [FAILED]" -ForegroundColor Red
+                Write-ExportError -ObjectType 'FullTextCatalog' -ObjectName $ftc.Name -ErrorRecord $_
+                $failCount++
+            }
+        }
+        Write-Output "  [SUMMARY] Exported $successCount/$($ftCatalogs.Count) full-text catalog(s) successfully" + $(if ($failCount -gt 0) { " ($failCount failed)" } else { "" })
     }
     
     if ($ftStopLists.Count -gt 0) {
+        Write-Output "  Found $($ftStopLists.Count) full-text stop list(s) to export"
+        $successCount = 0
+        $failCount = 0
+        $currentItem = 0
         $opts = New-ScriptingOptions -TargetVersion $TargetVersion
-        $opts.FileName = Join-Path $OutputDir '15_FullTextSearch' '002_FullTextStopLists.sql'
         $Scripter.Options = $opts
-        $Scripter.EnumScript($ftStopLists)
-        Write-Output "  [SUCCESS] Exported $($ftStopLists.Count) full-text stop list(s)"
+        
+        foreach ($ftsl in $ftStopLists) {
+            $currentItem++
+            $percentComplete = [math]::Round(($currentItem / $ftStopLists.Count) * 100)
+            try {
+                Write-Host ("  [{0,3}%]{1}..." -f $percentComplete, $ftsl.Name)
+                $fileName = Join-Path $OutputDir '15_FullTextSearch' "$($ftsl.Name).stoplist.sql"
+                $opts.FileName = $fileName
+                $Scripter.Options = $opts
+                $ftsl.Script($opts) | Out-Null
+                Write-Host "        [SUCCESS]" -ForegroundColor Green
+                $successCount++
+            } catch {
+                Write-Host "        [FAILED]" -ForegroundColor Red
+                Write-ExportError -ObjectType 'FullTextStopList' -ObjectName $ftsl.Name -ErrorRecord $_
+                $failCount++
+            }
+        }
+        Write-Output "  [SUMMARY] Exported $successCount/$($ftStopLists.Count) full-text stop list(s) successfully" + $(if ($failCount -gt 0) { " ($failCount failed)" } else { "" })
     }
     
-    # 21. External Data Sources and File Formats
+    # 22. External Data Sources and File Formats
     Write-Output ''
     Write-Output 'Exporting external data sources and file formats...'
     try {
@@ -908,20 +1406,60 @@ function Export-DatabaseObjects {
         $externalFileFormats = @($Database.ExternalFileFormats)
         
         if ($externalDataSources.Count -gt 0) {
+            Write-Output "  Found $($externalDataSources.Count) external data source(s) to export"
+            $successCount = 0
+            $failCount = 0
+            $currentItem = 0
             $opts = New-ScriptingOptions -TargetVersion $TargetVersion
-            $opts.FileName = Join-Path $OutputDir '16_ExternalData' '001_ExternalDataSources.sql'
             $Scripter.Options = $opts
-            $Scripter.EnumScript($externalDataSources)
-            Write-Output "  [SUCCESS] Exported $($externalDataSources.Count) external data source(s)"
+            
+            foreach ($eds in $externalDataSources) {
+                $currentItem++
+                $percentComplete = [math]::Round(($currentItem / $externalDataSources.Count) * 100)
+                try {
+                    Write-Host ("  [{0,3}%]{1}..." -f $percentComplete, $eds.Name)
+                    $fileName = Join-Path $OutputDir '16_ExternalData' "$($eds.Name).datasource.sql"
+                    $opts.FileName = $fileName
+                    $Scripter.Options = $opts
+                    $eds.Script($opts) | Out-Null
+                    Write-Host "        [SUCCESS]" -ForegroundColor Green
+                    $successCount++
+                } catch {
+                    Write-Host "        [FAILED]" -ForegroundColor Red
+                    Write-ExportError -ObjectType 'ExternalDataSource' -ObjectName $eds.Name -ErrorRecord $_
+                    $failCount++
+                }
+            }
+            Write-Output "  [SUMMARY] Exported $successCount/$($externalDataSources.Count) external data source(s) successfully" + $(if ($failCount -gt 0) { " ($failCount failed)" } else { "" })
             Write-Output "  [INFO] External data sources contain environment-specific connection strings"
         }
         
         if ($externalFileFormats.Count -gt 0) {
+            Write-Output "  Found $($externalFileFormats.Count) external file format(s) to export"
+            $successCount = 0
+            $failCount = 0
+            $currentItem = 0
             $opts = New-ScriptingOptions -TargetVersion $TargetVersion
-            $opts.FileName = Join-Path $OutputDir '16_ExternalData' '002_ExternalFileFormats.sql'
             $Scripter.Options = $opts
-            $Scripter.EnumScript($externalFileFormats)
-            Write-Output "  [SUCCESS] Exported $($externalFileFormats.Count) external file format(s)"
+            
+            foreach ($eff in $externalFileFormats) {
+                $currentItem++
+                $percentComplete = [math]::Round(($currentItem / $externalFileFormats.Count) * 100)
+                try {
+                    Write-Host ("  [{0,3}%]{1}..." -f $percentComplete, $eff.Name)
+                    $fileName = Join-Path $OutputDir '16_ExternalData' "$($eff.Name).fileformat.sql"
+                    $opts.FileName = $fileName
+                    $Scripter.Options = $opts
+                    $eff.Script($opts) | Out-Null
+                    Write-Host "        [SUCCESS]" -ForegroundColor Green
+                    $successCount++
+                } catch {
+                    Write-Host "        [FAILED]" -ForegroundColor Red
+                    Write-ExportError -ObjectType 'ExternalFileFormat' -ObjectName $eff.Name -ErrorRecord $_
+                    $failCount++
+                }
+            }
+            Write-Output "  [SUMMARY] Exported $successCount/$($externalFileFormats.Count) external file format(s) successfully" + $(if ($failCount -gt 0) { " ($failCount failed)" } else { "" })
         }
         
         if ($externalDataSources.Count -eq 0 -and $externalFileFormats.Count -eq 0) {
@@ -931,17 +1469,37 @@ function Export-DatabaseObjects {
         Write-Output "  [INFO] External data objects not available (SQL Server 2016+ with PolyBase)"
     }
     
-    # 22. Search Property Lists
+    # 23. Search Property Lists
     Write-Output ''
     Write-Output 'Exporting search property lists...'
     try {
         $searchPropertyLists = @($Database.SearchPropertyLists)
         if ($searchPropertyLists.Count -gt 0) {
+            Write-Output "  Found $($searchPropertyLists.Count) search property list(s) to export"
+            $successCount = 0
+            $failCount = 0
+            $currentItem = 0
             $opts = New-ScriptingOptions -TargetVersion $TargetVersion
-            $opts.FileName = Join-Path $OutputDir '17_SearchPropertyLists' '001_SearchPropertyLists.sql'
             $Scripter.Options = $opts
-            $Scripter.EnumScript($searchPropertyLists)
-            Write-Output "  [SUCCESS] Exported $($searchPropertyLists.Count) search property list(s)"
+            
+            foreach ($spl in $searchPropertyLists) {
+                $currentItem++
+                $percentComplete = [math]::Round(($currentItem / $searchPropertyLists.Count) * 100)
+                try {
+                    Write-Host ("  [{0,3}%]{1}..." -f $percentComplete, $spl.Name)
+                    $fileName = Join-Path $OutputDir '17_SearchPropertyLists' "$($spl.Name).sql"
+                    $opts.FileName = $fileName
+                    $Scripter.Options = $opts
+                    $spl.Script($opts) | Out-Null
+                    Write-Host "        [SUCCESS]" -ForegroundColor Green
+                    $successCount++
+                } catch {
+                    Write-Host "        [FAILED]" -ForegroundColor Red
+                    Write-ExportError -ObjectType 'SearchPropertyList' -ObjectName $spl.Name -ErrorRecord $_
+                    $failCount++
+                }
+            }
+            Write-Output "  [SUMMARY] Exported $successCount/$($searchPropertyLists.Count) search property list(s) successfully" + $(if ($failCount -gt 0) { " ($failCount failed)" } else { "" })
         } else {
             Write-Output "  [INFO] No search property lists found"
         }
@@ -949,17 +1507,37 @@ function Export-DatabaseObjects {
         Write-Output "  [INFO] Search property lists not available (SQL Server 2008+)"
     }
     
-    # 23. Plan Guides
+    # 24. Plan Guides
     Write-Output ''
     Write-Output 'Exporting plan guides...'
     try {
         $planGuides = @($Database.PlanGuides)
         if ($planGuides.Count -gt 0) {
+            Write-Output "  Found $($planGuides.Count) plan guide(s) to export"
+            $successCount = 0
+            $failCount = 0
+            $currentItem = 0
             $opts = New-ScriptingOptions -TargetVersion $TargetVersion
-            $opts.FileName = Join-Path $OutputDir '18_PlanGuides' '001_PlanGuides.sql'
             $Scripter.Options = $opts
-            $Scripter.EnumScript($planGuides)
-            Write-Output "  [SUCCESS] Exported $($planGuides.Count) plan guide(s)"
+            
+            foreach ($pg in $planGuides) {
+                $currentItem++
+                $percentComplete = [math]::Round(($currentItem / $planGuides.Count) * 100)
+                try {
+                    Write-Host ("  [{0,3}%]{1}..." -f $percentComplete, $pg.Name)
+                    $fileName = Join-Path $OutputDir '18_PlanGuides' "$($pg.Name).sql"
+                    $opts.FileName = $fileName
+                    $Scripter.Options = $opts
+                    $pg.Script($opts) | Out-Null
+                    Write-Host "        [SUCCESS]" -ForegroundColor Green
+                    $successCount++
+                } catch {
+                    Write-Host "        [FAILED]" -ForegroundColor Red
+                    Write-ExportError -ObjectType 'PlanGuide' -ObjectName $pg.Name -ErrorRecord $_
+                    $failCount++
+                }
+            }
+            Write-Output "  [SUMMARY] Exported $successCount/$($planGuides.Count) plan guide(s) successfully" + $(if ($failCount -gt 0) { " ($failCount failed)" } else { "" })
             Write-Output "  [INFO] Plan guides may need adjustment for target environment query patterns"
         } else {
             Write-Output "  [INFO] No plan guides found"
@@ -968,7 +1546,7 @@ function Export-DatabaseObjects {
         Write-Output "  [INFO] Plan guides not available"
     }
     
-    # 24. Security Objects (Keys, Certificates, Roles, Users, Audit)
+    # 25. Security Objects (Keys, Certificates, Roles, Users, Audit)
     Write-Output ''
     Write-Output 'Exporting security objects...'
     $asymmetricKeys = @($Database.AsymmetricKeys | Where-Object { -not $_.IsSystemObject })
@@ -980,86 +1558,241 @@ function Export-DatabaseObjects {
     $auditSpecs = @($Database.DatabaseAuditSpecifications)
     
     if ($asymmetricKeys.Count -gt 0) {
+        Write-Output "  Found $($asymmetricKeys.Count) asymmetric key(s) to export"
+        $successCount = 0
+        $failCount = 0
+        $currentItem = 0
         $opts = New-ScriptingOptions -TargetVersion $TargetVersion
-        $opts.FileName = Join-Path $OutputDir '19_Security' '001_AsymmetricKeys.sql'
         $Scripter.Options = $opts
-        $Scripter.EnumScript($asymmetricKeys)
-        Write-Output "  [SUCCESS] Exported $($asymmetricKeys.Count) asymmetric key(s)"
+        
+        foreach ($key in $asymmetricKeys) {
+            $currentItem++
+            $percentComplete = [math]::Round(($currentItem / $asymmetricKeys.Count) * 100)
+            try {
+                Write-Host ("  [{0,3}%]{1}..." -f $percentComplete, $key.Name)
+                $fileName = Join-Path $OutputDir '19_Security' "$($key.Name).asymmetrickey.sql"
+                $opts.FileName = $fileName
+                $Scripter.Options = $opts
+                $key.Script($opts) | Out-Null
+                Write-Host "        [SUCCESS]" -ForegroundColor Green
+                $successCount++
+            } catch {
+                Write-Host "        [FAILED]" -ForegroundColor Red
+                Write-ExportError -ObjectType 'AsymmetricKey' -ObjectName $key.Name -ErrorRecord $_
+                $failCount++
+            }
+        }
+        Write-Output "  [SUMMARY] Exported $successCount/$($asymmetricKeys.Count) asymmetric key(s) successfully" + $(if ($failCount -gt 0) { " ($failCount failed)" } else { "" })
     }
     
     if ($certs.Count -gt 0) {
+        Write-Output "  Found $($certs.Count) certificate(s) to export"
+        $successCount = 0
+        $failCount = 0
+        $currentItem = 0
         $opts = New-ScriptingOptions -TargetVersion $TargetVersion
-        $opts.FileName = Join-Path $OutputDir '19_Security' '002_Certificates.sql'
         $Scripter.Options = $opts
-        $Scripter.EnumScript($certs)
-        Write-Output "  [SUCCESS] Exported $($certs.Count) certificate(s)"
+        
+        foreach ($cert in $certs) {
+            $currentItem++
+            $percentComplete = [math]::Round(($currentItem / $certs.Count) * 100)
+            try {
+                Write-Host ("  [{0,3}%]{1}..." -f $percentComplete, $cert.Name)
+                $fileName = Join-Path $OutputDir '19_Security' "$($cert.Name).certificate.sql"
+                $opts.FileName = $fileName
+                $Scripter.Options = $opts
+                $cert.Script($opts) | Out-Null
+                Write-Host "        [SUCCESS]" -ForegroundColor Green
+                $successCount++
+            } catch {
+                Write-Host "        [FAILED]" -ForegroundColor Red
+                Write-ExportError -ObjectType 'Certificate' -ObjectName $cert.Name -ErrorRecord $_
+                $failCount++
+            }
+        }
+        Write-Output "  [SUMMARY] Exported $successCount/$($certs.Count) certificate(s) successfully" + $(if ($failCount -gt 0) { " ($failCount failed)" } else { "" })
     }
     
     if ($symKeys.Count -gt 0) {
+        Write-Output "  Found $($symKeys.Count) symmetric key(s) to export"
+        $successCount = 0
+        $failCount = 0
+        $currentItem = 0
         $opts = New-ScriptingOptions -TargetVersion $TargetVersion
-        $opts.FileName = Join-Path $OutputDir '19_Security' '003_SymmetricKeys.sql'
         $Scripter.Options = $opts
-        $Scripter.EnumScript($symKeys)
-        Write-Output "  [SUCCESS] Exported $($symKeys.Count) symmetric key(s)"
+        
+        foreach ($key in $symKeys) {
+            $currentItem++
+            $percentComplete = [math]::Round(($currentItem / $symKeys.Count) * 100)
+            try {
+                Write-Host ("  [{0,3}%]{1}..." -f $percentComplete, $key.Name)
+                $fileName = Join-Path $OutputDir '19_Security' "$($key.Name).symmetrickey.sql"
+                $opts.FileName = $fileName
+                $Scripter.Options = $opts
+                $key.Script($opts) | Out-Null
+                Write-Host "        [SUCCESS]" -ForegroundColor Green
+                $successCount++
+            } catch {
+                Write-Host "        [FAILED]" -ForegroundColor Red
+                Write-ExportError -ObjectType 'SymmetricKey' -ObjectName $key.Name -ErrorRecord $_
+                $failCount++
+            }
+        }
+        Write-Output "  [SUMMARY] Exported $successCount/$($symKeys.Count) symmetric key(s) successfully" + $(if ($failCount -gt 0) { " ($failCount failed)" } else { "" })
     }
     
     if ($appRoles.Count -gt 0) {
+        Write-Output "  Found $($appRoles.Count) application role(s) to export"
+        $successCount = 0
+        $failCount = 0
+        $currentItem = 0
         $opts = New-ScriptingOptions -TargetVersion $TargetVersion
-        $opts.FileName = Join-Path $OutputDir '19_Security' '004_ApplicationRoles.sql'
         $Scripter.Options = $opts
-        $Scripter.EnumScript($appRoles)
-        Write-Output "  [SUCCESS] Exported $($appRoles.Count) application role(s)"
+        
+        foreach ($role in $appRoles) {
+            $currentItem++
+            $percentComplete = [math]::Round(($currentItem / $appRoles.Count) * 100)
+            try {
+                Write-Host ("  [{0,3}%]{1}..." -f $percentComplete, $role.Name)
+                $fileName = Join-Path $OutputDir '19_Security' "$($role.Name).approle.sql"
+                $opts.FileName = $fileName
+                $Scripter.Options = $opts
+                $role.Script($opts) | Out-Null
+                Write-Host "        [SUCCESS]" -ForegroundColor Green
+                $successCount++
+            } catch {
+                Write-Host "        [FAILED]" -ForegroundColor Red
+                Write-ExportError -ObjectType 'ApplicationRole' -ObjectName $role.Name -ErrorRecord $_
+                $failCount++
+            }
+        }
+        Write-Output "  [SUMMARY] Exported $successCount/$($appRoles.Count) application role(s) successfully" + $(if ($failCount -gt 0) { " ($failCount failed)" } else { "" })
     }
     
     if ($dbRoles.Count -gt 0) {
+        Write-Output "  Found $($dbRoles.Count) database role(s) to export"
+        $successCount = 0
+        $failCount = 0
         $opts = New-ScriptingOptions -TargetVersion $TargetVersion
-        $opts.FileName = Join-Path $OutputDir '19_Security' '005_DatabaseRoles.sql'
         $Scripter.Options = $opts
-        $Scripter.EnumScript($dbRoles)
-        Write-Output "  [SUCCESS] Exported $($dbRoles.Count) database role(s)"
+        
+        $currentItem = 0
+        foreach ($role in $dbRoles) {
+            $currentItem++
+            $percentComplete = [math]::Round(($currentItem / $dbRoles.Count) * 100)
+            try {
+                Write-Host ("  [{0,3}%]{1}..." -f $percentComplete, $role.Name)
+                $fileName = Join-Path $OutputDir '19_Security' "$($role.Name).role.sql"
+                $opts.FileName = $fileName
+                $Scripter.Options = $opts
+                $role.Script($opts) | Out-Null
+                Write-Host "        [SUCCESS]" -ForegroundColor Green
+                $successCount++
+            } catch {
+                Write-Host "        [FAILED]" -ForegroundColor Red
+                Write-ExportError -ObjectType 'DatabaseRole' -ObjectName $role.Name -ErrorRecord $_
+                $failCount++
+            }
+        }
+        Write-Output "  [SUMMARY] Exported $successCount/$($dbRoles.Count) database role(s) successfully" + $(if ($failCount -gt 0) { " ($failCount failed)" } else { "" })
     }
     
     if ($dbUsers.Count -gt 0) {
+        Write-Output "  Found $($dbUsers.Count) database user(s) to export"
+        $successCount = 0
+        $failCount = 0
+        $currentItem = 0
         $opts = New-ScriptingOptions -TargetVersion $TargetVersion
-        $opts.FileName = Join-Path $OutputDir '19_Security' '006_DatabaseUsers.sql'
         $Scripter.Options = $opts
-        $Scripter.EnumScript($dbUsers)
-        Write-Output "  [SUCCESS] Exported $($dbUsers.Count) database user(s)"
+        
+        foreach ($user in $dbUsers) {
+            $currentItem++
+            $percentComplete = [math]::Round(($currentItem / $dbUsers.Count) * 100)
+            try {
+                Write-Host ("  [{0,3}%]{1}..." -f $percentComplete, $user.Name)
+                $fileName = Join-Path $OutputDir '19_Security' "$($user.Name).user.sql"
+                $opts.FileName = $fileName
+                $Scripter.Options = $opts
+                $user.Script($opts) | Out-Null
+                Write-Host "        [SUCCESS]" -ForegroundColor Green
+                $successCount++
+            } catch {
+                Write-Host "        [FAILED]" -ForegroundColor Red
+                Write-ExportError -ObjectType 'DatabaseUser' -ObjectName $user.Name -ErrorRecord $_
+                $failCount++
+            }
+        }
+        Write-Output "  [SUMMARY] Exported $successCount/$($dbUsers.Count) database user(s) successfully" + $(if ($failCount -gt 0) { " ($failCount failed)" } else { "" })
     }
     
     if ($auditSpecs.Count -gt 0) {
+        Write-Output "  Found $($auditSpecs.Count) database audit specification(s) to export"
+        $successCount = 0
+        $failCount = 0
         $opts = New-ScriptingOptions -TargetVersion $TargetVersion
-        $opts.FileName = Join-Path $OutputDir '19_Security' '007_DatabaseAuditSpecifications.sql'
         $Scripter.Options = $opts
-        $Scripter.EnumScript($auditSpecs)
-        Write-Output "  [SUCCESS] Exported $($auditSpecs.Count) database audit specification(s)"
+        
+        $currentItem = 0
+        foreach ($spec in $auditSpecs) {
+            $currentItem++
+            $percentComplete = [math]::Round(($currentItem / $auditSpecs.Count) * 100)
+            try {
+                Write-Host ("  [{0,3}%]{1}..." -f $percentComplete, $spec.Name)
+                $fileName = Join-Path $OutputDir '19_Security' "$($spec.Name).auditspec.sql"
+                $opts.FileName = $fileName
+                $Scripter.Options = $opts
+                $spec.Script($opts) | Out-Null
+                Write-Host "        [SUCCESS]" -ForegroundColor Green
+                $successCount++
+            } catch {
+                Write-Host "        [FAILED]" -ForegroundColor Red
+                Write-ExportError -ObjectType 'DatabaseAuditSpecification' -ObjectName $spec.Name -ErrorRecord $_
+                $failCount++
+            }
+        }
+        Write-Output "  [SUMMARY] Exported $successCount/$($auditSpecs.Count) database audit specification(s) successfully" + $(if ($failCount -gt 0) { " ($failCount failed)" } else { "" })
     }
     
-    # Security Policies (Row-Level Security)
+    # 26. Security Policies (Row-Level Security)
     Write-Output ''
     Write-Output 'Exporting security policies (Row-Level Security)...'
     try {
         $securityPolicies = @($Database.SecurityPolicies)
         if ($securityPolicies.Count -gt 0) {
-            $policyFilePath = Join-Path $OutputDir '19_Security' '008_SecurityPolicies.sql'
-            $policyScript = New-Object System.Text.StringBuilder
-            [void]$policyScript.AppendLine("-- Row-Level Security Policies")
-            [void]$policyScript.AppendLine("-- NOTE: Ensure predicate functions are created before applying policies")
-            [void]$policyScript.AppendLine("")
+            Write-Output "  Found $($securityPolicies.Count) security policy(ies) to export"
+            $successCount = 0
+            $failCount = 0
+            $opts = New-ScriptingOptions -TargetVersion $TargetVersion
+            $Scripter.Options = $opts
             
+            $currentItem = 0
             foreach ($policy in $securityPolicies) {
-                # Script the security policy
-                $opts = New-ScriptingOptions -TargetVersion $TargetVersion
-                $Scripter.Options = $opts
-                $policyDef = $Scripter.Script($policy)
-                [void]$policyScript.AppendLine("-- Security Policy: $($policy.Schema).$($policy.Name)")
-                [void]$policyScript.AppendLine($policyDef -join "`n")
-                [void]$policyScript.AppendLine("GO")
-                [void]$policyScript.AppendLine("")
+                $currentItem++
+                $percentComplete = [math]::Round(($currentItem / $securityPolicies.Count) * 100)
+                try {
+                    Write-Host ("  [{0,3}%]{1}.{2}..." -f $percentComplete, $policy.Schema, $policy.Name)
+                    $fileName = Join-Path $OutputDir '19_Security' "$($policy.Schema).$($policy.Name).securitypolicy.sql"
+                    
+                    # Create file with header
+                    $policyScript = New-Object System.Text.StringBuilder
+                    [void]$policyScript.AppendLine("-- Row-Level Security Policy: $($policy.Schema).$($policy.Name)")
+                    [void]$policyScript.AppendLine("-- NOTE: Ensure predicate functions are created before applying this policy")
+                    [void]$policyScript.AppendLine("")
+                    
+                    $policyDef = $Scripter.Script($policy)
+                    [void]$policyScript.AppendLine($policyDef -join "`n")
+                    [void]$policyScript.AppendLine("GO")
+                    
+                    $policyScript.ToString() | Out-File -FilePath $fileName -Encoding UTF8
+                    Write-Host "        [SUCCESS]" -ForegroundColor Green
+                    $successCount++
+                } catch {
+                    Write-Host "        [FAILED]" -ForegroundColor Red
+                    Write-ExportError -ObjectType 'SecurityPolicy' -ObjectName "$($policy.Schema).$($policy.Name)" -ErrorRecord $_
+                    $failCount++
+                }
             }
-            
-            $policyScript.ToString() | Out-File -FilePath $policyFilePath -Encoding UTF8
-            Write-Output "  [SUCCESS] Exported $($securityPolicies.Count) security policy(ies)"
+            Write-Output "  [SUMMARY] Exported $successCount/$($securityPolicies.Count) security policy(ies) successfully" + $(if ($failCount -gt 0) { " ($failCount failed)" } else { "" })
             Write-Output "  [INFO] Row-Level Security policies require predicate functions to exist first"
         } else {
             Write-Output "  [INFO] No security policies found"
@@ -1093,24 +1826,52 @@ function Export-TableData {
         return
     }
     
+    Write-Output "  Found $($tables.Count) table(s) to check for data export"
+    
     $opts = New-ScriptingOptions -TargetVersion $TargetVersion -Overrides @{
         ScriptSchema = $false
         ScriptData   = $true
     }
+    $Scripter.Options = $opts
     
+    $successCount = 0
+    $failCount = 0
+    $emptyCount = 0
+    
+    $currentItem = 0
     foreach ($table in $tables) {
-        # Use SMO Database object to execute count query
-        $countQuery = "SELECT COUNT(*) FROM [$($table.Schema)].[$($table.Name)]"
-        $ds = $Database.ExecuteWithResults($countQuery)
-        $rowCount = $ds.Tables[0].Rows[0][0]
-        
-        if ($rowCount -gt 0) {
-            $fileName = Join-Path $OutputDir '20_Data' "$($table.Schema).$($table.Name).data.sql"
-            $opts.FileName = $fileName
-            $Scripter.Options = $opts
-            $Scripter.EnumScript($table)
-            Write-Output "  [SUCCESS] Exported $rowCount row(s) from $($table.Schema).$($table.Name)"
+        $currentItem++
+        $percentComplete = [math]::Round(($currentItem / $tables.Count) * 100)
+        try {
+            # Use SMO Database object to execute count query
+            $countQuery = "SELECT COUNT(*) FROM [$($table.Schema)].[$($table.Name)]"
+            $ds = $Database.ExecuteWithResults($countQuery)
+            $rowCount = $ds.Tables[0].Rows[0][0]
+            
+            if ($rowCount -gt 0) {
+                Write-Host ("  [{0,3}%]{1}.{2} ({3} row(s))..." -f $percentComplete, $table.Schema, $table.Name, $rowCount)
+                $fileName = Join-Path $OutputDir '20_Data' "$($table.Schema).$($table.Name).data.sql"
+                $opts.FileName = $fileName
+                $Scripter.Options = $opts
+                $Scripter.EnumScript($table) | Out-Null
+                Write-Host "        [SUCCESS]" -ForegroundColor Green
+                $successCount++
+            } else {
+                $emptyCount++
+            }
+        } catch {
+            Write-Host "        [FAILED]" -ForegroundColor Red
+            Write-ExportError -ObjectType 'TableData' -ObjectName "$($table.Schema).$($table.Name)" -ErrorRecord $_ -AdditionalContext "Exporting $rowCount row(s)"
+            $failCount++
         }
+    }
+    
+    Write-Output "  [SUMMARY] Exported data from $successCount/$($tables.Count) table(s) successfully"
+    if ($emptyCount -gt 0) {
+        Write-Output "  [INFO] Skipped $emptyCount empty table(s)"
+    }
+    if ($failCount -gt 0) {
+        Write-Output "  [WARNING] Failed to export data from $failCount table(s)"
     }
 }
 
