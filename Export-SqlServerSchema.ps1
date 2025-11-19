@@ -214,11 +214,17 @@ function Write-ExportError {
         [string]$ObjectType,
         [string]$ObjectName,
         [System.Management.Automation.ErrorRecord]$ErrorRecord,
-        [string]$AdditionalContext = ''
+        [string]$AdditionalContext = '',
+        [string]$FilePath = ''
     )
     
     $errorMsg = "Failed to export $ObjectType$(if ($ObjectName) { ": $ObjectName" })"
     Write-Host "[ERROR] $errorMsg" -ForegroundColor Red
+    
+    if ($FilePath) {
+        Write-Host "  Target File: $FilePath" -ForegroundColor Yellow
+        Write-Host "  Path Length: $($FilePath.Length) characters" -ForegroundColor Yellow
+    }
     
     if ($AdditionalContext) {
         Write-Host "  Context: $AdditionalContext" -ForegroundColor Yellow
@@ -227,6 +233,7 @@ function Write-ExportError {
     # Build detailed log entry
     $logDetails = @"
 [ERROR] $errorMsg
+$(if ($FilePath) { "Target File: $FilePath (length: $($FilePath.Length))" })
 $(if ($AdditionalContext) { "Context: $AdditionalContext" })
 "@
     
@@ -370,6 +377,45 @@ function Test-DatabaseConnection {
             $server.ConnectionContext.Disconnect()
         }
     }
+}
+
+function Get-SafeFileName {
+    <#
+    .SYNOPSIS
+        Sanitizes a string to be used as a filename.
+    .DESCRIPTION
+        Replaces invalid filesystem characters with underscores.
+        Handles characters that are invalid on Windows, Linux, and macOS.
+        Also handles path length limitations.
+    #>
+    param([string]$Name)
+    
+    # Replace invalid filesystem characters with underscore
+    # Windows: < > : " / \ | ? *
+    # Also handle control characters (0x00-0x1F)
+    $invalidChars = '[<>:"/\\|?*\x00-\x1F]'
+    $safeName = $Name -replace $invalidChars, '_'
+    
+    # Remove leading/trailing dots and spaces (problematic on Windows)
+    $safeName = $safeName.Trim('. ')
+    
+    # Windows reserves these filenames (CON, PRN, AUX, NUL, COM1-9, LPT1-9)
+    $reservedNames = '^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(\.|$)'
+    if ($safeName -match $reservedNames) {
+        $safeName = "_$safeName"
+    }
+    
+    # Ensure the name is not empty after sanitization
+    if ([string]::IsNullOrWhiteSpace($safeName)) {
+        $safeName = 'unnamed'
+    }
+    
+    # Truncate if too long (keep 200 chars max to allow for path + extensions)
+    if ($safeName.Length -gt 200) {
+        $safeName = $safeName.Substring(0, 200)
+    }
+    
+    return $safeName
 }
 
 function Ensure-DirectoryExists {
@@ -851,7 +897,8 @@ function Export-DatabaseObjects {
             $percentComplete = [math]::Round(($currentItem / $schemas.Count) * 100)
             try {
                 Write-Host ("  [{0,3}%]{1}..." -f $percentComplete, $schema.Name)
-                $fileName = Join-Path $OutputDir '02_Schemas' "$($schema.Name).sql"
+                $safeName = Get-SafeFileName $schema.Name
+                $fileName = Join-Path $OutputDir '02_Schemas' "$safeName.sql"
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
@@ -860,7 +907,7 @@ function Export-DatabaseObjects {
                 $successCount++
             } catch {
                 Write-Host "        [FAILED]" -ForegroundColor Red
-                Write-ExportError -ObjectType 'Schema' -ObjectName $schema.Name -ErrorRecord $_
+                Write-ExportError -ObjectType 'Schema' -ObjectName $schema.Name -ErrorRecord $_ -FilePath $fileName
                 $failCount++
             }
         }
@@ -889,7 +936,7 @@ function Export-DatabaseObjects {
             $percentComplete = [math]::Round(($currentItem / $sequences.Count) * 100)
             try {
                 Write-Host ("  [{0,3}%]{1}.{2}..." -f $percentComplete, $sequence.Schema, $sequence.Name)
-                $fileName = Join-Path $OutputDir '03_Sequences' "$($sequence.Schema).$($sequence.Name).sql"
+                $fileName = Join-Path $OutputDir '03_Sequences' "$(Get-SafeFileName $($sequence.Schema)).$(Get-SafeFileName $($sequence.Name)).sql"
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
@@ -898,7 +945,7 @@ function Export-DatabaseObjects {
                 $successCount++
             } catch {
                 Write-Host "        [FAILED]" -ForegroundColor Red
-                Write-ExportError -ObjectType 'Sequence' -ObjectName "$($sequence.Schema).$($sequence.Name)" -ErrorRecord $_
+                Write-ExportError -ObjectType 'Sequence' -ObjectName "$($sequence.Schema).$($sequence.Name)" -ErrorRecord $_ -FilePath $fileName -FilePath $fileName
                 $failCount++
             }
         }
@@ -923,7 +970,7 @@ function Export-DatabaseObjects {
             $percentComplete = [math]::Round(($currentItem / $partitionFunctions.Count) * 100)
             try {
                 Write-Host ("  [{0,3}%]{1}..." -f $percentComplete, $pf.Name)
-                $fileName = Join-Path $OutputDir '04_PartitionFunctions' "$($pf.Name).sql"
+                $fileName = Join-Path $OutputDir '04_PartitionFunctions' "$(Get-SafeFileName $($pf.Name)).sql"
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
@@ -932,7 +979,7 @@ function Export-DatabaseObjects {
                 $successCount++
             } catch {
                 Write-Host "        [FAILED]" -ForegroundColor Red
-                Write-ExportError -ObjectType 'PartitionFunction' -ObjectName $pf.Name -ErrorRecord $_
+                Write-ExportError -ObjectType 'PartitionFunction' -ObjectName $pf.Name -ErrorRecord $_ -FilePath $fileName
                 $failCount++
             }
         }
@@ -956,7 +1003,7 @@ function Export-DatabaseObjects {
             $percentComplete = [math]::Round(($currentItem / $partitionSchemes.Count) * 100)
             try {
                 Write-Host ("  [{0,3}%]{1}..." -f $percentComplete, $ps.Name)
-                $fileName = Join-Path $OutputDir '05_PartitionSchemes' "$($ps.Name).sql"
+                $fileName = Join-Path $OutputDir '05_PartitionSchemes' "$(Get-SafeFileName $($ps.Name)).sql"
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
@@ -965,7 +1012,7 @@ function Export-DatabaseObjects {
                 $successCount++
             } catch {
                 Write-Host "        [FAILED]" -ForegroundColor Red
-                Write-ExportError -ObjectType 'PartitionScheme' -ObjectName $ps.Name -ErrorRecord $_
+                Write-ExportError -ObjectType 'PartitionScheme' -ObjectName $ps.Name -ErrorRecord $_ -FilePath $fileName
                 $failCount++
             }
         }
@@ -994,7 +1041,8 @@ function Export-DatabaseObjects {
             try {
                 $typeName = if ($type.Schema) { "$($type.Schema).$($type.Name)" } else { $type.Name }
                 Write-Host ("  [{0,3}%]{1}..." -f $percentComplete, $typeName)
-                $fileName = Join-Path $OutputDir '06_Types' "$typeName.sql"
+                $safeTypeName = Get-SafeFileName $typeName
+                $fileName = Join-Path $OutputDir '06_Types' "$safeTypeName.sql"
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
@@ -1004,7 +1052,7 @@ function Export-DatabaseObjects {
             } catch {
                 Write-Host "        [FAILED]" -ForegroundColor Red
                 $typeName = if ($type.Schema) { "$($type.Schema).$($type.Name)" } else { $type.Name }
-                Write-ExportError -ObjectType 'UserDefinedType' -ObjectName $typeName -ErrorRecord $_
+                Write-ExportError -ObjectType 'UserDefinedType' -ObjectName $typeName -ErrorRecord $_ -FilePath $fileName
                 $failCount++
             }
         }
@@ -1028,7 +1076,7 @@ function Export-DatabaseObjects {
             $percentComplete = [math]::Round(($currentItem / $xmlSchemaCollections.Count) * 100)
             try {
                 Write-Host ("  [{0,3}%]{1}.{2}..." -f $percentComplete, $xsc.Schema, $xsc.Name)
-                $fileName = Join-Path $OutputDir '07_XmlSchemaCollections' "$($xsc.Schema).$($xsc.Name).sql"
+                $fileName = Join-Path $OutputDir '07_XmlSchemaCollections' "$(Get-SafeFileName $($xsc.Schema)).$(Get-SafeFileName $($xsc.Name)).sql"
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
@@ -1037,7 +1085,7 @@ function Export-DatabaseObjects {
                 $successCount++
             } catch {
                 Write-Host "        [FAILED]" -ForegroundColor Red
-                Write-ExportError -ObjectType 'XmlSchemaCollection' -ObjectName "$($xsc.Schema).$($xsc.Name)" -ErrorRecord $_
+                Write-ExportError -ObjectType 'XmlSchemaCollection' -ObjectName "$($xsc.Schema).$($xsc.Name)" -ErrorRecord $_ -FilePath $fileName
                 $failCount++
             }
         }
@@ -1075,7 +1123,7 @@ function Export-DatabaseObjects {
             $percentComplete = [math]::Round(($currentItem / $tables.Count) * 100)
             try {
                 Write-Host ("  [{0,3}%]{1}.{2}..." -f $percentComplete, $table.Schema, $table.Name)
-                $fileName = Join-Path $OutputDir '08_Tables_PrimaryKey' "$($table.Schema).$($table.Name).sql"
+                $fileName = Join-Path $OutputDir '08_Tables_PrimaryKey' "$(Get-SafeFileName $($table.Schema)).$(Get-SafeFileName $($table.Name)).sql"
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
@@ -1084,7 +1132,7 @@ function Export-DatabaseObjects {
                 $successCount++
             } catch {
                 Write-Host "        [FAILED]" -ForegroundColor Red
-                Write-ExportError -ObjectType 'Table' -ObjectName "$($table.Schema).$($table.Name)" -ErrorRecord $_ -AdditionalContext "Exporting table structure with primary keys"
+                Write-ExportError -ObjectType 'Table' -ObjectName "$($table.Schema).$($table.Name)" -ErrorRecord $_ -FilePath $fileName -AdditionalContext "Exporting table structure with primary keys"
                 $failCount++
             }
         }
@@ -1111,7 +1159,7 @@ function Export-DatabaseObjects {
                 $foreignKeys += @($table.ForeignKeys)
             }
         } catch {
-            Write-ExportError -ObjectType 'ForeignKeyCollection' -ObjectName "$($table.Schema).$($table.Name)" -ErrorRecord $_ -AdditionalContext "Accessing foreign keys collection"
+            Write-ExportError -ObjectType 'ForeignKeyCollection' -ObjectName "$($table.Schema).$($table.Name)" -ErrorRecord $_ -FilePath $fileName -AdditionalContext "Accessing foreign keys collection"
         }
     }
     if ($foreignKeys.Count -gt 0) {
@@ -1130,7 +1178,7 @@ function Export-DatabaseObjects {
             $percentComplete = [math]::Round(($currentItem / $foreignKeys.Count) * 100)
             try {
                 Write-Host ("  [{0,3}%]{1}.{2}.{3}..." -f $percentComplete, $fk.Parent.Schema, $fk.Parent.Name, $fk.Name)
-                $fileName = Join-Path $OutputDir '09_Tables_ForeignKeys' "$($fk.Parent.Schema).$($fk.Parent.Name).$($fk.Name).sql"
+                $fileName = Join-Path $OutputDir '09_Tables_ForeignKeys' "$(Get-SafeFileName $($fk.Parent.Schema)).$(Get-SafeFileName $($fk.Parent.Name)).$(Get-SafeFileName $($fk.Name)).sql"
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
@@ -1139,7 +1187,7 @@ function Export-DatabaseObjects {
                 $successCount++
             } catch {
                 Write-Host "        [FAILED]" -ForegroundColor Red
-                Write-ExportError -ObjectType 'ForeignKey' -ObjectName "$($fk.Parent.Schema).$($fk.Parent.Name).$($fk.Name)" -ErrorRecord $_
+                Write-ExportError -ObjectType 'ForeignKey' -ObjectName "$($fk.Parent.Schema).$($fk.Parent.Name).$($fk.Name)" -ErrorRecord $_ -FilePath $fileName
                 $failCount++
             }
         }
@@ -1170,7 +1218,7 @@ function Export-DatabaseObjects {
                 })
             }
         } catch {
-            Write-ExportError -ObjectType 'IndexCollection' -ObjectName "$($table.Schema).$($table.Name)" -ErrorRecord $_ -AdditionalContext "Accessing indexes collection"
+            Write-ExportError -ObjectType 'IndexCollection' -ObjectName "$($table.Schema).$($table.Name)" -ErrorRecord $_ -FilePath $fileName -AdditionalContext "Accessing indexes collection"
         }
     }
     if ($indexes.Count -gt 0) {
@@ -1191,7 +1239,7 @@ function Export-DatabaseObjects {
             $percentComplete = [math]::Round(($currentItem / $indexes.Count) * 100)
             try {
                 Write-Host ("  [{0,3}%]{1}.{2}.{3}..." -f $percentComplete, $index.Parent.Schema, $index.Parent.Name, $index.Name)
-                $fileName = Join-Path $OutputDir '10_Indexes' "$($index.Parent.Schema).$($index.Parent.Name).$($index.Name).sql"
+                $fileName = Join-Path $OutputDir '10_Indexes' "$(Get-SafeFileName $($index.Parent.Schema)).$(Get-SafeFileName $($index.Parent.Name)).$(Get-SafeFileName $($index.Name)).sql"
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
@@ -1200,7 +1248,7 @@ function Export-DatabaseObjects {
                 $successCount++
             } catch {
                 Write-Host "        [FAILED]" -ForegroundColor Red
-                Write-ExportError -ObjectType 'Index' -ObjectName "$($index.Parent.Schema).$($index.Parent.Name).$($index.Name)" -ErrorRecord $_
+                Write-ExportError -ObjectType 'Index' -ObjectName "$($index.Parent.Schema).$($index.Parent.Name).$($index.Name)" -ErrorRecord $_ -FilePath $fileName
                 $failCount++
             }
         }
@@ -1225,7 +1273,7 @@ function Export-DatabaseObjects {
             $percentComplete = [math]::Round(($currentItem / $defaults.Count) * 100)
             try {
                 Write-Host ("  [{0,3}%]{1}.{2}..." -f $percentComplete, $default.Schema, $default.Name)
-                $fileName = Join-Path $OutputDir '11_Defaults' "$($default.Schema).$($default.Name).sql"
+                $fileName = Join-Path $OutputDir '11_Defaults' "$(Get-SafeFileName $($default.Schema)).$(Get-SafeFileName $($default.Name)).sql"
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
@@ -1234,7 +1282,7 @@ function Export-DatabaseObjects {
                 $successCount++
             } catch {
                 Write-Host "        [FAILED]" -ForegroundColor Red
-                Write-ExportError -ObjectType 'Default' -ObjectName "$($default.Schema).$($default.Name)" -ErrorRecord $_
+                Write-ExportError -ObjectType 'Default' -ObjectName "$($default.Schema).$($default.Name)" -ErrorRecord $_ -FilePath $fileName
                 $failCount++
             }
         }
@@ -1258,7 +1306,7 @@ function Export-DatabaseObjects {
             $percentComplete = [math]::Round(($currentItem / $rules.Count) * 100)
             try {
                 Write-Host ("  [{0,3}%]{1}.{2}..." -f $percentComplete, $rule.Schema, $rule.Name)
-                $fileName = Join-Path $OutputDir '12_Rules' "$($rule.Schema).$($rule.Name).sql"
+                $fileName = Join-Path $OutputDir '12_Rules' "$(Get-SafeFileName $($rule.Schema)).$(Get-SafeFileName $($rule.Name)).sql"
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
@@ -1267,7 +1315,7 @@ function Export-DatabaseObjects {
                 $successCount++
             } catch {
                 Write-Host "        [FAILED]" -ForegroundColor Red
-                Write-ExportError -ObjectType 'Rule' -ObjectName "$($rule.Schema).$($rule.Name)" -ErrorRecord $_
+                Write-ExportError -ObjectType 'Rule' -ObjectName "$($rule.Schema).$($rule.Name)" -ErrorRecord $_ -FilePath $fileName
                 $failCount++
             }
         }
@@ -1291,7 +1339,7 @@ function Export-DatabaseObjects {
             $percentComplete = [math]::Round(($currentItem / $assemblies.Count) * 100)
             try {
                 Write-Host ("  [{0,3}%]{1}..." -f $percentComplete, $assembly.Name)
-                $fileName = Join-Path $OutputDir '13_Programmability/01_Assemblies' "$($assembly.Name).sql"
+                $fileName = Join-Path $OutputDir '13_Programmability/01_Assemblies' "$(Get-SafeFileName $($assembly.Name)).sql"
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
@@ -1300,7 +1348,7 @@ function Export-DatabaseObjects {
                 $successCount++
             } catch {
                 Write-Host "        [FAILED]" -ForegroundColor Red
-                Write-ExportError -ObjectType 'Assembly' -ObjectName $assembly.Name -ErrorRecord $_
+                Write-ExportError -ObjectType 'Assembly' -ObjectName $assembly.Name -ErrorRecord $_ -FilePath $fileName
                 $failCount++
             }
         }
@@ -1330,7 +1378,7 @@ function Export-DatabaseObjects {
             $percentComplete = [math]::Round(($currentItem / $functions.Count) * 100)
             try {
                 Write-Host ("  [{0,3}%]{1}.{2}..." -f $percentComplete, $function.Schema, $function.Name)
-                $fileName = Join-Path $OutputDir '13_Programmability/02_Functions' "$($function.Schema).$($function.Name).sql"
+                $fileName = Join-Path $OutputDir '13_Programmability/02_Functions' "$(Get-SafeFileName $($function.Schema)).$(Get-SafeFileName $($function.Name)).sql"
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
@@ -1339,7 +1387,7 @@ function Export-DatabaseObjects {
                 $successCount++
             } catch {
                 Write-Host "        [FAILED]" -ForegroundColor Red
-                Write-ExportError -ObjectType 'Function' -ObjectName "$($function.Schema).$($function.Name)" -ErrorRecord $_
+                Write-ExportError -ObjectType 'Function' -ObjectName "$($function.Schema).$($function.Name)" -ErrorRecord $_ -FilePath $fileName
                 $failCount++
             }
         }
@@ -1373,7 +1421,7 @@ function Export-DatabaseObjects {
                 $successCount++
             } catch {
                 Write-Host "        [FAILED]" -ForegroundColor Red
-                Write-ExportError -ObjectType 'Aggregate' -ObjectName "$($aggregate.Schema).$($aggregate.Name)" -ErrorRecord $_
+                Write-ExportError -ObjectType 'Aggregate' -ObjectName "$($aggregate.Schema).$($aggregate.Name)" -ErrorRecord $_ -FilePath $fileName
                 $failCount++
             }
         }
@@ -1402,7 +1450,7 @@ function Export-DatabaseObjects {
             $percentComplete = [math]::Round(($currentItem / $totalProcs) * 100)
             try {
                 Write-Host ("  [{0,3}%]{1}.{2}..." -f $percentComplete, $proc.Schema, $proc.Name)
-                $fileName = Join-Path $OutputDir '13_Programmability/03_StoredProcedures' "$($proc.Schema).$($proc.Name).sql"
+                $fileName = Join-Path $OutputDir '13_Programmability/03_StoredProcedures' "$(Get-SafeFileName $($proc.Schema)).$(Get-SafeFileName $($proc.Name)).sql"
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
@@ -1411,7 +1459,7 @@ function Export-DatabaseObjects {
                 $successCount++
             } catch {
                 Write-Host "        [FAILED]" -ForegroundColor Red
-                Write-ExportError -ObjectType 'StoredProcedure' -ObjectName "$($proc.Schema).$($proc.Name)" -ErrorRecord $_
+                Write-ExportError -ObjectType 'StoredProcedure' -ObjectName "$($proc.Schema).$($proc.Name)" -ErrorRecord $_ -FilePath $fileName
                 $failCount++
             }
         }
@@ -1430,7 +1478,7 @@ function Export-DatabaseObjects {
                 $successCount++
             } catch {
                 Write-Host "        [FAILED]" -ForegroundColor Red
-                Write-ExportError -ObjectType 'ExtendedStoredProcedure' -ObjectName "$($extProc.Schema).$($extProc.Name)" -ErrorRecord $_
+                Write-ExportError -ObjectType 'ExtendedStoredProcedure' -ObjectName "$($extProc.Schema).$($extProc.Name)" -ErrorRecord $_ -FilePath $fileName
                 $failCount++
             }
         }
@@ -1456,7 +1504,8 @@ function Export-DatabaseObjects {
             $percentComplete = [math]::Round(($currentItem / $dbTriggers.Count) * 100)
             try {
                 Write-Host ("  [{0,3}%]{1}..." -f $percentComplete, $trigger.Name)
-                $fileName = Join-Path $OutputDir '13_Programmability/04_Triggers' "Database.$($trigger.Name).sql"
+                $safeName = Get-SafeFileName $trigger.Name
+                $fileName = Join-Path $OutputDir '13_Programmability/04_Triggers' "Database.$safeName.sql"
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
@@ -1465,7 +1514,7 @@ function Export-DatabaseObjects {
                 $successCount++
             } catch {
                 Write-Host "        [FAILED]" -ForegroundColor Red
-                Write-ExportError -ObjectType 'DatabaseTrigger' -ObjectName $trigger.Name -ErrorRecord $_
+                Write-ExportError -ObjectType 'DatabaseTrigger' -ObjectName $trigger.Name -ErrorRecord $_ -FilePath $fileName
                 $failCount++
             }
         }
@@ -1482,7 +1531,7 @@ function Export-DatabaseObjects {
                 $tableTriggers += @($table.Triggers | Where-Object { -not $_.IsSystemObject })
             }
         } catch {
-            Write-ExportError -ObjectType 'TriggerCollection' -ObjectName "$($table.Schema).$($table.Name)" -ErrorRecord $_ -AdditionalContext "Accessing triggers collection"
+            Write-ExportError -ObjectType 'TriggerCollection' -ObjectName "$($table.Schema).$($table.Name)" -ErrorRecord $_ -FilePath $fileName -AdditionalContext "Accessing triggers collection"
         }
     }
     if ($tableTriggers.Count -gt 0) {
@@ -1505,7 +1554,7 @@ function Export-DatabaseObjects {
             $percentComplete = [math]::Round(($currentItem / $tableTriggers.Count) * 100)
             try {
                 Write-Host ("  [{0,3}%]{1}.{2}.{3}..." -f $percentComplete, $trigger.Parent.Schema, $trigger.Parent.Name, $trigger.Name)
-                $fileName = Join-Path $OutputDir '13_Programmability/04_Triggers' "$($trigger.Parent.Schema).$($trigger.Parent.Name).$($trigger.Name).sql"
+                $fileName = Join-Path $OutputDir '13_Programmability/04_Triggers' "$(Get-SafeFileName $($trigger.Parent.Schema)).$(Get-SafeFileName $($trigger.Parent.Name)).$(Get-SafeFileName $($trigger.Name)).sql"
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
@@ -1514,7 +1563,7 @@ function Export-DatabaseObjects {
                 $successCount++
             } catch {
                 Write-Host "        [FAILED]" -ForegroundColor Red
-                Write-ExportError -ObjectType 'TableTrigger' -ObjectName "$($trigger.Parent.Schema).$($trigger.Parent.Name).$($trigger.Name)" -ErrorRecord $_
+                Write-ExportError -ObjectType 'TableTrigger' -ObjectName "$($trigger.Parent.Schema).$($trigger.Parent.Name).$($trigger.Name)" -ErrorRecord $_ -FilePath $fileName
                 $failCount++
             }
         }
@@ -1541,7 +1590,7 @@ function Export-DatabaseObjects {
             $percentComplete = [math]::Round(($currentItem / $views.Count) * 100)
             try {
                 Write-Host ("  [{0,3}%]{1}.{2}..." -f $percentComplete, $view.Schema, $view.Name)
-                $fileName = Join-Path $OutputDir '13_Programmability/05_Views' "$($view.Schema).$($view.Name).sql"
+                $fileName = Join-Path $OutputDir '13_Programmability/05_Views' "$(Get-SafeFileName $($view.Schema)).$(Get-SafeFileName $($view.Name)).sql"
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
@@ -1550,7 +1599,7 @@ function Export-DatabaseObjects {
                 $successCount++
             } catch {
                 Write-Host "        [FAILED]" -ForegroundColor Red
-                Write-ExportError -ObjectType 'View' -ObjectName "$($view.Schema).$($view.Name)" -ErrorRecord $_
+                Write-ExportError -ObjectType 'View' -ObjectName "$($view.Schema).$($view.Name)" -ErrorRecord $_ -FilePath $fileName
                 $failCount++
             }
         }
@@ -1575,7 +1624,7 @@ function Export-DatabaseObjects {
             $percentComplete = [math]::Round(($currentItem / $synonyms.Count) * 100)
             try {
                 Write-Host ("  [{0,3}%]{1}.{2}..." -f $percentComplete, $synonym.Schema, $synonym.Name)
-                $fileName = Join-Path $OutputDir '14_Synonyms' "$($synonym.Schema).$($synonym.Name).sql"
+                $fileName = Join-Path $OutputDir '14_Synonyms' "$(Get-SafeFileName $($synonym.Schema)).$(Get-SafeFileName $($synonym.Name)).sql"
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
@@ -1584,7 +1633,7 @@ function Export-DatabaseObjects {
                 $successCount++
             } catch {
                 Write-Host "        [FAILED]" -ForegroundColor Red
-                Write-ExportError -ObjectType 'Synonym' -ObjectName "$($synonym.Schema).$($synonym.Name)" -ErrorRecord $_
+                Write-ExportError -ObjectType 'Synonym' -ObjectName "$($synonym.Schema).$($synonym.Name)" -ErrorRecord $_ -FilePath $fileName
                 $failCount++
             }
         }
@@ -1620,7 +1669,7 @@ function Export-DatabaseObjects {
                 $successCount++
             } catch {
                 Write-Host "        [FAILED]" -ForegroundColor Red
-                Write-ExportError -ObjectType 'FullTextCatalog' -ObjectName $ftc.Name -ErrorRecord $_
+                Write-ExportError -ObjectType 'FullTextCatalog' -ObjectName $ftc.Name -ErrorRecord $_ -FilePath $fileName
                 $failCount++
             }
         }
@@ -1649,7 +1698,7 @@ function Export-DatabaseObjects {
                 $successCount++
             } catch {
                 Write-Host "        [FAILED]" -ForegroundColor Red
-                Write-ExportError -ObjectType 'FullTextStopList' -ObjectName $ftsl.Name -ErrorRecord $_
+                Write-ExportError -ObjectType 'FullTextStopList' -ObjectName $ftsl.Name -ErrorRecord $_ -FilePath $fileName
                 $failCount++
             }
         }
@@ -1685,7 +1734,7 @@ function Export-DatabaseObjects {
                     $successCount++
                 } catch {
                     Write-Host "        [FAILED]" -ForegroundColor Red
-                    Write-ExportError -ObjectType 'ExternalDataSource' -ObjectName $eds.Name -ErrorRecord $_
+                    Write-ExportError -ObjectType 'ExternalDataSource' -ObjectName $eds.Name -ErrorRecord $_ -FilePath $fileName
                     $failCount++
                 }
             }
@@ -1715,7 +1764,7 @@ function Export-DatabaseObjects {
                     $successCount++
                 } catch {
                     Write-Host "        [FAILED]" -ForegroundColor Red
-                    Write-ExportError -ObjectType 'ExternalFileFormat' -ObjectName $eff.Name -ErrorRecord $_
+                    Write-ExportError -ObjectType 'ExternalFileFormat' -ObjectName $eff.Name -ErrorRecord $_ -FilePath $fileName
                     $failCount++
                 }
             }
@@ -1747,7 +1796,7 @@ function Export-DatabaseObjects {
                 $percentComplete = [math]::Round(($currentItem / $searchPropertyLists.Count) * 100)
                 try {
                     Write-Host ("  [{0,3}%]{1}..." -f $percentComplete, $spl.Name)
-                    $fileName = Join-Path $OutputDir '17_SearchPropertyLists' "$($spl.Name).sql"
+                    $fileName = Join-Path $OutputDir '17_SearchPropertyLists' "$(Get-SafeFileName $($spl.Name)).sql"
                 Ensure-DirectoryExists $fileName
                     $opts.FileName = $fileName
                     $Scripter.Options = $opts
@@ -1756,7 +1805,7 @@ function Export-DatabaseObjects {
                     $successCount++
                 } catch {
                     Write-Host "        [FAILED]" -ForegroundColor Red
-                    Write-ExportError -ObjectType 'SearchPropertyList' -ObjectName $spl.Name -ErrorRecord $_
+                    Write-ExportError -ObjectType 'SearchPropertyList' -ObjectName $spl.Name -ErrorRecord $_ -FilePath $fileName
                     $failCount++
                 }
             }
@@ -1786,7 +1835,7 @@ function Export-DatabaseObjects {
                 $percentComplete = [math]::Round(($currentItem / $planGuides.Count) * 100)
                 try {
                     Write-Host ("  [{0,3}%]{1}..." -f $percentComplete, $pg.Name)
-                    $fileName = Join-Path $OutputDir '18_PlanGuides' "$($pg.Name).sql"
+                    $fileName = Join-Path $OutputDir '18_PlanGuides' "$(Get-SafeFileName $($pg.Name)).sql"
                 Ensure-DirectoryExists $fileName
                     $opts.FileName = $fileName
                     $Scripter.Options = $opts
@@ -1795,7 +1844,7 @@ function Export-DatabaseObjects {
                     $successCount++
                 } catch {
                     Write-Host "        [FAILED]" -ForegroundColor Red
-                    Write-ExportError -ObjectType 'PlanGuide' -ObjectName $pg.Name -ErrorRecord $_
+                    Write-ExportError -ObjectType 'PlanGuide' -ObjectName $pg.Name -ErrorRecord $_ -FilePath $fileName
                     $failCount++
                 }
             }
@@ -1841,7 +1890,7 @@ function Export-DatabaseObjects {
                 $successCount++
             } catch {
                 Write-Host "        [FAILED]" -ForegroundColor Red
-                Write-ExportError -ObjectType 'AsymmetricKey' -ObjectName $key.Name -ErrorRecord $_
+                Write-ExportError -ObjectType 'AsymmetricKey' -ObjectName $key.Name -ErrorRecord $_ -FilePath $fileName
                 $failCount++
             }
         }
@@ -1870,7 +1919,7 @@ function Export-DatabaseObjects {
                 $successCount++
             } catch {
                 Write-Host "        [FAILED]" -ForegroundColor Red
-                Write-ExportError -ObjectType 'Certificate' -ObjectName $cert.Name -ErrorRecord $_
+                Write-ExportError -ObjectType 'Certificate' -ObjectName $cert.Name -ErrorRecord $_ -FilePath $fileName
                 $failCount++
             }
         }
@@ -1899,7 +1948,7 @@ function Export-DatabaseObjects {
                 $successCount++
             } catch {
                 Write-Host "        [FAILED]" -ForegroundColor Red
-                Write-ExportError -ObjectType 'SymmetricKey' -ObjectName $key.Name -ErrorRecord $_
+                Write-ExportError -ObjectType 'SymmetricKey' -ObjectName $key.Name -ErrorRecord $_ -FilePath $fileName
                 $failCount++
             }
         }
@@ -1928,7 +1977,7 @@ function Export-DatabaseObjects {
                 $successCount++
             } catch {
                 Write-Host "        [FAILED]" -ForegroundColor Red
-                Write-ExportError -ObjectType 'ApplicationRole' -ObjectName $role.Name -ErrorRecord $_
+                Write-ExportError -ObjectType 'ApplicationRole' -ObjectName $role.Name -ErrorRecord $_ -FilePath $fileName
                 $failCount++
             }
         }
@@ -1957,7 +2006,7 @@ function Export-DatabaseObjects {
                 $successCount++
             } catch {
                 Write-Host "        [FAILED]" -ForegroundColor Red
-                Write-ExportError -ObjectType 'DatabaseRole' -ObjectName $role.Name -ErrorRecord $_
+                Write-ExportError -ObjectType 'DatabaseRole' -ObjectName $role.Name -ErrorRecord $_ -FilePath $fileName
                 $failCount++
             }
         }
@@ -1986,7 +2035,7 @@ function Export-DatabaseObjects {
                 $successCount++
             } catch {
                 Write-Host "        [FAILED]" -ForegroundColor Red
-                Write-ExportError -ObjectType 'DatabaseUser' -ObjectName $user.Name -ErrorRecord $_
+                Write-ExportError -ObjectType 'DatabaseUser' -ObjectName $user.Name -ErrorRecord $_ -FilePath $fileName
                 $failCount++
             }
         }
@@ -2015,7 +2064,7 @@ function Export-DatabaseObjects {
                 $successCount++
             } catch {
                 Write-Host "        [FAILED]" -ForegroundColor Red
-                Write-ExportError -ObjectType 'DatabaseAuditSpecification' -ObjectName $spec.Name -ErrorRecord $_
+                Write-ExportError -ObjectType 'DatabaseAuditSpecification' -ObjectName $spec.Name -ErrorRecord $_ -FilePath $fileName
                 $failCount++
             }
         }
@@ -2058,7 +2107,7 @@ function Export-DatabaseObjects {
                     $successCount++
                 } catch {
                     Write-Host "        [FAILED]" -ForegroundColor Red
-                    Write-ExportError -ObjectType 'SecurityPolicy' -ObjectName "$($policy.Schema).$($policy.Name)" -ErrorRecord $_
+                    Write-ExportError -ObjectType 'SecurityPolicy' -ObjectName "$($policy.Schema).$($policy.Name)" -ErrorRecord $_ -FilePath $fileName
                     $failCount++
                 }
             }
@@ -2132,7 +2181,7 @@ function Export-TableData {
             }
         } catch {
             Write-Host "        [FAILED]" -ForegroundColor Red
-            Write-ExportError -ObjectType 'TableData' -ObjectName "$($table.Schema).$($table.Name)" -ErrorRecord $_ -AdditionalContext "Exporting $rowCount row(s)"
+            Write-ExportError -ObjectType 'TableData' -ObjectName "$($table.Schema).$($table.Name)" -ErrorRecord $_ -FilePath $fileName -AdditionalContext "Exporting $rowCount row(s)"
             $failCount++
         }
     }
