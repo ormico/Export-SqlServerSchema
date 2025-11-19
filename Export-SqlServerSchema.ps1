@@ -372,6 +372,22 @@ function Test-DatabaseConnection {
     }
 }
 
+function Ensure-DirectoryExists {
+    <#
+    .SYNOPSIS
+        Ensures a directory exists, creating it if necessary.
+    .DESCRIPTION
+        Helper function to ensure SMO can write to the target directory.
+        Creates parent directories if they don't exist.
+    #>
+    param([string]$FilePath)
+    
+    $directory = Split-Path $FilePath -Parent
+    if ($directory -and -not (Test-Path $directory)) {
+        New-Item -ItemType Directory -Path $directory -Force | Out-Null
+    }
+}
+
 function Initialize-OutputDirectory {
     <#
     .SYNOPSIS
@@ -836,6 +852,7 @@ function Export-DatabaseObjects {
             try {
                 Write-Host ("  [{0,3}%]{1}..." -f $percentComplete, $schema.Name)
                 $fileName = Join-Path $OutputDir '02_Schemas' "$($schema.Name).sql"
+                Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
                 $schema.Script($opts) | Out-Null
@@ -873,6 +890,7 @@ function Export-DatabaseObjects {
             try {
                 Write-Host ("  [{0,3}%]{1}.{2}..." -f $percentComplete, $sequence.Schema, $sequence.Name)
                 $fileName = Join-Path $OutputDir '03_Sequences' "$($sequence.Schema).$($sequence.Name).sql"
+                Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
                 $sequence.Script($opts) | Out-Null
@@ -906,6 +924,7 @@ function Export-DatabaseObjects {
             try {
                 Write-Host ("  [{0,3}%]{1}..." -f $percentComplete, $pf.Name)
                 $fileName = Join-Path $OutputDir '04_PartitionFunctions' "$($pf.Name).sql"
+                Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
                 $pf.Script($opts) | Out-Null
@@ -938,6 +957,7 @@ function Export-DatabaseObjects {
             try {
                 Write-Host ("  [{0,3}%]{1}..." -f $percentComplete, $ps.Name)
                 $fileName = Join-Path $OutputDir '05_PartitionSchemes' "$($ps.Name).sql"
+                Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
                 $ps.Script($opts) | Out-Null
@@ -975,6 +995,7 @@ function Export-DatabaseObjects {
                 $typeName = if ($type.Schema) { "$($type.Schema).$($type.Name)" } else { $type.Name }
                 Write-Host ("  [{0,3}%]{1}..." -f $percentComplete, $typeName)
                 $fileName = Join-Path $OutputDir '06_Types' "$typeName.sql"
+                Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
                 $type.Script($opts) | Out-Null
@@ -1008,6 +1029,7 @@ function Export-DatabaseObjects {
             try {
                 Write-Host ("  [{0,3}%]{1}.{2}..." -f $percentComplete, $xsc.Schema, $xsc.Name)
                 $fileName = Join-Path $OutputDir '07_XmlSchemaCollections' "$($xsc.Schema).$($xsc.Name).sql"
+                Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
                 $xsc.Script($opts) | Out-Null
@@ -1054,6 +1076,7 @@ function Export-DatabaseObjects {
             try {
                 Write-Host ("  [{0,3}%]{1}.{2}..." -f $percentComplete, $table.Schema, $table.Name)
                 $fileName = Join-Path $OutputDir '08_Tables_PrimaryKey' "$($table.Schema).$($table.Name).sql"
+                Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
                 $table.Script($opts) | Out-Null
@@ -1108,6 +1131,7 @@ function Export-DatabaseObjects {
             try {
                 Write-Host ("  [{0,3}%]{1}.{2}.{3}..." -f $percentComplete, $fk.Parent.Schema, $fk.Parent.Name, $fk.Name)
                 $fileName = Join-Path $OutputDir '09_Tables_ForeignKeys' "$($fk.Parent.Schema).$($fk.Parent.Name).$($fk.Name).sql"
+                Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
                 $fk.Script($opts) | Out-Null
@@ -1168,6 +1192,7 @@ function Export-DatabaseObjects {
             try {
                 Write-Host ("  [{0,3}%]{1}.{2}.{3}..." -f $percentComplete, $index.Parent.Schema, $index.Parent.Name, $index.Name)
                 $fileName = Join-Path $OutputDir '10_Indexes' "$($index.Parent.Schema).$($index.Parent.Name).$($index.Name).sql"
+                Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
                 $index.Script($opts) | Out-Null
@@ -1201,6 +1226,7 @@ function Export-DatabaseObjects {
             try {
                 Write-Host ("  [{0,3}%]{1}.{2}..." -f $percentComplete, $default.Schema, $default.Name)
                 $fileName = Join-Path $OutputDir '11_Defaults' "$($default.Schema).$($default.Name).sql"
+                Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
                 $default.Script($opts) | Out-Null
@@ -1233,6 +1259,7 @@ function Export-DatabaseObjects {
             try {
                 Write-Host ("  [{0,3}%]{1}.{2}..." -f $percentComplete, $rule.Schema, $rule.Name)
                 $fileName = Join-Path $OutputDir '12_Rules' "$($rule.Schema).$($rule.Name).sql"
+                Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
                 $rule.Script($opts) | Out-Null
@@ -1265,6 +1292,7 @@ function Export-DatabaseObjects {
             try {
                 Write-Host ("  [{0,3}%]{1}..." -f $percentComplete, $assembly.Name)
                 $fileName = Join-Path $OutputDir '13_Programmability/01_Assemblies' "$($assembly.Name).sql"
+                Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
                 $assembly.Script($opts) | Out-Null
@@ -1303,6 +1331,7 @@ function Export-DatabaseObjects {
             try {
                 Write-Host ("  [{0,3}%]{1}.{2}..." -f $percentComplete, $function.Schema, $function.Name)
                 $fileName = Join-Path $OutputDir '13_Programmability/02_Functions' "$($function.Schema).$($function.Name).sql"
+                Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
                 $function.Script($opts) | Out-Null
@@ -1336,6 +1365,7 @@ function Export-DatabaseObjects {
             try {
                 Write-Host ("  [{0,3}%]{1}.{2}..." -f $percentComplete, $aggregate.Schema, $aggregate.Name)
                 $fileName = Join-Path $OutputDir '13_Programmability/02_Functions' "$($aggregate.Schema).$($aggregate.Name).aggregate.sql"
+                Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
                 $aggregate.Script($opts) | Out-Null
@@ -1373,6 +1403,7 @@ function Export-DatabaseObjects {
             try {
                 Write-Host ("  [{0,3}%]{1}.{2}..." -f $percentComplete, $proc.Schema, $proc.Name)
                 $fileName = Join-Path $OutputDir '13_Programmability/03_StoredProcedures' "$($proc.Schema).$($proc.Name).sql"
+                Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
                 $proc.Script($opts) | Out-Null
@@ -1391,6 +1422,7 @@ function Export-DatabaseObjects {
             try {
                 Write-Host ("  [{0,3}%]{1}.{2}..." -f $percentComplete, $extProc.Schema, $extProc.Name)
                 $fileName = Join-Path $OutputDir '13_Programmability/03_StoredProcedures' "$($extProc.Schema).$($extProc.Name).extended.sql"
+                Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
                 $extProc.Script($opts) | Out-Null
@@ -1425,6 +1457,7 @@ function Export-DatabaseObjects {
             try {
                 Write-Host ("  [{0,3}%]{1}..." -f $percentComplete, $trigger.Name)
                 $fileName = Join-Path $OutputDir '13_Programmability/04_Triggers' "Database.$($trigger.Name).sql"
+                Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
                 $trigger.Script($opts) | Out-Null
@@ -1473,6 +1506,7 @@ function Export-DatabaseObjects {
             try {
                 Write-Host ("  [{0,3}%]{1}.{2}.{3}..." -f $percentComplete, $trigger.Parent.Schema, $trigger.Parent.Name, $trigger.Name)
                 $fileName = Join-Path $OutputDir '13_Programmability/04_Triggers' "$($trigger.Parent.Schema).$($trigger.Parent.Name).$($trigger.Name).sql"
+                Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
                 $trigger.Script($opts) | Out-Null
@@ -1508,6 +1542,7 @@ function Export-DatabaseObjects {
             try {
                 Write-Host ("  [{0,3}%]{1}.{2}..." -f $percentComplete, $view.Schema, $view.Name)
                 $fileName = Join-Path $OutputDir '13_Programmability/05_Views' "$($view.Schema).$($view.Name).sql"
+                Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
                 $view.Script($opts) | Out-Null
@@ -1541,6 +1576,7 @@ function Export-DatabaseObjects {
             try {
                 Write-Host ("  [{0,3}%]{1}.{2}..." -f $percentComplete, $synonym.Schema, $synonym.Name)
                 $fileName = Join-Path $OutputDir '14_Synonyms' "$($synonym.Schema).$($synonym.Name).sql"
+                Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
                 $synonym.Script($opts) | Out-Null
@@ -1576,6 +1612,7 @@ function Export-DatabaseObjects {
             try {
                 Write-Host ("  [{0,3}%]{1}..." -f $percentComplete, $ftc.Name)
                 $fileName = Join-Path $OutputDir '15_FullTextSearch' "$($ftc.Name).catalog.sql"
+                Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
                 $ftc.Script($opts) | Out-Null
@@ -1604,6 +1641,7 @@ function Export-DatabaseObjects {
             try {
                 Write-Host ("  [{0,3}%]{1}..." -f $percentComplete, $ftsl.Name)
                 $fileName = Join-Path $OutputDir '15_FullTextSearch' "$($ftsl.Name).stoplist.sql"
+                Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
                 $ftsl.Script($opts) | Out-Null
@@ -1639,6 +1677,7 @@ function Export-DatabaseObjects {
                 try {
                     Write-Host ("  [{0,3}%]{1}..." -f $percentComplete, $eds.Name)
                     $fileName = Join-Path $OutputDir '16_ExternalData' "$($eds.Name).datasource.sql"
+                Ensure-DirectoryExists $fileName
                     $opts.FileName = $fileName
                     $Scripter.Options = $opts
                     $eds.Script($opts) | Out-Null
@@ -1668,6 +1707,7 @@ function Export-DatabaseObjects {
                 try {
                     Write-Host ("  [{0,3}%]{1}..." -f $percentComplete, $eff.Name)
                     $fileName = Join-Path $OutputDir '16_ExternalData' "$($eff.Name).fileformat.sql"
+                Ensure-DirectoryExists $fileName
                     $opts.FileName = $fileName
                     $Scripter.Options = $opts
                     $eff.Script($opts) | Out-Null
@@ -1708,6 +1748,7 @@ function Export-DatabaseObjects {
                 try {
                     Write-Host ("  [{0,3}%]{1}..." -f $percentComplete, $spl.Name)
                     $fileName = Join-Path $OutputDir '17_SearchPropertyLists' "$($spl.Name).sql"
+                Ensure-DirectoryExists $fileName
                     $opts.FileName = $fileName
                     $Scripter.Options = $opts
                     $spl.Script($opts) | Out-Null
@@ -1746,6 +1787,7 @@ function Export-DatabaseObjects {
                 try {
                     Write-Host ("  [{0,3}%]{1}..." -f $percentComplete, $pg.Name)
                     $fileName = Join-Path $OutputDir '18_PlanGuides' "$($pg.Name).sql"
+                Ensure-DirectoryExists $fileName
                     $opts.FileName = $fileName
                     $Scripter.Options = $opts
                     $pg.Script($opts) | Out-Null
@@ -1791,6 +1833,7 @@ function Export-DatabaseObjects {
             try {
                 Write-Host ("  [{0,3}%]{1}..." -f $percentComplete, $key.Name)
                 $fileName = Join-Path $OutputDir '19_Security' "$($key.Name).asymmetrickey.sql"
+                Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
                 $key.Script($opts) | Out-Null
@@ -1819,6 +1862,7 @@ function Export-DatabaseObjects {
             try {
                 Write-Host ("  [{0,3}%]{1}..." -f $percentComplete, $cert.Name)
                 $fileName = Join-Path $OutputDir '19_Security' "$($cert.Name).certificate.sql"
+                Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
                 $cert.Script($opts) | Out-Null
@@ -1847,6 +1891,7 @@ function Export-DatabaseObjects {
             try {
                 Write-Host ("  [{0,3}%]{1}..." -f $percentComplete, $key.Name)
                 $fileName = Join-Path $OutputDir '19_Security' "$($key.Name).symmetrickey.sql"
+                Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
                 $key.Script($opts) | Out-Null
@@ -1875,6 +1920,7 @@ function Export-DatabaseObjects {
             try {
                 Write-Host ("  [{0,3}%]{1}..." -f $percentComplete, $role.Name)
                 $fileName = Join-Path $OutputDir '19_Security' "$($role.Name).approle.sql"
+                Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
                 $role.Script($opts) | Out-Null
@@ -1903,6 +1949,7 @@ function Export-DatabaseObjects {
             try {
                 Write-Host ("  [{0,3}%]{1}..." -f $percentComplete, $role.Name)
                 $fileName = Join-Path $OutputDir '19_Security' "$($role.Name).role.sql"
+                Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
                 $role.Script($opts) | Out-Null
@@ -1931,6 +1978,7 @@ function Export-DatabaseObjects {
             try {
                 Write-Host ("  [{0,3}%]{1}..." -f $percentComplete, $user.Name)
                 $fileName = Join-Path $OutputDir '19_Security' "$($user.Name).user.sql"
+                Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
                 $user.Script($opts) | Out-Null
@@ -1959,6 +2007,7 @@ function Export-DatabaseObjects {
             try {
                 Write-Host ("  [{0,3}%]{1}..." -f $percentComplete, $spec.Name)
                 $fileName = Join-Path $OutputDir '19_Security' "$($spec.Name).auditspec.sql"
+                Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
                 $spec.Script($opts) | Out-Null
@@ -1992,6 +2041,7 @@ function Export-DatabaseObjects {
                 try {
                     Write-Host ("  [{0,3}%]{1}.{2}..." -f $percentComplete, $policy.Schema, $policy.Name)
                     $fileName = Join-Path $OutputDir '19_Security' "$($policy.Schema).$($policy.Name).securitypolicy.sql"
+                Ensure-DirectoryExists $fileName
                     
                     # Create file with header
                     $policyScript = New-Object System.Text.StringBuilder
@@ -2071,6 +2121,7 @@ function Export-TableData {
             if ($rowCount -gt 0) {
                 Write-Host ("  [{0,3}%]{1}.{2} ({3} row(s))..." -f $percentComplete, $table.Schema, $table.Name, $rowCount)
                 $fileName = Join-Path $OutputDir '20_Data' "$($table.Schema).$($table.Name).data.sql"
+                Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
                 $Scripter.EnumScript($table) | Out-Null

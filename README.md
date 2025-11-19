@@ -7,8 +7,9 @@ PowerShell toolkit for exporting and importing SQL Server database schemas with 
 ### Option 1: Download Latest Release
 
 ```powershell
-# Download latest release
-Invoke-WebRequest -Uri "https://github.com/ormico/Export-SqlServerSchema/releases/latest/download/Export-SqlServerSchema.zip" -OutFile "Export-SqlServerSchema.zip"
+# Download latest release (replace VERSION with actual version like v1.2.0)
+$version = "VERSION"  # e.g., "v1.2.0"
+Invoke-WebRequest -Uri "https://github.com/ormico/Export-SqlServerSchema/releases/download/$version/Export-SqlServerSchema-$version.zip" -OutFile "Export-SqlServerSchema.zip"
 
 # Extract and unblock
 Expand-Archive -Path "Export-SqlServerSchema.zip" -DestinationPath "."
