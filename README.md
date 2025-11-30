@@ -93,6 +93,7 @@ $cred = Get-Credential
 - **Automatic retry logic** for transient failures (network timeouts, Azure SQL throttling, deadlocks)
 - **Configurable timeouts** for slow networks and long-running operations
 - **Comprehensive error logging** to file for diagnostics
+- **Restartable exports** - resume interrupted exports from where they stopped
 
 **Import-SqlServerSchema.ps1**
 - **Two import modes**: Dev (default) vs Prod (opt-in)
@@ -167,6 +168,7 @@ DbScripts/
 | `-MaxRetries` | No | Max retry attempts for transient failures (default: 0 = use config/3) |
 | `-RetryDelaySeconds` | No | Initial retry delay in seconds (default: 0 = use config/2) |
 | `-ConfigFile` | No | Path to YAML configuration file |
+| `-Resume` | No | Resume a previous incomplete export from the specified directory |
 
 ### Import-SqlServerSchema.ps1
 
@@ -267,6 +269,23 @@ This eliminates data import dependency errors and ensures data integrity.
 - Uses exponential backoff strategy (default: 2s → 4s → 8s)
 - Configurable retry count (1-10, default: 3) and delay (1-60 seconds, default: 2)
 - Non-transient errors skip retry logic and fail immediately
+
+**Restartable Exports**:
+- Export progress is automatically tracked in `export-progress.yml`
+- If an export is interrupted (crash, network failure, manual stop), resume from where it left off
+- Resume using the `-Resume` parameter with the path to the incomplete export directory
+- Completed objects are skipped on resume, saving time on large databases
+- Progress file includes object name, type, and completion timestamp
+
+**Resume Export Example**:
+```powershell
+# Initial export that gets interrupted
+./Export-SqlServerSchema.ps1 -Server "localhost" -Database "LargeDb" -OutputPath "./exports"
+# Ctrl+C or network failure occurs...
+
+# Resume the interrupted export
+./Export-SqlServerSchema.ps1 -Server "localhost" -Database "LargeDb" -Resume "./exports/localhost_LargeDb_20241130_120000"
+```
 
 **Configurable Timeouts**:
 - `connectionTimeout`: Time to establish SQL Server connection (default: 30 seconds)
