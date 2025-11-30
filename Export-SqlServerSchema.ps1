@@ -11,7 +11,8 @@
 .DESCRIPTION
     Exports all database objects (tables, stored procedures, views, etc.) to individual SQL files,
     organized in dependency order for safe re-instantiation. Exports data as INSERT statements.
-    Supports Windows and Linux.
+    Supports Windows and Linux. Supports restartable exports - if interrupted, can resume from
+    where it left off using the -Resume parameter.
 
 .PARAMETER Server
     SQL Server instance (e.g., 'localhost', 'server\SQLEXPRESS', 'server.database.windows.net').
@@ -36,6 +37,10 @@
 .PARAMETER ConfigFile
     Path to YAML configuration file for advanced export settings. Optional.
 
+.PARAMETER Resume
+    Path to a previous incomplete export directory to resume. The directory must contain
+    an export-progress.yml file. When resuming, already-exported objects are skipped.
+
 .EXAMPLE
     # Export with Windows auth
     ./Export-SqlServerSchema.ps1 -Server localhost -Database TestDb
@@ -47,8 +52,12 @@
     # Export with data
     ./Export-SqlServerSchema.ps1 -Server localhost -Database TestDb -IncludeData -OutputPath ./exports
 
+    # Resume an interrupted export
+    ./Export-SqlServerSchema.ps1 -Server localhost -Database TestDb -Resume "./DbScripts/localhost_TestDb_20241130_120000"
+
 .NOTES
     Requires: SQL Server Management Objects (SMO)
+    Optional: PowerShell-Yaml module (required for resuming exports)
     Author: Zack Moore
     Updated for PowerShell 7 and modern standards
 #>
@@ -87,7 +96,10 @@ param(
     [int]$MaxRetries = 0,
     
     [Parameter(HelpMessage = 'Initial retry delay in seconds (overrides config file)')]
-    [int]$RetryDelaySeconds = 0
+    [int]$RetryDelaySeconds = 0,
+    
+    [Parameter(HelpMessage = 'Resume a previous incomplete export from the specified directory')]
+    [string]$Resume
 )
 
 $ErrorActionPreference = 'Stop'
@@ -187,7 +199,7 @@ function Invoke-WithRetry {
                 Write-Warning "[$OperationName] $errorType detected on attempt $attempt of $MaxAttempts"
                 Write-Warning "  Error: $errorMessage"
                 Write-Warning "  Retrying in $delay seconds..."
-                Write-Log "$OperationName failed (attempt $attempt): $errorType - $errorMessage" -Severity WARNING
+                Write-Log "$OperationName failed (attempt $attempt): $errorType - $errorMessage" -Level WARNING
                 
                 Start-Sleep -Seconds $delay
                 
@@ -197,7 +209,7 @@ function Invoke-WithRetry {
                 # Non-transient error or final attempt - rethrow
                 if ($isTransient) {
                     Write-Error "[$OperationName] Failed after $MaxAttempts attempts: $errorMessage"
-                    Write-Log "$OperationName failed after $MaxAttempts attempts: $errorMessage" -Severity ERROR
+                    Write-Log "$OperationName failed after $MaxAttempts attempts: $errorMessage" -Level ERROR
                 }
                 throw
             }
@@ -433,6 +445,833 @@ function Ensure-DirectoryExists {
         New-Item -ItemType Directory -Path $directory -Force | Out-Null
     }
 }
+
+#region Progress Tracking Functions
+
+function Get-ProgressFilePath {
+    <#
+    .SYNOPSIS
+        Gets the path to the progress tracking file in the export directory.
+    #>
+    param([string]$ExportDir)
+    
+    return Join-Path $ExportDir 'export-progress.yml'
+}
+
+function Initialize-ExportProgress {
+    <#
+    .SYNOPSIS
+        Collects all exportable objects and creates initial progress tracking file.
+    .DESCRIPTION
+        Queries the database for all objects that will be exported and creates
+        a YAML progress file to track export completion status.
+    #>
+    param(
+        [Microsoft.SqlServer.Management.Smo.Database]$Database,
+        [string]$ExportDir,
+        [string]$ServerName,
+        [bool]$IncludeDataExport
+    )
+    
+    Write-Output ''
+    Write-Output 'Initializing export progress tracking...'
+    
+    $progressFile = Get-ProgressFilePath -ExportDir $ExportDir
+    
+    # Collect all objects to export
+    $objects = @()
+    $objectIndex = 0
+    
+    # FileGroups
+    $fileGroups = @($Database.FileGroups | Where-Object { $_.Name -ne 'PRIMARY' })
+    foreach ($fg in $fileGroups) {
+        $objectIndex++
+        $objects += @{
+            id = $objectIndex
+            type = 'FileGroup'
+            schema = ''
+            name = $fg.Name
+            status = 'pending'
+            exportedAt = $null
+        }
+    }
+    
+    # Database Scoped Configurations (single batch)
+    try {
+        $dbConfigs = @($Database.DatabaseScopedConfigurations)
+        if ($dbConfigs.Count -gt 0) {
+            $objectIndex++
+            $objects += @{
+                id = $objectIndex
+                type = 'DatabaseScopedConfigurations'
+                schema = ''
+                name = '_batch'
+                status = 'pending'
+                exportedAt = $null
+            }
+        }
+    } catch { }
+    
+    # Database Scoped Credentials (single batch)
+    try {
+        $dbCredentials = @($Database.Credentials | Where-Object { $null -ne $_.Name -and $_.Name -ne '' })
+        if ($dbCredentials.Count -gt 0) {
+            $objectIndex++
+            $objects += @{
+                id = $objectIndex
+                type = 'DatabaseScopedCredentials'
+                schema = ''
+                name = '_batch'
+                status = 'pending'
+                exportedAt = $null
+            }
+        }
+    } catch { }
+    
+    # Schemas
+    $schemas = @($Database.Schemas | Where-Object { -not $_.IsSystemObject -and $_.Name -ne $_.Owner })
+    foreach ($schema in $schemas) {
+        $objectIndex++
+        $objects += @{
+            id = $objectIndex
+            type = 'Schema'
+            schema = ''
+            name = $schema.Name
+            status = 'pending'
+            exportedAt = $null
+        }
+    }
+    
+    # Sequences
+    $sequences = @($Database.Sequences | Where-Object { -not $_.IsSystemObject })
+    foreach ($seq in $sequences) {
+        $objectIndex++
+        $objects += @{
+            id = $objectIndex
+            type = 'Sequence'
+            schema = $seq.Schema
+            name = $seq.Name
+            status = 'pending'
+            exportedAt = $null
+        }
+    }
+    
+    # Partition Functions
+    $partitionFunctions = @($Database.PartitionFunctions)
+    foreach ($pf in $partitionFunctions) {
+        $objectIndex++
+        $objects += @{
+            id = $objectIndex
+            type = 'PartitionFunction'
+            schema = ''
+            name = $pf.Name
+            status = 'pending'
+            exportedAt = $null
+        }
+    }
+    
+    # Partition Schemes
+    $partitionSchemes = @($Database.PartitionSchemes)
+    foreach ($ps in $partitionSchemes) {
+        $objectIndex++
+        $objects += @{
+            id = $objectIndex
+            type = 'PartitionScheme'
+            schema = ''
+            name = $ps.Name
+            status = 'pending'
+            exportedAt = $null
+        }
+    }
+    
+    # User-Defined Types
+    $allTypes = @()
+    $allTypes += @($Database.UserDefinedDataTypes | Where-Object { -not $_.IsSystemObject })
+    $allTypes += @($Database.UserDefinedTableTypes | Where-Object { -not $_.IsSystemObject })
+    $allTypes += @($Database.UserDefinedTypes | Where-Object { -not $_.IsSystemObject })
+    foreach ($type in $allTypes) {
+        $objectIndex++
+        $objects += @{
+            id = $objectIndex
+            type = 'UserDefinedType'
+            schema = if ($type.Schema) { $type.Schema } else { '' }
+            name = $type.Name
+            status = 'pending'
+            exportedAt = $null
+        }
+    }
+    
+    # XML Schema Collections
+    $xmlSchemaCollections = @($Database.XmlSchemaCollections | Where-Object { -not $_.IsSystemObject })
+    foreach ($xsc in $xmlSchemaCollections) {
+        $objectIndex++
+        $objects += @{
+            id = $objectIndex
+            type = 'XmlSchemaCollection'
+            schema = $xsc.Schema
+            name = $xsc.Name
+            status = 'pending'
+            exportedAt = $null
+        }
+    }
+    
+    # Tables (with PK)
+    $tables = @($Database.Tables | Where-Object { -not $_.IsSystemObject })
+    foreach ($table in $tables) {
+        $objectIndex++
+        $objects += @{
+            id = $objectIndex
+            type = 'Table'
+            schema = $table.Schema
+            name = $table.Name
+            status = 'pending'
+            exportedAt = $null
+        }
+    }
+    
+    # Foreign Keys
+    foreach ($table in $tables) {
+        try {
+            if ($table.ForeignKeys -and $table.ForeignKeys.Count -gt 0) {
+                foreach ($fk in $table.ForeignKeys) {
+                    $objectIndex++
+                    $objects += @{
+                        id = $objectIndex
+                        type = 'ForeignKey'
+                        schema = $table.Schema
+                        name = "$($table.Name).$($fk.Name)"
+                        status = 'pending'
+                        exportedAt = $null
+                    }
+                }
+            }
+        } catch { }
+    }
+    
+    # Indexes
+    foreach ($table in $tables) {
+        try {
+            $indexes = @($table.Indexes | Where-Object { -not $_.IsSystemObject -and -not $_.IsClustered -and -not $_.IsUnique })
+            foreach ($idx in $indexes) {
+                $objectIndex++
+                $objects += @{
+                    id = $objectIndex
+                    type = 'Index'
+                    schema = $table.Schema
+                    name = "$($table.Name).$($idx.Name)"
+                    status = 'pending'
+                    exportedAt = $null
+                }
+            }
+        } catch { }
+    }
+    
+    # Defaults
+    $defaults = @($Database.Defaults | Where-Object { -not $_.IsSystemObject })
+    foreach ($default in $defaults) {
+        $objectIndex++
+        $objects += @{
+            id = $objectIndex
+            type = 'Default'
+            schema = $default.Schema
+            name = $default.Name
+            status = 'pending'
+            exportedAt = $null
+        }
+    }
+    
+    # Rules
+    $rules = @($Database.Rules | Where-Object { -not $_.IsSystemObject })
+    foreach ($rule in $rules) {
+        $objectIndex++
+        $objects += @{
+            id = $objectIndex
+            type = 'Rule'
+            schema = $rule.Schema
+            name = $rule.Name
+            status = 'pending'
+            exportedAt = $null
+        }
+    }
+    
+    # Assemblies
+    $assemblies = @($Database.Assemblies | Where-Object { -not $_.IsSystemObject })
+    foreach ($assembly in $assemblies) {
+        $objectIndex++
+        $objects += @{
+            id = $objectIndex
+            type = 'Assembly'
+            schema = ''
+            name = $assembly.Name
+            status = 'pending'
+            exportedAt = $null
+        }
+    }
+    
+    # Functions
+    $functions = @($Database.UserDefinedFunctions | Where-Object { -not $_.IsSystemObject })
+    foreach ($func in $functions) {
+        $objectIndex++
+        $objects += @{
+            id = $objectIndex
+            type = 'Function'
+            schema = $func.Schema
+            name = $func.Name
+            status = 'pending'
+            exportedAt = $null
+        }
+    }
+    
+    # User-Defined Aggregates
+    $aggregates = @($Database.UserDefinedAggregates | Where-Object { -not $_.IsSystemObject })
+    foreach ($agg in $aggregates) {
+        $objectIndex++
+        $objects += @{
+            id = $objectIndex
+            type = 'Aggregate'
+            schema = $agg.Schema
+            name = $agg.Name
+            status = 'pending'
+            exportedAt = $null
+        }
+    }
+    
+    # Stored Procedures
+    $storedProcs = @($Database.StoredProcedures | Where-Object { -not $_.IsSystemObject })
+    foreach ($proc in $storedProcs) {
+        $objectIndex++
+        $objects += @{
+            id = $objectIndex
+            type = 'StoredProcedure'
+            schema = $proc.Schema
+            name = $proc.Name
+            status = 'pending'
+            exportedAt = $null
+        }
+    }
+    
+    # Extended Stored Procedures
+    $extendedProcs = @($Database.ExtendedStoredProcedures | Where-Object { -not $_.IsSystemObject })
+    foreach ($proc in $extendedProcs) {
+        $objectIndex++
+        $objects += @{
+            id = $objectIndex
+            type = 'ExtendedStoredProcedure'
+            schema = $proc.Schema
+            name = $proc.Name
+            status = 'pending'
+            exportedAt = $null
+        }
+    }
+    
+    # Database Triggers
+    $dbTriggers = @($Database.Triggers | Where-Object { -not $_.IsSystemObject })
+    foreach ($trigger in $dbTriggers) {
+        $objectIndex++
+        $objects += @{
+            id = $objectIndex
+            type = 'DatabaseTrigger'
+            schema = ''
+            name = $trigger.Name
+            status = 'pending'
+            exportedAt = $null
+        }
+    }
+    
+    # Table Triggers
+    foreach ($table in $tables) {
+        try {
+            if ($table.Triggers -and $table.Triggers.Count -gt 0) {
+                $tableTriggers = @($table.Triggers | Where-Object { -not $_.IsSystemObject })
+                foreach ($trigger in $tableTriggers) {
+                    $objectIndex++
+                    $objects += @{
+                        id = $objectIndex
+                        type = 'TableTrigger'
+                        schema = $table.Schema
+                        name = "$($table.Name).$($trigger.Name)"
+                        status = 'pending'
+                        exportedAt = $null
+                    }
+                }
+            }
+        } catch { }
+    }
+    
+    # Views
+    $views = @($Database.Views | Where-Object { -not $_.IsSystemObject })
+    foreach ($view in $views) {
+        $objectIndex++
+        $objects += @{
+            id = $objectIndex
+            type = 'View'
+            schema = $view.Schema
+            name = $view.Name
+            status = 'pending'
+            exportedAt = $null
+        }
+    }
+    
+    # Synonyms
+    $synonyms = @($Database.Synonyms | Where-Object { -not $_.IsSystemObject })
+    foreach ($synonym in $synonyms) {
+        $objectIndex++
+        $objects += @{
+            id = $objectIndex
+            type = 'Synonym'
+            schema = $synonym.Schema
+            name = $synonym.Name
+            status = 'pending'
+            exportedAt = $null
+        }
+    }
+    
+    # Full-Text Catalogs
+    $ftCatalogs = @($Database.FullTextCatalogs | Where-Object { -not $_.IsSystemObject })
+    foreach ($ftc in $ftCatalogs) {
+        $objectIndex++
+        $objects += @{
+            id = $objectIndex
+            type = 'FullTextCatalog'
+            schema = ''
+            name = $ftc.Name
+            status = 'pending'
+            exportedAt = $null
+        }
+    }
+    
+    # Full-Text Stop Lists
+    $ftStopLists = @($Database.FullTextStopLists | Where-Object { -not $_.IsSystemObject })
+    foreach ($ftsl in $ftStopLists) {
+        $objectIndex++
+        $objects += @{
+            id = $objectIndex
+            type = 'FullTextStopList'
+            schema = ''
+            name = $ftsl.Name
+            status = 'pending'
+            exportedAt = $null
+        }
+    }
+    
+    # External Data Sources
+    try {
+        $externalDataSources = @($Database.ExternalDataSources)
+        foreach ($eds in $externalDataSources) {
+            $objectIndex++
+            $objects += @{
+                id = $objectIndex
+                type = 'ExternalDataSource'
+                schema = ''
+                name = $eds.Name
+                status = 'pending'
+                exportedAt = $null
+            }
+        }
+    } catch { }
+    
+    # External File Formats
+    try {
+        $externalFileFormats = @($Database.ExternalFileFormats)
+        foreach ($eff in $externalFileFormats) {
+            $objectIndex++
+            $objects += @{
+                id = $objectIndex
+                type = 'ExternalFileFormat'
+                schema = ''
+                name = $eff.Name
+                status = 'pending'
+                exportedAt = $null
+            }
+        }
+    } catch { }
+    
+    # Search Property Lists
+    try {
+        $searchPropertyLists = @($Database.SearchPropertyLists)
+        foreach ($spl in $searchPropertyLists) {
+            $objectIndex++
+            $objects += @{
+                id = $objectIndex
+                type = 'SearchPropertyList'
+                schema = ''
+                name = $spl.Name
+                status = 'pending'
+                exportedAt = $null
+            }
+        }
+    } catch { }
+    
+    # Plan Guides
+    try {
+        $planGuides = @($Database.PlanGuides)
+        foreach ($pg in $planGuides) {
+            $objectIndex++
+            $objects += @{
+                id = $objectIndex
+                type = 'PlanGuide'
+                schema = ''
+                name = $pg.Name
+                status = 'pending'
+                exportedAt = $null
+            }
+        }
+    } catch { }
+    
+    # Security Objects (batch for each type)
+    $asymmetricKeys = @($Database.AsymmetricKeys | Where-Object { -not $_.IsSystemObject })
+    foreach ($key in $asymmetricKeys) {
+        $objectIndex++
+        $objects += @{
+            id = $objectIndex
+            type = 'AsymmetricKey'
+            schema = ''
+            name = $key.Name
+            status = 'pending'
+            exportedAt = $null
+        }
+    }
+    
+    $certs = @($Database.Certificates | Where-Object { -not $_.IsSystemObject })
+    foreach ($cert in $certs) {
+        $objectIndex++
+        $objects += @{
+            id = $objectIndex
+            type = 'Certificate'
+            schema = ''
+            name = $cert.Name
+            status = 'pending'
+            exportedAt = $null
+        }
+    }
+    
+    $symKeys = @($Database.SymmetricKeys | Where-Object { -not $_.IsSystemObject })
+    foreach ($key in $symKeys) {
+        $objectIndex++
+        $objects += @{
+            id = $objectIndex
+            type = 'SymmetricKey'
+            schema = ''
+            name = $key.Name
+            status = 'pending'
+            exportedAt = $null
+        }
+    }
+    
+    $appRoles = @($Database.ApplicationRoles | Where-Object { -not $_.IsSystemObject })
+    foreach ($role in $appRoles) {
+        $objectIndex++
+        $objects += @{
+            id = $objectIndex
+            type = 'ApplicationRole'
+            schema = ''
+            name = $role.Name
+            status = 'pending'
+            exportedAt = $null
+        }
+    }
+    
+    $dbRoles = @($Database.Roles | Where-Object { -not $_.IsSystemObject -and -not $_.IsFixedRole })
+    foreach ($role in $dbRoles) {
+        $objectIndex++
+        $objects += @{
+            id = $objectIndex
+            type = 'DatabaseRole'
+            schema = ''
+            name = $role.Name
+            status = 'pending'
+            exportedAt = $null
+        }
+    }
+    
+    $dbUsers = @($Database.Users | Where-Object { -not $_.IsSystemObject })
+    foreach ($user in $dbUsers) {
+        $objectIndex++
+        $objects += @{
+            id = $objectIndex
+            type = 'DatabaseUser'
+            schema = ''
+            name = $user.Name
+            status = 'pending'
+            exportedAt = $null
+        }
+    }
+    
+    $auditSpecs = @($Database.DatabaseAuditSpecifications)
+    foreach ($spec in $auditSpecs) {
+        $objectIndex++
+        $objects += @{
+            id = $objectIndex
+            type = 'DatabaseAuditSpecification'
+            schema = ''
+            name = $spec.Name
+            status = 'pending'
+            exportedAt = $null
+        }
+    }
+    
+    # Security Policies
+    try {
+        $securityPolicies = @($Database.SecurityPolicies)
+        foreach ($policy in $securityPolicies) {
+            $objectIndex++
+            $objects += @{
+                id = $objectIndex
+                type = 'SecurityPolicy'
+                schema = $policy.Schema
+                name = $policy.Name
+                status = 'pending'
+                exportedAt = $null
+            }
+        }
+    } catch { }
+    
+    # Table Data (if IncludeData is enabled)
+    if ($IncludeDataExport) {
+        foreach ($table in $tables) {
+            $objectIndex++
+            $objects += @{
+                id = $objectIndex
+                type = 'TableData'
+                schema = $table.Schema
+                name = $table.Name
+                status = 'pending'
+                exportedAt = $null
+            }
+        }
+    }
+    
+    # Create progress structure
+    $progress = @{
+        version = '1.0'
+        exportStarted = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
+        exportCompleted = $null
+        server = $ServerName
+        database = $Database.Name
+        includeData = $IncludeDataExport
+        totalObjects = $objects.Count
+        completedObjects = 0
+        status = 'in_progress'
+        objects = $objects
+    }
+    
+    # Save progress file
+    Save-ExportProgress -Progress $progress -ExportDir $ExportDir
+    
+    Write-Output "  [SUCCESS] Progress tracking initialized with $($objects.Count) object(s)"
+    
+    return $progress
+}
+
+function ConvertTo-SafeYamlString {
+    <#
+    .SYNOPSIS
+        Escapes a string to be safely embedded in YAML single-quoted strings.
+    .DESCRIPTION
+        YAML single-quoted strings only need single quotes escaped by doubling them.
+        This function handles that escaping and returns a safely quoted string.
+    #>
+    param([string]$Value)
+    
+    if ($null -eq $Value) {
+        return "''"
+    }
+    
+    # In YAML single-quoted strings, single quotes are escaped by doubling them
+    # All other characters are literal in single-quoted strings
+    $escaped = $Value -replace "'", "''"
+    
+    return "'$escaped'"
+}
+
+function Save-ExportProgress {
+    <#
+    .SYNOPSIS
+        Saves the current export progress to YAML file.
+    #>
+    param(
+        [hashtable]$Progress,
+        [string]$ExportDir
+    )
+    
+    $progressFile = Get-ProgressFilePath -ExportDir $ExportDir
+    
+    # Build YAML content manually (avoid dependency on powershell-yaml for writing)
+    $yaml = [System.Text.StringBuilder]::new()
+    [void]$yaml.AppendLine("# Export Progress Tracking File")
+    [void]$yaml.AppendLine("# This file tracks export progress for restartable exports")
+    [void]$yaml.AppendLine("# DO NOT modify manually unless you know what you're doing")
+    [void]$yaml.AppendLine("")
+    [void]$yaml.AppendLine("version: $(ConvertTo-SafeYamlString $Progress.version)")
+    [void]$yaml.AppendLine("exportStarted: $(ConvertTo-SafeYamlString $Progress.exportStarted)")
+    if ($Progress.exportCompleted) {
+        [void]$yaml.AppendLine("exportCompleted: $(ConvertTo-SafeYamlString $Progress.exportCompleted)")
+    } else {
+        [void]$yaml.AppendLine("exportCompleted: null")
+    }
+    [void]$yaml.AppendLine("server: $(ConvertTo-SafeYamlString $Progress.server)")
+    [void]$yaml.AppendLine("database: $(ConvertTo-SafeYamlString $Progress.database)")
+    [void]$yaml.AppendLine("includeData: $($Progress.includeData.ToString().ToLower())")
+    [void]$yaml.AppendLine("totalObjects: $($Progress.totalObjects)")
+    [void]$yaml.AppendLine("completedObjects: $($Progress.completedObjects)")
+    [void]$yaml.AppendLine("status: $(ConvertTo-SafeYamlString $Progress.status)")
+    [void]$yaml.AppendLine("")
+    [void]$yaml.AppendLine("objects:")
+    
+    foreach ($obj in $Progress.objects) {
+        [void]$yaml.AppendLine("  - id: $($obj.id)")
+        [void]$yaml.AppendLine("    type: $(ConvertTo-SafeYamlString $obj.type)")
+        [void]$yaml.AppendLine("    schema: $(ConvertTo-SafeYamlString $obj.schema)")
+        [void]$yaml.AppendLine("    name: $(ConvertTo-SafeYamlString $obj.name)")
+        [void]$yaml.AppendLine("    status: $(ConvertTo-SafeYamlString $obj.status)")
+        if ($obj.exportedAt) {
+            [void]$yaml.AppendLine("    exportedAt: $(ConvertTo-SafeYamlString $obj.exportedAt)")
+        } else {
+            [void]$yaml.AppendLine("    exportedAt: null")
+        }
+    }
+    
+    $yaml.ToString() | Out-File -FilePath $progressFile -Encoding UTF8 -Force
+}
+
+function Get-ExportProgress {
+    <#
+    .SYNOPSIS
+        Loads existing export progress from YAML file.
+    #>
+    param([string]$ExportDir)
+    
+    $progressFile = Get-ProgressFilePath -ExportDir $ExportDir
+    
+    if (-not (Test-Path $progressFile)) {
+        return $null
+    }
+    
+    Write-Output "Loading existing progress from: $progressFile"
+    
+    # Check for PowerShell-Yaml module
+    if (-not (Get-Module -ListAvailable -Name powershell-yaml)) {
+        throw "PowerShell-Yaml module is required to resume exports. Install with: Install-Module powershell-yaml -Scope CurrentUser"
+    }
+    
+    Import-Module powershell-yaml -ErrorAction Stop
+    $yamlContent = Get-Content $progressFile -Raw
+    $progress = ConvertFrom-Yaml $yamlContent
+    
+    # Convert to hashtable format expected by the script
+    $result = @{
+        version = $progress.version
+        exportStarted = $progress.exportStarted
+        exportCompleted = $progress.exportCompleted
+        server = $progress.server
+        database = $progress.database
+        includeData = $progress.includeData
+        totalObjects = $progress.totalObjects
+        completedObjects = $progress.completedObjects
+        status = $progress.status
+        objects = @()
+    }
+    
+    foreach ($obj in $progress.objects) {
+        $result.objects += @{
+            id = $obj.id
+            type = $obj.type
+            schema = $obj.schema
+            name = $obj.name
+            status = $obj.status
+            exportedAt = $obj.exportedAt
+        }
+    }
+    
+    return $result
+}
+
+function Update-ObjectProgress {
+    <#
+    .SYNOPSIS
+        Marks an object as completed in the progress tracking.
+    #>
+    param(
+        [hashtable]$Progress,
+        [string]$ObjectType,
+        [string]$Schema,
+        [string]$ObjectName,
+        [string]$ExportDir
+    )
+    
+    # Find and update the object
+    foreach ($obj in $Progress.objects) {
+        if ($obj.type -eq $ObjectType -and $obj.schema -eq $Schema -and $obj.name -eq $ObjectName) {
+            $obj.status = 'completed'
+            $obj.exportedAt = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
+            $Progress.completedObjects++
+            break
+        }
+    }
+    
+    # Save updated progress
+    Save-ExportProgress -Progress $Progress -ExportDir $ExportDir
+}
+
+function Test-ObjectCompleted {
+    <#
+    .SYNOPSIS
+        Checks if an object has already been exported.
+    #>
+    param(
+        [hashtable]$Progress,
+        [string]$ObjectType,
+        [string]$Schema,
+        [string]$ObjectName
+    )
+    
+    if ($null -eq $Progress) {
+        return $false
+    }
+    
+    foreach ($obj in $Progress.objects) {
+        if ($obj.type -eq $ObjectType -and $obj.schema -eq $Schema -and $obj.name -eq $ObjectName) {
+            return ($obj.status -eq 'completed')
+        }
+    }
+    
+    return $false
+}
+
+function Complete-ExportProgress {
+    <#
+    .SYNOPSIS
+        Marks the export as completed.
+    #>
+    param(
+        [hashtable]$Progress,
+        [string]$ExportDir
+    )
+    
+    $Progress.status = 'completed'
+    $Progress.exportCompleted = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
+    Save-ExportProgress -Progress $Progress -ExportDir $ExportDir
+}
+
+function Get-ResumeSummary {
+    <#
+    .SYNOPSIS
+        Returns a summary of progress for resume operations.
+    #>
+    param([hashtable]$Progress)
+    
+    $pending = @($Progress.objects | Where-Object { $_.status -eq 'pending' })
+    $completed = @($Progress.objects | Where-Object { $_.status -eq 'completed' })
+    
+    return @{
+        Total = $Progress.totalObjects
+        Completed = $completed.Count
+        Pending = $pending.Count
+        PercentComplete = if ($Progress.totalObjects -gt 0) { [math]::Round(($completed.Count / $Progress.totalObjects) * 100, 1) } else { 0 }
+    }
+}
+
+#endregion
 
 function Initialize-OutputDirectory {
     <#
@@ -716,12 +1555,17 @@ function Export-DatabaseObjects {
         [Microsoft.SqlServer.Management.Smo.Database]$Database,
         [string]$OutputDir,
         [Microsoft.SqlServer.Management.Smo.Scripter]$Scripter,
-        [Microsoft.SqlServer.Management.Smo.SqlServerVersion]$TargetVersion
+        [Microsoft.SqlServer.Management.Smo.SqlServerVersion]$TargetVersion,
+        [hashtable]$Progress = $null
     )
     
     Write-Output ''
     Write-Output '═══════════════════════════════════════════════'
     Write-Output 'EXPORTING DATABASE OBJECTS'
+    if ($Progress) {
+        $summary = Get-ResumeSummary -Progress $Progress
+        Write-Output "  Resuming: $($summary.Completed)/$($summary.Total) completed ($($summary.PercentComplete)%)"
+    }
     Write-Output '═══════════════════════════════════════════════'
     
     # 0. FileGroups (Environment-specific, but captured for documentation)
@@ -893,6 +1737,7 @@ function Export-DatabaseObjects {
         Write-Output "  Found $($schemas.Count) schema(s) to export"
         $successCount = 0
         $failCount = 0
+        $skippedCount = 0
         $currentItem = 0
         $opts = New-ScriptingOptions -TargetVersion $TargetVersion
         $Scripter.Options = $opts
@@ -900,6 +1745,13 @@ function Export-DatabaseObjects {
         foreach ($schema in $schemas) {
             $currentItem++
             $percentComplete = [math]::Round(($currentItem / $schemas.Count) * 100)
+            
+            # Check if already completed (for resume)
+            if ($Progress -and (Test-ObjectCompleted -Progress $Progress -ObjectType 'Schema' -Schema '' -ObjectName $schema.Name)) {
+                $skippedCount++
+                continue
+            }
+            
             try {
                 Write-Host ("  [{0,3}%]{1}..." -f $percentComplete, $schema.Name)
                 $safeName = Get-SafeFileName $schema.Name
@@ -916,6 +1768,11 @@ function Export-DatabaseObjects {
                 $schema.Script($opts) | Out-Null
                 Write-Host "        [SUCCESS]" -ForegroundColor Green
                 $successCount++
+                
+                # Update progress
+                if ($Progress) {
+                    Update-ObjectProgress -Progress $Progress -ObjectType 'Schema' -Schema '' -ObjectName $schema.Name -ExportDir $OutputDir
+                }
             } catch {
                 Write-Host "        [FAILED]" -ForegroundColor Red
                 Write-ExportError -ObjectType 'Schema' -ObjectName $schema.Name -ErrorRecord $_ -FilePath $fileName
@@ -927,7 +1784,7 @@ function Export-DatabaseObjects {
                 $failCount++
             }
         }
-            Write-Output "  [SUMMARY] Exported $successCount/$($schemas.Count) schema(s) successfully" + $(if ($failCount -gt 0) { " ($failCount failed)" } else { "" })
+            Write-Output "  [SUMMARY] Exported $successCount/$($schemas.Count) schema(s) successfully$(if ($skippedCount -gt 0) { " ($skippedCount skipped)" })$(if ($failCount -gt 0) { " ($failCount failed)" })"
         }
     }
     }
@@ -1129,6 +1986,7 @@ function Export-DatabaseObjects {
         Write-Output "  Found $($tables.Count) table(s) to export"
         $successCount = 0
         $failCount = 0
+        $skippedCount = 0
         $currentItem = 0
         $opts = New-ScriptingOptions -TargetVersion $TargetVersion -Overrides @{
             DriAll              = $false
@@ -1147,6 +2005,13 @@ function Export-DatabaseObjects {
         foreach ($table in $tables) {
             $currentItem++
             $percentComplete = [math]::Round(($currentItem / $tables.Count) * 100)
+            
+            # Check if already completed (for resume)
+            if ($Progress -and (Test-ObjectCompleted -Progress $Progress -ObjectType 'Table' -Schema $table.Schema -ObjectName $table.Name)) {
+                $skippedCount++
+                continue
+            }
+            
             try {
                 Write-Host ("  [{0,3}%]{1}.{2}..." -f $percentComplete, $table.Schema, $table.Name)
                 $fileName = Join-Path $OutputDir '08_Tables_PrimaryKey' "$(Get-SafeFileName $($table.Schema)).$(Get-SafeFileName $($table.Name)).sql"
@@ -1156,13 +2021,18 @@ function Export-DatabaseObjects {
                 $table.Script($opts) | Out-Null
                 Write-Host "        [SUCCESS]" -ForegroundColor Green
                 $successCount++
+                
+                # Update progress
+                if ($Progress) {
+                    Update-ObjectProgress -Progress $Progress -ObjectType 'Table' -Schema $table.Schema -ObjectName $table.Name -ExportDir $OutputDir
+                }
             } catch {
                 Write-Host "        [FAILED]" -ForegroundColor Red
                 Write-ExportError -ObjectType 'Table' -ObjectName "$($table.Schema).$($table.Name)" -ErrorRecord $_ -AdditionalContext "Exporting table structure with primary keys"
                 $failCount++
             }
         }
-        Write-Output "  [SUMMARY] Exported $successCount/$($tables.Count) table(s) successfully" + $(if ($failCount -gt 0) { " ($failCount failed)" } else { "" })
+        Write-Output "  [SUMMARY] Exported $successCount/$($tables.Count) table(s) successfully$(if ($skippedCount -gt 0) { " ($skippedCount skipped)" })$(if ($failCount -gt 0) { " ($failCount failed)" })"
     }
     }
     
@@ -1392,6 +2262,7 @@ function Export-DatabaseObjects {
         Write-Output "  Found $($functions.Count) function(s) to export"
         $successCount = 0
         $failCount = 0
+        $skippedCount = 0
         $currentItem = 0
         $opts = New-ScriptingOptions -TargetVersion $TargetVersion -Overrides @{
             Indexes     = $false
@@ -1402,6 +2273,13 @@ function Export-DatabaseObjects {
         foreach ($function in $functions) {
             $currentItem++
             $percentComplete = [math]::Round(($currentItem / $functions.Count) * 100)
+            
+            # Check if already completed (for resume)
+            if ($Progress -and (Test-ObjectCompleted -Progress $Progress -ObjectType 'Function' -Schema $function.Schema -ObjectName $function.Name)) {
+                $skippedCount++
+                continue
+            }
+            
             try {
                 Write-Host ("  [{0,3}%]{1}.{2}..." -f $percentComplete, $function.Schema, $function.Name)
                 $fileName = Join-Path $OutputDir '13_Programmability/02_Functions' "$(Get-SafeFileName $($function.Schema)).$(Get-SafeFileName $($function.Name)).sql"
@@ -1411,13 +2289,18 @@ function Export-DatabaseObjects {
                 $function.Script($opts) | Out-Null
                 Write-Host "        [SUCCESS]" -ForegroundColor Green
                 $successCount++
+                
+                # Update progress
+                if ($Progress) {
+                    Update-ObjectProgress -Progress $Progress -ObjectType 'Function' -Schema $function.Schema -ObjectName $function.Name -ExportDir $OutputDir
+                }
             } catch {
                 Write-Host "        [FAILED]" -ForegroundColor Red
                 Write-ExportError -ObjectType 'Function' -ObjectName "$($function.Schema).$($function.Name)" -ErrorRecord $_ -FilePath $fileName
                 $failCount++
             }
         }
-        Write-Output "  [SUMMARY] Exported $successCount/$($functions.Count) function(s) successfully" + $(if ($failCount -gt 0) { " ($failCount failed)" } else { "" })
+        Write-Output "  [SUMMARY] Exported $successCount/$($functions.Count) function(s) successfully$(if ($skippedCount -gt 0) { " ($skippedCount skipped)" })$(if ($failCount -gt 0) { " ($failCount failed)" })"
     }
     }
     
@@ -1464,6 +2347,7 @@ function Export-DatabaseObjects {
         Write-Output "  Found $($storedProcs.Count) stored procedure(s) and $($extendedProcs.Count) extended stored procedure(s) to export"
         $successCount = 0
         $failCount = 0
+        $skippedCount = 0
         $currentItem = 0
         $opts = New-ScriptingOptions -TargetVersion $TargetVersion -Overrides @{
             Indexes  = $false
@@ -1474,6 +2358,13 @@ function Export-DatabaseObjects {
         foreach ($proc in $storedProcs) {
             $currentItem++
             $percentComplete = [math]::Round(($currentItem / $totalProcs) * 100)
+            
+            # Check if already completed (for resume)
+            if ($Progress -and (Test-ObjectCompleted -Progress $Progress -ObjectType 'StoredProcedure' -Schema $proc.Schema -ObjectName $proc.Name)) {
+                $skippedCount++
+                continue
+            }
+            
             try {
                 Write-Host ("  [{0,3}%]{1}.{2}..." -f $percentComplete, $proc.Schema, $proc.Name)
                 $fileName = Join-Path $OutputDir '13_Programmability/03_StoredProcedures' "$(Get-SafeFileName $($proc.Schema)).$(Get-SafeFileName $($proc.Name)).sql"
@@ -1483,6 +2374,11 @@ function Export-DatabaseObjects {
                 $proc.Script($opts) | Out-Null
                 Write-Host "        [SUCCESS]" -ForegroundColor Green
                 $successCount++
+                
+                # Update progress
+                if ($Progress) {
+                    Update-ObjectProgress -Progress $Progress -ObjectType 'StoredProcedure' -Schema $proc.Schema -ObjectName $proc.Name -ExportDir $OutputDir
+                }
             } catch {
                 Write-Host "        [FAILED]" -ForegroundColor Red
                 Write-ExportError -ObjectType 'StoredProcedure' -ObjectName "$($proc.Schema).$($proc.Name)" -ErrorRecord $_ -FilePath $fileName
@@ -1493,6 +2389,13 @@ function Export-DatabaseObjects {
         foreach ($extProc in $extendedProcs) {
             $currentItem++
             $percentComplete = [math]::Round(($currentItem / $totalProcs) * 100)
+            
+            # Check if already completed (for resume)
+            if ($Progress -and (Test-ObjectCompleted -Progress $Progress -ObjectType 'ExtendedStoredProcedure' -Schema $extProc.Schema -ObjectName $extProc.Name)) {
+                $skippedCount++
+                continue
+            }
+            
             try {
                 Write-Host ("  [{0,3}%]{1}.{2}..." -f $percentComplete, $extProc.Schema, $extProc.Name)
                 $fileName = Join-Path $OutputDir '13_Programmability/03_StoredProcedures' "$($extProc.Schema).$($extProc.Name).extended.sql"
@@ -1502,13 +2405,18 @@ function Export-DatabaseObjects {
                 $extProc.Script($opts) | Out-Null
                 Write-Host "        [SUCCESS]" -ForegroundColor Green
                 $successCount++
+                
+                # Update progress
+                if ($Progress) {
+                    Update-ObjectProgress -Progress $Progress -ObjectType 'ExtendedStoredProcedure' -Schema $extProc.Schema -ObjectName $extProc.Name -ExportDir $OutputDir
+                }
             } catch {
                 Write-Host "        [FAILED]" -ForegroundColor Red
                 Write-ExportError -ObjectType 'ExtendedStoredProcedure' -ObjectName "$($extProc.Schema).$($extProc.Name)" -ErrorRecord $_ -FilePath $fileName
                 $failCount++
             }
         }
-        Write-Output "  [SUMMARY] Exported $successCount/$totalProcs stored procedure(s) successfully" + $(if ($failCount -gt 0) { " ($failCount failed)" } else { "" })
+        Write-Output "  [SUMMARY] Exported $successCount/$totalProcs stored procedure(s) successfully$(if ($skippedCount -gt 0) { " ($skippedCount skipped)" })$(if ($failCount -gt 0) { " ($failCount failed)" })"
     }
     
     # 17. Database Triggers
@@ -1607,6 +2515,7 @@ function Export-DatabaseObjects {
         Write-Output "  Found $($views.Count) view(s) to export"
         $successCount = 0
         $failCount = 0
+        $skippedCount = 0
         $opts = New-ScriptingOptions -TargetVersion $TargetVersion
         $Scripter.Options = $opts
         
@@ -1614,6 +2523,13 @@ function Export-DatabaseObjects {
         foreach ($view in $views) {
             $currentItem++
             $percentComplete = [math]::Round(($currentItem / $views.Count) * 100)
+            
+            # Check if already completed (for resume)
+            if ($Progress -and (Test-ObjectCompleted -Progress $Progress -ObjectType 'View' -Schema $view.Schema -ObjectName $view.Name)) {
+                $skippedCount++
+                continue
+            }
+            
             try {
                 Write-Host ("  [{0,3}%]{1}.{2}..." -f $percentComplete, $view.Schema, $view.Name)
                 $fileName = Join-Path $OutputDir '13_Programmability/05_Views' "$(Get-SafeFileName $($view.Schema)).$(Get-SafeFileName $($view.Name)).sql"
@@ -1623,13 +2539,18 @@ function Export-DatabaseObjects {
                 $view.Script($opts) | Out-Null
                 Write-Host "        [SUCCESS]" -ForegroundColor Green
                 $successCount++
+                
+                # Update progress
+                if ($Progress) {
+                    Update-ObjectProgress -Progress $Progress -ObjectType 'View' -Schema $view.Schema -ObjectName $view.Name -ExportDir $OutputDir
+                }
             } catch {
                 Write-Host "        [FAILED]" -ForegroundColor Red
                 Write-ExportError -ObjectType 'View' -ObjectName "$($view.Schema).$($view.Name)" -ErrorRecord $_ -FilePath $fileName
                 $failCount++
             }
         }
-        Write-Output "  [SUMMARY] Exported $successCount/$($views.Count) view(s) successfully" + $(if ($failCount -gt 0) { " ($failCount failed)" } else { "" })
+        Write-Output "  [SUMMARY] Exported $successCount/$($views.Count) view(s) successfully$(if ($skippedCount -gt 0) { " ($skippedCount skipped)" })$(if ($failCount -gt 0) { " ($failCount failed)" })"
     }
     }
     
@@ -2156,7 +3077,8 @@ function Export-TableData {
         [Microsoft.SqlServer.Management.Smo.Database]$Database,
         [string]$OutputDir,
         [Microsoft.SqlServer.Management.Smo.Scripter]$Scripter,
-        [Microsoft.SqlServer.Management.Smo.SqlServerVersion]$TargetVersion
+        [Microsoft.SqlServer.Management.Smo.SqlServerVersion]$TargetVersion,
+        [hashtable]$Progress = $null
     )
     
     Write-Output ''
@@ -2182,11 +3104,19 @@ function Export-TableData {
     $successCount = 0
     $failCount = 0
     $emptyCount = 0
+    $skippedCount = 0
     
     $currentItem = 0
     foreach ($table in $tables) {
         $currentItem++
         $percentComplete = [math]::Round(($currentItem / $tables.Count) * 100)
+        
+        # Check if already completed (for resume)
+        if ($Progress -and (Test-ObjectCompleted -Progress $Progress -ObjectType 'TableData' -Schema $table.Schema -ObjectName $table.Name)) {
+            $skippedCount++
+            continue
+        }
+        
         try {
             # Use SMO Database object to execute count query
             $countQuery = "SELECT COUNT(*) FROM [$($table.Schema)].[$($table.Name)]"
@@ -2202,8 +3132,17 @@ function Export-TableData {
                 $Scripter.EnumScript($table) | Out-Null
                 Write-Host "        [SUCCESS]" -ForegroundColor Green
                 $successCount++
+                
+                # Update progress
+                if ($Progress) {
+                    Update-ObjectProgress -Progress $Progress -ObjectType 'TableData' -Schema $table.Schema -ObjectName $table.Name -ExportDir $OutputDir
+                }
             } else {
                 $emptyCount++
+                # Mark empty tables as completed too
+                if ($Progress) {
+                    Update-ObjectProgress -Progress $Progress -ObjectType 'TableData' -Schema $table.Schema -ObjectName $table.Name -ExportDir $OutputDir
+                }
             }
         } catch {
             Write-Host "        [FAILED]" -ForegroundColor Red
@@ -2213,6 +3152,9 @@ function Export-TableData {
     }
     
     Write-Output "  [SUMMARY] Exported data from $successCount/$($tables.Count) table(s) successfully"
+    if ($skippedCount -gt 0) {
+        Write-Output "  [INFO] Skipped $skippedCount table(s) (already exported)"
+    }
     if ($emptyCount -gt 0) {
         Write-Output "  [INFO] Skipped $emptyCount empty table(s)"
     }
@@ -2441,6 +3383,31 @@ function Show-ExportSummary {
 #region Main Script
 
 try {
+    # Handle resume mode
+    $exportDir = $null
+    $script:ExportProgress = $null
+    $isResuming = $false
+    
+    if ($Resume) {
+        # Validate resume path
+        if (-not (Test-Path $Resume)) {
+            throw "Resume path not found: $Resume"
+        }
+        
+        $progressFile = Join-Path $Resume 'export-progress.yml'
+        if (-not (Test-Path $progressFile)) {
+            throw "No progress file found at: $progressFile. Cannot resume export."
+        }
+        
+        $exportDir = $Resume
+        $isResuming = $true
+        Write-Output ''
+        Write-Output '═══════════════════════════════════════════════'
+        Write-Output 'RESUMING EXPORT'
+        Write-Output '═══════════════════════════════════════════════'
+        Write-Output "Resuming from: $exportDir"
+    }
+    
     # Load configuration if provided
     $config = @{ export = @{ excludeObjectTypes = @(); includeData = $false; excludeObjects = @() } }
     $configSource = "None (using defaults)"
@@ -2508,16 +3475,22 @@ try {
         exit 1
     }
     
-    # Initialize output directory
-    $exportDir = Initialize-OutputDirectory -Path $OutputPath
+    # Initialize or use existing output directory
+    if (-not $isResuming) {
+        $exportDir = Initialize-OutputDirectory -Path $OutputPath
+    }
     
     # Initialize log file
     $script:LogFile = Join-Path $exportDir 'export-log.txt'
-    Write-Log "Export started" -Severity INFO
-    Write-Log "Server: $Server" -Severity INFO
-    Write-Log "Database: $Database" -Severity INFO
-    Write-Log "Output: $exportDir" -Severity INFO
-    Write-Log "Configuration source: $configSource" -Severity INFO
+    if ($isResuming) {
+        Write-Log "Export resumed" -Level INFO
+    } else {
+        Write-Log "Export started" -Level INFO
+    }
+    Write-Log "Server: $Server" -Level INFO
+    Write-Log "Database: $Database" -Level INFO
+    Write-Log "Output: $exportDir" -Level INFO
+    Write-Log "Configuration source: $configSource" -Level INFO
     
     # Display configuration
     Show-ExportConfiguration `
@@ -2581,20 +3554,53 @@ For more details, see: https://go.microsoft.com/fwlink/?linkid=2226722
     }
     
     Write-Output "[SUCCESS] Connected to $Server\$Database"
-    Write-Log "Connected successfully to $Server\$Database" -Severity INFO
+    Write-Log "Connected successfully to $Server\$Database" -Level INFO
     
     # Create scripter
     $sqlVersion = Get-SqlServerVersion -VersionString $TargetSqlVersion
     $scripter = [Microsoft.SqlServer.Management.Smo.Scripter]::new($smServer)
     $scripter.Options.TargetServerVersion = $sqlVersion
     
+    # Initialize or load progress tracking
+    if ($isResuming) {
+        $script:ExportProgress = Get-ExportProgress -ExportDir $exportDir
+        if ($null -eq $script:ExportProgress) {
+            throw "Failed to load progress file from: $exportDir"
+        }
+        
+        # Validate resume parameters match
+        if ($script:ExportProgress.server -ne $Server) {
+            Write-Warning "Server mismatch: Progress file is for '$($script:ExportProgress.server)', but resuming with '$Server'"
+        }
+        if ($script:ExportProgress.database -ne $Database) {
+            throw "Database mismatch: Progress file is for '$($script:ExportProgress.database)', but resuming with '$Database'"
+        }
+        
+        $summary = Get-ResumeSummary -Progress $script:ExportProgress
+        Write-Output ''
+        Write-Output "Progress loaded: $($summary.Completed)/$($summary.Total) objects completed ($($summary.PercentComplete)%)"
+        Write-Output "Pending objects: $($summary.Pending)"
+        
+        # Update IncludeData from progress file if not explicitly set
+        if (-not $IncludeData -and $script:ExportProgress.includeData) {
+            $IncludeData = $true
+            Write-Output "[INFO] Data export enabled from progress file"
+        }
+    } else {
+        # Initialize new progress tracking
+        $script:ExportProgress = Initialize-ExportProgress -Database $smDatabase -ExportDir $exportDir -ServerName $Server -IncludeDataExport $IncludeData
+    }
+    
     # Export schema objects
-    Export-DatabaseObjects -Database $smDatabase -OutputDir $exportDir -Scripter $scripter -TargetVersion $sqlVersion
+    Export-DatabaseObjects -Database $smDatabase -OutputDir $exportDir -Scripter $scripter -TargetVersion $sqlVersion -Progress $script:ExportProgress
     
     # Export data if requested
     if ($IncludeData) {
-        Export-TableData -Database $smDatabase -OutputDir $exportDir -Scripter $scripter -TargetVersion $sqlVersion
+        Export-TableData -Database $smDatabase -OutputDir $exportDir -Scripter $scripter -TargetVersion $sqlVersion -Progress $script:ExportProgress
     }
+    
+    # Mark export as completed
+    Complete-ExportProgress -Progress $script:ExportProgress -ExportDir $exportDir
     
     # Create deployment manifest
     New-DeploymentManifest -OutputDir $exportDir -DatabaseName $Database -ServerName $Server
@@ -2606,18 +3612,18 @@ For more details, see: https://go.microsoft.com/fwlink/?linkid=2226722
     Write-Output 'EXPORT COMPLETE'
     Write-Output '═══════════════════════════════════════════════'
     Write-Output ''
-    Write-Log "Export completed successfully" -Severity INFO
+    Write-Log "Export completed successfully" -Level INFO
     
 } catch {
     Write-Error "[ERROR] Script failed: $_"
-    Write-Log "Script failed: $_" -Severity ERROR
+    Write-Log "Script failed: $_" -Level ERROR
     exit 1
 } finally {
     # Ensure database connection is closed
     if ($smServer -and $smServer.ConnectionContext.IsOpen) {
         Write-Output 'Disconnecting from SQL Server...'
         $smServer.ConnectionContext.Disconnect()
-        Write-Log "Disconnected from SQL Server" -Severity INFO
+        Write-Log "Disconnected from SQL Server" -Level INFO
     }
 }
 
