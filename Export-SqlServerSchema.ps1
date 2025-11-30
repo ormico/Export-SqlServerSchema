@@ -57,6 +57,7 @@
 
 .NOTES
     Requires: SQL Server Management Objects (SMO)
+    Optional: PowerShell-Yaml module (required for resuming exports)
     Author: Zack Moore
     Updated for PowerShell 7 and modern standards
 #>
@@ -1062,6 +1063,27 @@ function Initialize-ExportProgress {
     return $progress
 }
 
+function ConvertTo-SafeYamlString {
+    <#
+    .SYNOPSIS
+        Escapes a string to be safely embedded in YAML single-quoted strings.
+    .DESCRIPTION
+        YAML single-quoted strings only need single quotes escaped by doubling them.
+        This function handles that escaping and returns a safely quoted string.
+    #>
+    param([string]$Value)
+    
+    if ($null -eq $Value) {
+        return "''"
+    }
+    
+    # In YAML single-quoted strings, single quotes are escaped by doubling them
+    # All other characters are literal in single-quoted strings
+    $escaped = $Value -replace "'", "''"
+    
+    return "'$escaped'"
+}
+
 function Save-ExportProgress {
     <#
     .SYNOPSIS
@@ -1080,32 +1102,30 @@ function Save-ExportProgress {
     [void]$yaml.AppendLine("# This file tracks export progress for restartable exports")
     [void]$yaml.AppendLine("# DO NOT modify manually unless you know what you're doing")
     [void]$yaml.AppendLine("")
-    [void]$yaml.AppendLine("version: '$($Progress.version)'")
-    [void]$yaml.AppendLine("exportStarted: '$($Progress.exportStarted)'")
+    [void]$yaml.AppendLine("version: $(ConvertTo-SafeYamlString $Progress.version)")
+    [void]$yaml.AppendLine("exportStarted: $(ConvertTo-SafeYamlString $Progress.exportStarted)")
     if ($Progress.exportCompleted) {
-        [void]$yaml.AppendLine("exportCompleted: '$($Progress.exportCompleted)'")
+        [void]$yaml.AppendLine("exportCompleted: $(ConvertTo-SafeYamlString $Progress.exportCompleted)")
     } else {
         [void]$yaml.AppendLine("exportCompleted: null")
     }
-    [void]$yaml.AppendLine("server: '$($Progress.server)'")
-    [void]$yaml.AppendLine("database: '$($Progress.database)'")
+    [void]$yaml.AppendLine("server: $(ConvertTo-SafeYamlString $Progress.server)")
+    [void]$yaml.AppendLine("database: $(ConvertTo-SafeYamlString $Progress.database)")
     [void]$yaml.AppendLine("includeData: $($Progress.includeData.ToString().ToLower())")
     [void]$yaml.AppendLine("totalObjects: $($Progress.totalObjects)")
     [void]$yaml.AppendLine("completedObjects: $($Progress.completedObjects)")
-    [void]$yaml.AppendLine("status: '$($Progress.status)'")
+    [void]$yaml.AppendLine("status: $(ConvertTo-SafeYamlString $Progress.status)")
     [void]$yaml.AppendLine("")
     [void]$yaml.AppendLine("objects:")
     
     foreach ($obj in $Progress.objects) {
         [void]$yaml.AppendLine("  - id: $($obj.id)")
-        [void]$yaml.AppendLine("    type: '$($obj.type)'")
-        [void]$yaml.AppendLine("    schema: '$($obj.schema)'")
-        # Escape single quotes in object names
-        $escapedName = $obj.name -replace "'", "''"
-        [void]$yaml.AppendLine("    name: '$escapedName'")
-        [void]$yaml.AppendLine("    status: '$($obj.status)'")
+        [void]$yaml.AppendLine("    type: $(ConvertTo-SafeYamlString $obj.type)")
+        [void]$yaml.AppendLine("    schema: $(ConvertTo-SafeYamlString $obj.schema)")
+        [void]$yaml.AppendLine("    name: $(ConvertTo-SafeYamlString $obj.name)")
+        [void]$yaml.AppendLine("    status: $(ConvertTo-SafeYamlString $obj.status)")
         if ($obj.exportedAt) {
-            [void]$yaml.AppendLine("    exportedAt: '$($obj.exportedAt)'")
+            [void]$yaml.AppendLine("    exportedAt: $(ConvertTo-SafeYamlString $obj.exportedAt)")
         } else {
             [void]$yaml.AppendLine("    exportedAt: null")
         }

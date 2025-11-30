@@ -40,7 +40,7 @@ Install-Module powershell-yaml -Scope CurrentUser  # Optional, for YAML config
 - PowerShell 7.0+
 - SQL Server 2012+ or Azure SQL Database
 - SQL Server Management Objects (SMO): `Install-Module SqlServer -Scope CurrentUser`
-- PowerShell YAML module (optional): `Install-Module powershell-yaml -Scope CurrentUser`
+- PowerShell YAML module (optional, required for resuming exports): `Install-Module powershell-yaml -Scope CurrentUser`
 
 ## Quick Start
 
