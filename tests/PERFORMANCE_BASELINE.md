@@ -75,15 +75,15 @@ Created using: `tests/create-perf-test-db.sql`
 
 ### Summary Table
 
-| Metric | Baseline | Phase 1 | Phase 2 | Phase 3 | Phase 4 |
-|--------|----------|---------|---------|---------|---------|
-| **Total Duration** | **61.21 sec** | **61.26 sec** | **30.69 sec** | - | - |
-| Connection Time | 0.01 sec | 0.01 sec | 0.01 sec | - | - |
-| Schema Export | 53.01 sec | 53.06 sec | 22.65 sec | - | - |
-| Data Export | 8.11 sec | 8.11 sec | 7.93 sec | - | - |
-| Files Created | 314 | 314 | 314 | - | - |
-| Errors | 0 | 0 | 0 | - | - |
-| **Improvement** | - | **0%** | **-49.9%** | - | - |
+| Metric | Baseline | Phase 1 | Phase 2 | Final |
+|--------|----------|---------|---------|-------|
+| **Total Duration** | **61.21 sec** | **61.26 sec** | **30.69 sec** | **21.14 sec** |
+| Connection Time | 0.01 sec | 0.01 sec | 0.01 sec | 0.01 sec |
+| Schema Export | 53.01 sec | 53.06 sec | 22.65 sec | 12.86 sec |
+| Data Export | 8.11 sec | 8.11 sec | 7.93 sec | 8.19 sec |
+| Files Created | 314 | 314 | 314 | 314 |
+| Errors | 0 | 0 | 0 | 0 |
+| **Improvement** | - | **0%** | **-49.9%** | **-65.5%** |
 
 ### Phase Details
 
@@ -91,9 +91,8 @@ Created using: `tests/create-perf-test-db.sql`
 |-------|------------|-------------|----------|-------------|
 | Baseline | `053665e` | Original code before optimizations | 61.21 sec | - |
 | Phase 1 | `053665e` | Single-pass row count via sys.partitions | 61.26 sec | +0.08% |
-| Phase 2 | `7b4a4ef` | SMO prefetch with SetDefaultInitFields | 30.69 sec | **-49.9%** |
-| Phase 3 | - | Batch scripting with EnumScript | - | - |
-| Phase 4 | - | Reduce console output frequency | - | - |
+| Phase 2 | `7b4a4ef` | SMO prefetch with SetDefaultInitFields | 30.69 sec | -49.9% |
+| Final | current | Phase 2 + quiet output default (use -Verbose for detail) | 21.14 sec | **-65.5%** |
 
 ### Phase 1 Analysis
 
@@ -120,6 +119,23 @@ Created using: `tests/create-perf-test-db.sql`
 - Schema, UserDefinedType, UserDefinedTableType
 - Synonym, Sequence
 
+### Final Phase Analysis (Quiet Output Default)
+
+**Change**: Changed default output from verbose per-object to milestone-based progress (10% intervals). Use `-Verbose` for detailed per-object output. Uses `Write-ObjectProgress` helper function that checks `$script:VerboseOutput` flag (set from PowerShell's built-in `$VerbosePreference`).
+
+**Result**: Additional **31.1% improvement** over Phase 2 alone (from 30.69 sec to 21.14 sec).
+
+**Explanation**: Console I/O is surprisingly expensive. With 252+ objects, the script was doing 500+ Write-Host calls. In default mode, this drops to ~100 milestone updates. The console output overhead was approximately 10 seconds.
+
+**Usage**:
+```powershell
+# Default (quiet milestone output) - fastest
+.\Export-SqlServerSchema.ps1 -Server 'localhost,1433' -Database 'MyDb'
+
+# Verbose per-object output
+.\Export-SqlServerSchema.ps1 -Server 'localhost,1433' -Database 'MyDb' -Verbose
+```
+
 ---
 
 ## How to Reproduce
@@ -145,4 +161,6 @@ $cred = New-Object PSCredential -ArgumentList 'sa', (ConvertTo-SecureString 'Tes
 | `baseline-metrics.json` | Raw baseline metrics (original code) |
 | `phase1-metrics.json` | Phase 1 metrics (single-pass row count) |
 | `phase2-metrics.json` | Phase 2 metrics (SMO prefetch) |
+| `phase4-metrics.json` | Phase 2+4 metrics (SMO prefetch + -Quiet flag) |
+| `final-metrics.json` | Final metrics (SMO prefetch + quiet default) |
 | `create-perf-test-db.sql` | Script to create PerfTestDb |

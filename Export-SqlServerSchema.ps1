@@ -12,6 +12,9 @@
     Exports all database objects (tables, stored procedures, views, etc.) to individual SQL files,
     organized in dependency order for safe re-instantiation. Exports data as INSERT statements.
     Supports Windows and Linux.
+    
+    By default, shows milestone-based progress (at 10% intervals). Use -Verbose for detailed 
+    per-object progress output.
 
 .PARAMETER Server
     SQL Server instance (e.g., 'localhost', 'server\SQLEXPRESS', 'server.database.windows.net').
@@ -95,6 +98,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $script:LogFile = $null  # Will be set after output directory is created
+$script:VerboseOutput = ($VerbosePreference -eq 'Continue')  # Default is quiet; -Verbose shows per-object progress
 
 # Performance metrics tracking
 $script:Metrics = @{
@@ -151,6 +155,53 @@ function Stop-MetricsTimer {
     
     $script:Metrics.TotalObjectsExported += $SuccessCount
     $script:Metrics.Errors += $FailCount
+}
+
+function Write-ObjectProgress {
+    <#
+    .SYNOPSIS
+        Writes progress for an object export. Default shows milestone progress; -Verbose shows every object.
+    .DESCRIPTION
+        Phase 4 optimization: Reduces console I/O overhead by batching progress output.
+        Default mode writes at 10% intervals. With -Verbose, writes every object.
+    #>
+    param(
+        [string]$ObjectName,
+        [int]$Current,
+        [int]$Total,
+        [switch]$Success,
+        [switch]$Failed
+    )
+    
+    $percentComplete = [math]::Round(($Current / $Total) * 100)
+    
+    if ($script:VerboseOutput) {
+        # Verbose mode - show every object with SUCCESS/FAILED status
+        # Only print object name on initial call (no Success/Failed flag)
+        if (-not $Success -and -not $Failed) {
+            Write-Host ("  [{0,3}%]{1}..." -f $percentComplete, $ObjectName)
+        } elseif ($Success) {
+            Write-Host "        [SUCCESS]" -ForegroundColor Green
+        } elseif ($Failed) {
+            Write-Host "        [FAILED]" -ForegroundColor Red
+        }
+    } else {
+        # Default mode - only show progress at 10% intervals or for failures
+        # Skip the -Success calls entirely - we already showed progress at milestone
+        if ($Success) { return }
+        
+        $milestone = [math]::Floor($percentComplete / 10) * 10
+        $prevMilestone = if ($Current -gt 1) { [math]::Floor((($Current - 1) / $Total) * 100 / 10) * 10 } else { -1 }
+        
+        if ($Failed) {
+            # Always show failures
+            Write-Host ("  [{0,3}%]{1}..." -f $percentComplete, $ObjectName)
+            Write-Host "        [FAILED]" -ForegroundColor Red
+        } elseif ($milestone -gt $prevMilestone -or $Current -eq $Total) {
+            # Show at milestones (10%, 20%, etc.) and at completion
+            Write-Host ("  [{0,3}%] {1} of {2} completed..." -f $percentComplete, $Current, $Total)
+        }
+    }
 }
 
 function Save-PerformanceMetrics {
@@ -1049,7 +1100,7 @@ function Export-DatabaseObjects {
             $currentItem++
             $percentComplete = [math]::Round(($currentItem / $schemas.Count) * 100)
             try {
-                Write-Host ("  [{0,3}%]{1}..." -f $percentComplete, $schema.Name)
+                Write-ObjectProgress -ObjectName $schema.Name -Current $currentItem -Total $schemas.Count
                 $safeName = Get-SafeFileName $schema.Name
                 $fileName = Join-Path $OutputDir '02_Schemas' "$safeName.sql"
                 
@@ -1062,10 +1113,10 @@ function Export-DatabaseObjects {
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
                 $schema.Script($opts) | Out-Null
-                Write-Host "        [SUCCESS]" -ForegroundColor Green
+                Write-ObjectProgress -ObjectName $schema.Name -Current $currentItem -Total $schemas.Count -Success
                 $successCount++
             } catch {
-                Write-Host "        [FAILED]" -ForegroundColor Red
+                Write-ObjectProgress -ObjectName $schema.Name -Current $currentItem -Total $schemas.Count -Failed
                 Write-ExportError -ObjectType 'Schema' -ObjectName $schema.Name -ErrorRecord $_ -FilePath $fileName
                 Write-Host "  [DEBUG] Original name: [$($schema.Name)]" -ForegroundColor Yellow
                 Write-Host "  [DEBUG] Safe name: [$safeName]" -ForegroundColor Yellow
@@ -1297,16 +1348,16 @@ function Export-DatabaseObjects {
                 $currentItem++
                 $percentComplete = [math]::Round(($currentItem / $tables.Count) * 100)
                 try {
-                    Write-Host ("  [{0,3}%]{1}.{2}..." -f $percentComplete, $table.Schema, $table.Name)
+                    Write-ObjectProgress -ObjectName "$($table.Schema).$($table.Name)" -Current $currentItem -Total $tables.Count
                     $fileName = Join-Path $OutputDir '08_Tables_PrimaryKey' "$(Get-SafeFileName $($table.Schema)).$(Get-SafeFileName $($table.Name)).sql"
                     Ensure-DirectoryExists $fileName
                     $opts.FileName = $fileName
                     $Scripter.Options = $opts
                     $table.Script($opts) | Out-Null
-                    Write-Host "        [SUCCESS]" -ForegroundColor Green
+                    Write-ObjectProgress -ObjectName "$($table.Schema).$($table.Name)" -Current $currentItem -Total $tables.Count -Success
                     $successCount++
                 } catch {
-                    Write-Host "        [FAILED]" -ForegroundColor Red
+                    Write-ObjectProgress -ObjectName "$($table.Schema).$($table.Name)" -Current $currentItem -Total $tables.Count -Failed
                     Write-ExportError -ObjectType 'Table' -ObjectName "$($table.Schema).$($table.Name)" -ErrorRecord $_ -AdditionalContext "Exporting table structure with primary keys"
                     $failCount++
                 }
@@ -1423,16 +1474,16 @@ function Export-DatabaseObjects {
                 $currentItem++
                 $percentComplete = [math]::Round(($currentItem / $indexes.Count) * 100)
                 try {
-                    Write-Host ("  [{0,3}%]{1}.{2}.{3}..." -f $percentComplete, $index.Parent.Schema, $index.Parent.Name, $index.Name)
+                    Write-ObjectProgress -ObjectName "$($index.Parent.Schema).$($index.Parent.Name).$($index.Name)" -Current $currentItem -Total $indexes.Count
                     $fileName = Join-Path $OutputDir '10_Indexes' "$(Get-SafeFileName $($index.Parent.Schema)).$(Get-SafeFileName $($index.Parent.Name)).$(Get-SafeFileName $($index.Name)).sql"
                     Ensure-DirectoryExists $fileName
                     $opts.FileName = $fileName
                     $Scripter.Options = $opts
                     $index.Script($opts) | Out-Null
-                    Write-Host "        [SUCCESS]" -ForegroundColor Green
+                    Write-ObjectProgress -ObjectName "$($index.Parent.Schema).$($index.Parent.Name).$($index.Name)" -Current $currentItem -Total $indexes.Count -Success
                     $successCount++
                 } catch {
-                    Write-Host "        [FAILED]" -ForegroundColor Red
+                    Write-ObjectProgress -ObjectName "$($index.Parent.Schema).$($index.Parent.Name).$($index.Name)" -Current $currentItem -Total $indexes.Count -Failed
                     Write-ExportError -ObjectType 'Index' -ObjectName "$($index.Parent.Schema).$($index.Parent.Name).$($index.Name)" -ErrorRecord $_ -FilePath $fileName
                     $failCount++
                 }
@@ -1567,16 +1618,16 @@ function Export-DatabaseObjects {
             $currentItem++
             $percentComplete = [math]::Round(($currentItem / $functions.Count) * 100)
             try {
-                Write-Host ("  [{0,3}%]{1}.{2}..." -f $percentComplete, $function.Schema, $function.Name)
+                Write-ObjectProgress -ObjectName "$($function.Schema).$($function.Name)" -Current $currentItem -Total $functions.Count
                 $fileName = Join-Path $OutputDir '13_Programmability/02_Functions' "$(Get-SafeFileName $($function.Schema)).$(Get-SafeFileName $($function.Name)).sql"
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
                 $function.Script($opts) | Out-Null
-                Write-Host "        [SUCCESS]" -ForegroundColor Green
+                Write-ObjectProgress -ObjectName "$($function.Schema).$($function.Name)" -Current $currentItem -Total $functions.Count -Success
                 $successCount++
             } catch {
-                Write-Host "        [FAILED]" -ForegroundColor Red
+                Write-ObjectProgress -ObjectName "$($function.Schema).$($function.Name)" -Current $currentItem -Total $functions.Count -Failed
                 Write-ExportError -ObjectType 'Function' -ObjectName "$($function.Schema).$($function.Name)" -ErrorRecord $_ -FilePath $fileName
                 $failCount++
             }
@@ -1640,16 +1691,16 @@ function Export-DatabaseObjects {
             $currentItem++
             $percentComplete = [math]::Round(($currentItem / $totalProcs) * 100)
             try {
-                Write-Host ("  [{0,3}%]{1}.{2}..." -f $percentComplete, $proc.Schema, $proc.Name)
+                Write-ObjectProgress -ObjectName "$($proc.Schema).$($proc.Name)" -Current $currentItem -Total $totalProcs
                 $fileName = Join-Path $OutputDir '13_Programmability/03_StoredProcedures' "$(Get-SafeFileName $($proc.Schema)).$(Get-SafeFileName $($proc.Name)).sql"
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
                 $proc.Script($opts) | Out-Null
-                Write-Host "        [SUCCESS]" -ForegroundColor Green
+                Write-ObjectProgress -ObjectName "$($proc.Schema).$($proc.Name)" -Current $currentItem -Total $totalProcs -Success
                 $successCount++
             } catch {
-                Write-Host "        [FAILED]" -ForegroundColor Red
+                Write-ObjectProgress -ObjectName "$($proc.Schema).$($proc.Name)" -Current $currentItem -Total $totalProcs -Failed
                 Write-ExportError -ObjectType 'StoredProcedure' -ObjectName "$($proc.Schema).$($proc.Name)" -ErrorRecord $_ -FilePath $fileName
                 $failCount++
             }
@@ -1659,16 +1710,16 @@ function Export-DatabaseObjects {
             $currentItem++
             $percentComplete = [math]::Round(($currentItem / $totalProcs) * 100)
             try {
-                Write-Host ("  [{0,3}%]{1}.{2}..." -f $percentComplete, $extProc.Schema, $extProc.Name)
+                Write-ObjectProgress -ObjectName "$($extProc.Schema).$($extProc.Name)" -Current $currentItem -Total $totalProcs
                 $fileName = Join-Path $OutputDir '13_Programmability/03_StoredProcedures' "$($extProc.Schema).$($extProc.Name).extended.sql"
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
                 $extProc.Script($opts) | Out-Null
-                Write-Host "        [SUCCESS]" -ForegroundColor Green
+                Write-ObjectProgress -ObjectName "$($extProc.Schema).$($extProc.Name)" -Current $currentItem -Total $totalProcs -Success
                 $successCount++
             } catch {
-                Write-Host "        [FAILED]" -ForegroundColor Red
+                Write-ObjectProgress -ObjectName "$($extProc.Schema).$($extProc.Name)" -Current $currentItem -Total $totalProcs -Failed
                 Write-ExportError -ObjectType 'ExtendedStoredProcedure' -ObjectName "$($extProc.Schema).$($extProc.Name)" -ErrorRecord $_ -FilePath $fileName
                 $failCount++
             }
@@ -1785,16 +1836,16 @@ function Export-DatabaseObjects {
             $currentItem++
             $percentComplete = [math]::Round(($currentItem / $views.Count) * 100)
             try {
-                Write-Host ("  [{0,3}%]{1}.{2}..." -f $percentComplete, $view.Schema, $view.Name)
+                Write-ObjectProgress -ObjectName "$($view.Schema).$($view.Name)" -Current $currentItem -Total $views.Count
                 $fileName = Join-Path $OutputDir '13_Programmability/05_Views' "$(Get-SafeFileName $($view.Schema)).$(Get-SafeFileName $($view.Name)).sql"
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
                 $view.Script($opts) | Out-Null
-                Write-Host "        [SUCCESS]" -ForegroundColor Green
+                Write-ObjectProgress -ObjectName "$($view.Schema).$($view.Name)" -Current $currentItem -Total $views.Count -Success
                 $successCount++
             } catch {
-                Write-Host "        [FAILED]" -ForegroundColor Red
+                Write-ObjectProgress -ObjectName "$($view.Schema).$($view.Name)" -Current $currentItem -Total $views.Count -Failed
                 Write-ExportError -ObjectType 'View' -ObjectName "$($view.Schema).$($view.Name)" -ErrorRecord $_ -FilePath $fileName
                 $failCount++
             }
@@ -2399,19 +2450,19 @@ GROUP BY s.name, t.name
             $rowCount = if ($rowCountLookup.ContainsKey($tableKey)) { $rowCountLookup[$tableKey] } else { 0 }
             
             if ($rowCount -gt 0) {
-                Write-Host ("  [{0,3}%]{1}.{2} ({3} row(s))..." -f $percentComplete, $table.Schema, $table.Name, $rowCount)
+                Write-ObjectProgress -ObjectName "$($table.Schema).$($table.Name) ($rowCount row(s))" -Current $currentItem -Total $tables.Count
                 $fileName = Join-Path $OutputDir '20_Data' "$($table.Schema).$($table.Name).data.sql"
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
                 $Scripter.EnumScript($table) | Out-Null
-                Write-Host "        [SUCCESS]" -ForegroundColor Green
+                Write-ObjectProgress -ObjectName "$($table.Schema).$($table.Name)" -Current $currentItem -Total $tables.Count -Success
                 $successCount++
             } else {
                 $emptyCount++
             }
         } catch {
-            Write-Host "        [FAILED]" -ForegroundColor Red
+            Write-ObjectProgress -ObjectName "$($table.Schema).$($table.Name)" -Current $currentItem -Total $tables.Count -Failed
             Write-ExportError -ObjectType 'TableData' -ObjectName "$($table.Schema).$($table.Name)" -ErrorRecord $_ -AdditionalContext "Exporting $rowCount row(s)"
             $failCount++
         }
