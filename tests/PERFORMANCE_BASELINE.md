@@ -1,8 +1,8 @@
-# Performance Baseline Metrics
+# Performance Optimization Metrics
 
 ## Overview
 
-This document records baseline performance metrics for `Export-SqlServerSchema.ps1` before optimization work begins. These metrics serve as the comparison point for measuring improvement from performance optimizations.
+This document tracks performance metrics for `Export-SqlServerSchema.ps1` across optimization phases. Each phase's results are compared against the baseline to measure improvement.
 
 ## Test Environment
 
@@ -51,14 +51,6 @@ Created using: `tests/create-perf-test-db.sql`
 | Files Created | 314 |
 | Errors | 0 |
 
-### Time Distribution
-
-```
-Schema Export:  53.01 sec (86.6%)  ████████████████████░░░
-Data Export:     8.11 sec (13.2%)  ███░░░░░░░░░░░░░░░░░░░░
-Connection:      0.01 sec ( 0.0%)  ░░░░░░░░░░░░░░░░░░░░░░░
-```
-
 ### Key Observations
 
 1. **Schema export dominates** - 87% of total time spent exporting schema objects
@@ -67,8 +59,6 @@ Connection:      0.01 sec ( 0.0%)  ░░░░░░░░░░░░░░░
 4. **Data export relatively fast** - 8 seconds for 50,000 rows across 50 tables
 
 ## Identified Bottlenecks
-
-Based on code analysis, these are the primary performance issues:
 
 | Priority | Issue | Impact |
 |----------|-------|--------|
@@ -79,15 +69,44 @@ Based on code analysis, these are the primary performance issues:
 | HIGH | No parallelism | Single-threaded processing |
 | MEDIUM | Verbose console output | I/O overhead per object |
 
-## Optimization Plan
+---
 
-| Phase | Optimization | Expected Impact |
-|-------|--------------|-----------------|
-| 1 | Single-pass row count query | Minor (data export only) |
-| 2 | SMO prefetch with SetDefaultInitFields | Moderate |
-| 3 | Batch scripting with EnumScript | Major |
-| 4 | Reduce console output frequency | Minor |
-| 5 | Parallel processing | Major (deferred - higher risk) |
+## Performance Comparison
+
+### Summary Table
+
+| Metric | Baseline | Phase 1 | Phase 2 | Phase 3 | Phase 4 |
+|--------|----------|---------|---------|---------|---------|
+| **Total Duration** | **61.21 sec** | **61.26 sec** | - | - | - |
+| Connection Time | 0.01 sec | 0.01 sec | - | - | - |
+| Schema Export | 53.01 sec | 53.06 sec | - | - | - |
+| Data Export | 8.11 sec | 8.11 sec | - | - | - |
+| Files Created | 314 | 314 | - | - | - |
+| Errors | 0 | 0 | - | - | - |
+| **Improvement** | - | **0%** | - | - | - |
+
+### Phase Details
+
+| Phase | Git Commit | Description | Duration | vs Baseline |
+|-------|------------|-------------|----------|-------------|
+| Baseline | `053665e` | Original code before optimizations | 61.21 sec | - |
+| Phase 1 | `053665e` | Single-pass row count via sys.partitions | 61.26 sec | +0.08% |
+| Phase 2 | - | SMO prefetch with SetDefaultInitFields | - | - |
+| Phase 3 | - | Batch scripting with EnumScript | - | - |
+| Phase 4 | - | Reduce console output frequency | - | - |
+
+### Phase 1 Analysis
+
+**Change**: Replaced 50 individual `SELECT COUNT(*) FROM table` queries with a single `SELECT ... FROM sys.partitions` query to get all row counts at once.
+
+**Result**: No measurable improvement on localhost testing (+0.08%, within margin of error).
+
+**Explanation**: This optimization eliminates network round-trips for row count queries. On localhost (zero network latency), the benefit is negligible. The optimization will show significant improvement when:
+- Exporting over a network connection with latency
+- Database has hundreds of tables  
+- Each COUNT(*) query would otherwise take 10-50ms round-trip
+
+---
 
 ## How to Reproduce
 
@@ -105,7 +124,10 @@ $cred = New-Object PSCredential -ArgumentList 'sa', (ConvertTo-SecureString 'Tes
 .\Export-SqlServerSchema.ps1 -Server 'localhost,1433' -Database 'PerfTestDb' -OutputPath '.\DbScripts' -Credential $cred -CollectMetrics -IncludeData
 ```
 
-## Files
+## Metrics Files
 
-- `baseline-metrics.json` - Raw metrics data in JSON format
-- `create-perf-test-db.sql` - Script to create the test database
+| File | Description |
+|------|-------------|
+| `baseline-metrics.json` | Raw baseline metrics (original code) |
+| `phase1-metrics.json` | Phase 1 metrics (single-pass row count) |
+| `create-perf-test-db.sql` | Script to create PerfTestDb |

@@ -2356,6 +2356,29 @@ function Export-TableData {
     
     Write-Output "  Found $($tables.Count) table(s) to check for data export"
     
+    # OPTIMIZATION: Get all row counts in a single query instead of per-table COUNT(*)
+    # This reduces N database round-trips to just 1
+    Write-Output "  Fetching row counts for all tables..."
+    $rowCountQuery = @"
+SELECT 
+    s.name AS SchemaName,
+    t.name AS TableName,
+    SUM(p.rows) AS TableRowCount
+FROM sys.tables t
+INNER JOIN sys.schemas s ON t.schema_id = s.schema_id
+INNER JOIN sys.partitions p ON t.object_id = p.object_id
+WHERE p.index_id IN (0, 1)  -- Heap or clustered index
+  AND t.is_ms_shipped = 0
+GROUP BY s.name, t.name
+"@
+    $rowCountData = $Database.ExecuteWithResults($rowCountQuery)
+    $rowCountLookup = @{}
+    foreach ($row in $rowCountData.Tables[0].Rows) {
+        $key = "$($row.SchemaName).$($row.TableName)"
+        $rowCountLookup[$key] = [long]$row.TableRowCount
+    }
+    Write-Output "  [SUCCESS] Retrieved row counts for $($rowCountLookup.Count) table(s)"
+    
     $opts = New-ScriptingOptions -TargetVersion $TargetVersion -Overrides @{
         ScriptSchema = $false
         ScriptData   = $true
@@ -2371,10 +2394,9 @@ function Export-TableData {
         $currentItem++
         $percentComplete = [math]::Round(($currentItem / $tables.Count) * 100)
         try {
-            # Use SMO Database object to execute count query
-            $countQuery = "SELECT COUNT(*) FROM [$($table.Schema)].[$($table.Name)]"
-            $ds = $Database.ExecuteWithResults($countQuery)
-            $rowCount = $ds.Tables[0].Rows[0][0]
+            # Look up row count from pre-fetched data (no network round-trip)
+            $tableKey = "$($table.Schema).$($table.Name)"
+            $rowCount = if ($rowCountLookup.ContainsKey($tableKey)) { $rowCountLookup[$tableKey] } else { 0 }
             
             if ($rowCount -gt 0) {
                 Write-Host ("  [{0,3}%]{1}.{2} ({3} row(s))..." -f $percentComplete, $table.Schema, $table.Name, $rowCount)
