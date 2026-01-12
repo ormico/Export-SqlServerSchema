@@ -87,13 +87,151 @@ param(
     [int]$MaxRetries = 0,
     
     [Parameter(HelpMessage = 'Initial retry delay in seconds (overrides config file)')]
-    [int]$RetryDelaySeconds = 0
+    [int]$RetryDelaySeconds = 0,
+    
+    [Parameter(HelpMessage = 'Collect performance metrics for analysis')]
+    [switch]$CollectMetrics
 )
 
 $ErrorActionPreference = 'Stop'
 $script:LogFile = $null  # Will be set after output directory is created
 
+# Performance metrics tracking
+$script:Metrics = @{
+    StartTime = $null
+    EndTime = $null
+    TotalDurationMs = 0
+    ConnectionTimeMs = 0
+    Categories = [ordered]@{}
+    ObjectCounts = [ordered]@{}
+    TotalObjectsExported = 0
+    TotalFilesCreated = 0
+    Errors = 0
+}
+
 #region Helper Functions
+
+function Start-MetricsTimer {
+    <#
+    .SYNOPSIS
+        Starts a stopwatch for timing a category of operations.
+    #>
+    param([string]$Category)
+    
+    if (-not $script:CollectMetrics) { return $null }
+    
+    $timer = [System.Diagnostics.Stopwatch]::StartNew()
+    return $timer
+}
+
+function Stop-MetricsTimer {
+    <#
+    .SYNOPSIS
+        Stops a timer and records the elapsed time for a category.
+    #>
+    param(
+        [string]$Category,
+        [System.Diagnostics.Stopwatch]$Timer,
+        [int]$ObjectCount = 0,
+        [int]$SuccessCount = 0,
+        [int]$FailCount = 0
+    )
+    
+    if (-not $script:CollectMetrics -or $null -eq $Timer) { return }
+    
+    $Timer.Stop()
+    
+    $script:Metrics.Categories[$Category] = @{
+        DurationMs = $Timer.ElapsedMilliseconds
+        ObjectCount = $ObjectCount
+        SuccessCount = $SuccessCount
+        FailCount = $FailCount
+        AvgMsPerObject = if ($ObjectCount -gt 0) { [math]::Round($Timer.ElapsedMilliseconds / $ObjectCount, 2) } else { 0 }
+    }
+    
+    $script:Metrics.TotalObjectsExported += $SuccessCount
+    $script:Metrics.Errors += $FailCount
+}
+
+function Save-PerformanceMetrics {
+    <#
+    .SYNOPSIS
+        Saves collected metrics to a JSON file and displays summary.
+    #>
+    param(
+        [string]$OutputDir
+    )
+    
+    if (-not $script:CollectMetrics) { return }
+    
+    $script:Metrics.EndTime = Get-Date
+    $script:Metrics.TotalDurationMs = ($script:Metrics.EndTime - $script:Metrics.StartTime).TotalMilliseconds
+    
+    # Count total files created
+    $script:Metrics.TotalFilesCreated = (Get-ChildItem -Path $OutputDir -Filter '*.sql' -Recurse).Count
+    
+    # Display metrics summary
+    Write-Output ''
+    Write-Output '==============================================='
+    Write-Output 'PERFORMANCE METRICS'
+    Write-Output '==============================================='
+    Write-Output ''
+    Write-Output ("Total Duration: {0:N2} seconds" -f ($script:Metrics.TotalDurationMs / 1000))
+    Write-Output ("Connection Time: {0:N2} seconds" -f ($script:Metrics.ConnectionTimeMs / 1000))
+    Write-Output ("Export Time: {0:N2} seconds" -f (($script:Metrics.TotalDurationMs - $script:Metrics.ConnectionTimeMs) / 1000))
+    Write-Output ''
+    Write-Output 'Time by Category:'
+    Write-Output '-----------------'
+    
+    $sortedCategories = $script:Metrics.Categories.GetEnumerator() | Sort-Object { $_.Value.DurationMs } -Descending
+    foreach ($cat in $sortedCategories) {
+        $pct = if ($script:Metrics.TotalDurationMs -gt 0) { 
+            [math]::Round(($cat.Value.DurationMs / $script:Metrics.TotalDurationMs) * 100, 1) 
+        } else { 0 }
+        
+        Write-Output ("  {0,-35} {1,8:N0}ms ({2,5:N1}%) - {3} objects @ {4:N1}ms/obj" -f `
+            $cat.Key, 
+            $cat.Value.DurationMs, 
+            $pct,
+            $cat.Value.ObjectCount,
+            $cat.Value.AvgMsPerObject)
+    }
+    
+    Write-Output ''
+    Write-Output 'Summary:'
+    Write-Output '---------'
+    Write-Output "  Total Objects Exported: $($script:Metrics.TotalObjectsExported)"
+    Write-Output "  Total Files Created: $($script:Metrics.TotalFilesCreated)"
+    Write-Output "  Errors: $($script:Metrics.Errors)"
+    Write-Output ''
+    
+    # Save to JSON file
+    $metricsFile = Join-Path $OutputDir 'performance-metrics.json'
+    $metricsJson = @{
+        ExportDate = $script:Metrics.StartTime.ToString('yyyy-MM-dd HH:mm:ss')
+        TotalDurationSeconds = [math]::Round($script:Metrics.TotalDurationMs / 1000, 2)
+        ConnectionTimeSeconds = [math]::Round($script:Metrics.ConnectionTimeMs / 1000, 2)
+        ExportTimeSeconds = [math]::Round(($script:Metrics.TotalDurationMs - $script:Metrics.ConnectionTimeMs) / 1000, 2)
+        TotalObjectsExported = $script:Metrics.TotalObjectsExported
+        TotalFilesCreated = $script:Metrics.TotalFilesCreated
+        Errors = $script:Metrics.Errors
+        Categories = @{}
+    }
+    
+    foreach ($cat in $script:Metrics.Categories.GetEnumerator()) {
+        $metricsJson.Categories[$cat.Key] = @{
+            DurationSeconds = [math]::Round($cat.Value.DurationMs / 1000, 3)
+            ObjectCount = $cat.Value.ObjectCount
+            SuccessCount = $cat.Value.SuccessCount
+            FailCount = $cat.Value.FailCount
+            AvgMsPerObject = $cat.Value.AvgMsPerObject
+        }
+    }
+    
+    $metricsJson | ConvertTo-Json -Depth 5 | Out-File -FilePath $metricsFile -Encoding UTF8
+    Write-Output "[SUCCESS] Metrics saved to: $(Split-Path -Leaf $metricsFile)"
+    Write-Output ''
+}
 
 function Write-Log {
     <#
@@ -711,6 +849,8 @@ function Export-DatabaseObjects {
     <#
     .SYNOPSIS
         Exports all database objects in dependency order.
+    .OUTPUTS
+        Returns a hashtable with TotalObjects, SuccessCount, and FailCount for metrics.
     #>
     param(
         [Microsoft.SqlServer.Management.Smo.Database]$Database,
@@ -718,6 +858,14 @@ function Export-DatabaseObjects {
         [Microsoft.SqlServer.Management.Smo.Scripter]$Scripter,
         [Microsoft.SqlServer.Management.Smo.SqlServerVersion]$TargetVersion
     )
+    
+    # Initialize metrics tracking for this function
+    $functionMetrics = @{
+        TotalObjects = 0
+        SuccessCount = 0
+        FailCount = 0
+        CategoryTimings = [ordered]@{}
+    }
     
     Write-Output ''
     Write-Output '═══════════════════════════════════════════════'
@@ -1121,50 +1269,56 @@ function Export-DatabaseObjects {
     # 8. Tables (Primary Keys only - no FK)
     Write-Output ''
     Write-Output 'Exporting tables (PKs only)...'
+    $tablesTimer = [System.Diagnostics.Stopwatch]::StartNew()
     if (Test-ObjectTypeExcluded -ObjectType 'Tables') {
         Write-Output '  [SKIPPED] Tables excluded by configuration' -ForegroundColor Yellow
     } else {
-    $tables = @($Database.Tables | Where-Object { -not $_.IsSystemObject })
-    if ($tables.Count -gt 0) {
-        Write-Output "  Found $($tables.Count) table(s) to export"
-        $successCount = 0
-        $failCount = 0
-        $currentItem = 0
-        $opts = New-ScriptingOptions -TargetVersion $TargetVersion -Overrides @{
-            DriAll              = $false
-            DriPrimaryKey       = $true
-            DriUniqueKeys       = $true
-            DriForeignKeys      = $false
-            Indexes             = $false
-            ClusteredIndexes    = $false
-            NonClusteredIndexes = $false
-            XmlIndexes          = $false
-            FullTextIndexes     = $false
-            Triggers            = $false
-        }
-        $Scripter.Options = $opts
-        
-        foreach ($table in $tables) {
-            $currentItem++
-            $percentComplete = [math]::Round(($currentItem / $tables.Count) * 100)
-            try {
-                Write-Host ("  [{0,3}%]{1}.{2}..." -f $percentComplete, $table.Schema, $table.Name)
-                $fileName = Join-Path $OutputDir '08_Tables_PrimaryKey' "$(Get-SafeFileName $($table.Schema)).$(Get-SafeFileName $($table.Name)).sql"
-                Ensure-DirectoryExists $fileName
-                $opts.FileName = $fileName
-                $Scripter.Options = $opts
-                $table.Script($opts) | Out-Null
-                Write-Host "        [SUCCESS]" -ForegroundColor Green
-                $successCount++
-            } catch {
-                Write-Host "        [FAILED]" -ForegroundColor Red
-                Write-ExportError -ObjectType 'Table' -ObjectName "$($table.Schema).$($table.Name)" -ErrorRecord $_ -AdditionalContext "Exporting table structure with primary keys"
-                $failCount++
+        $tables = @($Database.Tables | Where-Object { -not $_.IsSystemObject })
+        if ($tables.Count -gt 0) {
+            Write-Output "  Found $($tables.Count) table(s) to export"
+            $successCount = 0
+            $failCount = 0
+            $currentItem = 0
+            $opts = New-ScriptingOptions -TargetVersion $TargetVersion -Overrides @{
+                DriAll              = $false
+                DriPrimaryKey       = $true
+                DriUniqueKeys       = $true
+                DriForeignKeys      = $false
+                Indexes             = $false
+                ClusteredIndexes    = $false
+                NonClusteredIndexes = $false
+                XmlIndexes          = $false
+                FullTextIndexes     = $false
+                Triggers            = $false
             }
+            $Scripter.Options = $opts
+            
+            foreach ($table in $tables) {
+                $currentItem++
+                $percentComplete = [math]::Round(($currentItem / $tables.Count) * 100)
+                try {
+                    Write-Host ("  [{0,3}%]{1}.{2}..." -f $percentComplete, $table.Schema, $table.Name)
+                    $fileName = Join-Path $OutputDir '08_Tables_PrimaryKey' "$(Get-SafeFileName $($table.Schema)).$(Get-SafeFileName $($table.Name)).sql"
+                    Ensure-DirectoryExists $fileName
+                    $opts.FileName = $fileName
+                    $Scripter.Options = $opts
+                    $table.Script($opts) | Out-Null
+                    Write-Host "        [SUCCESS]" -ForegroundColor Green
+                    $successCount++
+                } catch {
+                    Write-Host "        [FAILED]" -ForegroundColor Red
+                    Write-ExportError -ObjectType 'Table' -ObjectName "$($table.Schema).$($table.Name)" -ErrorRecord $_ -AdditionalContext "Exporting table structure with primary keys"
+                    $failCount++
+                }
+            }
+            Write-Output "  [SUMMARY] Exported $successCount/$($tables.Count) table(s) successfully" + $(if ($failCount -gt 0) { " ($failCount failed)" } else { "" })
+            $functionMetrics.TotalObjects += $tables.Count
+            $functionMetrics.SuccessCount += $successCount
+            $functionMetrics.FailCount += $failCount
         }
-        Write-Output "  [SUMMARY] Exported $successCount/$($tables.Count) table(s) successfully" + $(if ($failCount -gt 0) { " ($failCount failed)" } else { "" })
     }
-    }
+    $tablesTimer.Stop()
+    $functionMetrics.CategoryTimings['Tables'] = $tablesTimer.ElapsedMilliseconds
     
     # 9. Foreign Keys (separate from table creation)
     Write-Output ''
@@ -1172,115 +1326,125 @@ function Export-DatabaseObjects {
     if (Test-ObjectTypeExcluded -ObjectType 'ForeignKeys') {
         Write-Output '  [SKIPPED] ForeignKeys excluded by configuration' -ForegroundColor Yellow
     } else {
-    # Initialize tables collection if not already defined (in case Tables were excluded)
-    if (-not (Get-Variable -Name tables -Scope Local -ErrorAction SilentlyContinue)) {
-        $tables = @($Database.Tables | Where-Object { -not $_.IsSystemObject })
-    }
-    
-    $foreignKeys = @()
-    foreach ($table in $tables) {
-        try {
-            # Access foreign keys collection safely
-            if ($table.ForeignKeys -and $table.ForeignKeys.Count -gt 0) {
-                $foreignKeys += @($table.ForeignKeys)
-            }
-        } catch {
-            Write-ExportError -ObjectType 'ForeignKeyCollection' -ObjectName "$($table.Schema).$($table.Name)" -ErrorRecord $_ -AdditionalContext "Accessing foreign keys collection"
+        # Initialize tables collection if not already defined (in case Tables were excluded)
+        if (-not (Get-Variable -Name tables -Scope Local -ErrorAction SilentlyContinue)) {
+            $tables = @($Database.Tables | Where-Object { -not $_.IsSystemObject })
         }
-    }
-    if ($foreignKeys.Count -gt 0) {
-        Write-Output "  Found $($foreignKeys.Count) foreign key constraint(s) to export"
-        $successCount = 0
-        $failCount = 0
-        $currentItem = 0
-        $opts = New-ScriptingOptions -TargetVersion $TargetVersion -Overrides @{
-            DriAll            = $false
-            DriForeignKeys    = $true
-        }
-        $Scripter.Options = $opts
         
-        foreach ($fk in $foreignKeys) {
-            $currentItem++
-            $percentComplete = [math]::Round(($currentItem / $foreignKeys.Count) * 100)
+        $foreignKeys = @()
+        foreach ($table in $tables) {
             try {
-                Write-Host ("  [{0,3}%]{1}.{2}.{3}..." -f $percentComplete, $fk.Parent.Schema, $fk.Parent.Name, $fk.Name)
-                $fileName = Join-Path $OutputDir '09_Tables_ForeignKeys' "$(Get-SafeFileName $($fk.Parent.Schema)).$(Get-SafeFileName $($fk.Parent.Name)).$(Get-SafeFileName $($fk.Name)).sql"
-                Ensure-DirectoryExists $fileName
-                $opts.FileName = $fileName
-                $Scripter.Options = $opts
-                $fk.Script($opts) | Out-Null
-                Write-Host "        [SUCCESS]" -ForegroundColor Green
-                $successCount++
+                # Access foreign keys collection safely
+                if ($table.ForeignKeys -and $table.ForeignKeys.Count -gt 0) {
+                    $foreignKeys += @($table.ForeignKeys)
+                }
             } catch {
-                Write-Host "        [FAILED]" -ForegroundColor Red
-                Write-ExportError -ObjectType 'ForeignKey' -ObjectName "$($fk.Parent.Schema).$($fk.Parent.Name).$($fk.Name)" -ErrorRecord $_ -FilePath $fileName
-                $failCount++
+                Write-ExportError -ObjectType 'ForeignKeyCollection' -ObjectName "$($table.Schema).$($table.Name)" -ErrorRecord $_ -AdditionalContext "Accessing foreign keys collection"
             }
         }
-        Write-Output "  [SUMMARY] Exported $successCount/$($foreignKeys.Count) foreign key constraint(s) successfully" + $(if ($failCount -gt 0) { " ($failCount failed)" } else { "" })
+        if ($foreignKeys.Count -gt 0) {
+            Write-Output "  Found $($foreignKeys.Count) foreign key constraint(s) to export"
+            $successCount = 0
+            $failCount = 0
+            $currentItem = 0
+            $opts = New-ScriptingOptions -TargetVersion $TargetVersion -Overrides @{
+                DriAll            = $false
+                DriForeignKeys    = $true
+            }
+            $Scripter.Options = $opts
+            
+            foreach ($fk in $foreignKeys) {
+                $currentItem++
+                $percentComplete = [math]::Round(($currentItem / $foreignKeys.Count) * 100)
+                try {
+                    Write-Host ("  [{0,3}%]{1}.{2}.{3}..." -f $percentComplete, $fk.Parent.Schema, $fk.Parent.Name, $fk.Name)
+                    $fileName = Join-Path $OutputDir '09_Tables_ForeignKeys' "$(Get-SafeFileName $($fk.Parent.Schema)).$(Get-SafeFileName $($fk.Parent.Name)).$(Get-SafeFileName $($fk.Name)).sql"
+                    Ensure-DirectoryExists $fileName
+                    $opts.FileName = $fileName
+                    $Scripter.Options = $opts
+                    $fk.Script($opts) | Out-Null
+                    Write-Host "        [SUCCESS]" -ForegroundColor Green
+                    $successCount++
+                } catch {
+                    Write-Host "        [FAILED]" -ForegroundColor Red
+                    Write-ExportError -ObjectType 'ForeignKey' -ObjectName "$($fk.Parent.Schema).$($fk.Parent.Name).$($fk.Name)" -ErrorRecord $_ -FilePath $fileName
+                    $failCount++
+                }
+            }
+            Write-Output "  [SUMMARY] Exported $successCount/$($foreignKeys.Count) foreign key constraint(s) successfully" + $(if ($failCount -gt 0) { " ($failCount failed)" } else { "" })
+            $functionMetrics.TotalObjects += $foreignKeys.Count
+            $functionMetrics.SuccessCount += $successCount
+            $functionMetrics.FailCount += $failCount
+        }
     }
     
     # 10. Indexes
     Write-Output ''
     Write-Output 'Exporting indexes...'
+    $indexesTimer = [System.Diagnostics.Stopwatch]::StartNew()
     if (Test-ObjectTypeExcluded -ObjectType 'Indexes') {
         Write-Output '  [SKIPPED] Indexes excluded by configuration' -ForegroundColor Yellow
     } else {
-    # Initialize tables collection if not already defined (in case Tables were excluded)
-    if (-not (Get-Variable -Name tables -Scope Local -ErrorAction SilentlyContinue)) {
-        $tables = @($Database.Tables | Where-Object { -not $_.IsSystemObject })
-    }
-    
-    $indexes = @()
-    foreach ($table in $tables) {
-        try {
-            # Filter out indexes that are part of primary keys or unique constraints
-            # These are already scripted with the table definition
-            if ($table.Indexes -and $table.Indexes.Count -gt 0) {
-                $indexes += @($table.Indexes | Where-Object {
-                    -not $_.IsSystemObject -and
-                    -not $_.IndexKeyType -eq [Microsoft.SqlServer.Management.Smo.IndexKeyType]::DriPrimaryKey -and
-                    -not $_.IndexKeyType -eq [Microsoft.SqlServer.Management.Smo.IndexKeyType]::DriUniqueKey
-                })
-            }
-        } catch {
-            Write-ExportError -ObjectType 'IndexCollection' -ObjectName "$($table.Schema).$($table.Name)" -ErrorRecord $_ -AdditionalContext "Accessing indexes collection"
+        # Initialize tables collection if not already defined (in case Tables were excluded)
+        if (-not (Get-Variable -Name tables -Scope Local -ErrorAction SilentlyContinue)) {
+            $tables = @($Database.Tables | Where-Object { -not $_.IsSystemObject })
         }
-    }
-    if ($indexes.Count -gt 0) {
-        Write-Output "  Found $($indexes.Count) index(es) to export"
-        $successCount = 0
-        $failCount = 0
-        $currentItem = 0
-        $opts = New-ScriptingOptions -TargetVersion $TargetVersion -Overrides @{
-            Indexes         = $true
-            ClusteredIndexes = $false
-            DriPrimaryKey   = $false
-            DriUniqueKey    = $false
-        }
-        $Scripter.Options = $opts
         
-        foreach ($index in $indexes) {
-            $currentItem++
-            $percentComplete = [math]::Round(($currentItem / $indexes.Count) * 100)
+        $indexes = @()
+        foreach ($table in $tables) {
             try {
-                Write-Host ("  [{0,3}%]{1}.{2}.{3}..." -f $percentComplete, $index.Parent.Schema, $index.Parent.Name, $index.Name)
-                $fileName = Join-Path $OutputDir '10_Indexes' "$(Get-SafeFileName $($index.Parent.Schema)).$(Get-SafeFileName $($index.Parent.Name)).$(Get-SafeFileName $($index.Name)).sql"
-                Ensure-DirectoryExists $fileName
-                $opts.FileName = $fileName
-                $Scripter.Options = $opts
-                $index.Script($opts) | Out-Null
-                Write-Host "        [SUCCESS]" -ForegroundColor Green
-                $successCount++
+                # Filter out indexes that are part of primary keys or unique constraints
+                # These are already scripted with the table definition
+                if ($table.Indexes -and $table.Indexes.Count -gt 0) {
+                    $indexes += @($table.Indexes | Where-Object {
+                        -not $_.IsSystemObject -and
+                        -not $_.IndexKeyType -eq [Microsoft.SqlServer.Management.Smo.IndexKeyType]::DriPrimaryKey -and
+                        -not $_.IndexKeyType -eq [Microsoft.SqlServer.Management.Smo.IndexKeyType]::DriUniqueKey
+                    })
+                }
             } catch {
-                Write-Host "        [FAILED]" -ForegroundColor Red
-                Write-ExportError -ObjectType 'Index' -ObjectName "$($index.Parent.Schema).$($index.Parent.Name).$($index.Name)" -ErrorRecord $_ -FilePath $fileName
-                $failCount++
+                Write-ExportError -ObjectType 'IndexCollection' -ObjectName "$($table.Schema).$($table.Name)" -ErrorRecord $_ -AdditionalContext "Accessing indexes collection"
             }
         }
-        Write-Output "  [SUMMARY] Exported $successCount/$($indexes.Count) index(es) successfully" + $(if ($failCount -gt 0) { " ($failCount failed)" } else { "" })
+        if ($indexes.Count -gt 0) {
+            Write-Output "  Found $($indexes.Count) index(es) to export"
+            $successCount = 0
+            $failCount = 0
+            $currentItem = 0
+            $opts = New-ScriptingOptions -TargetVersion $TargetVersion -Overrides @{
+                Indexes         = $true
+                ClusteredIndexes = $false
+                DriPrimaryKey   = $false
+                DriUniqueKey    = $false
+            }
+            $Scripter.Options = $opts
+            
+            foreach ($index in $indexes) {
+                $currentItem++
+                $percentComplete = [math]::Round(($currentItem / $indexes.Count) * 100)
+                try {
+                    Write-Host ("  [{0,3}%]{1}.{2}.{3}..." -f $percentComplete, $index.Parent.Schema, $index.Parent.Name, $index.Name)
+                    $fileName = Join-Path $OutputDir '10_Indexes' "$(Get-SafeFileName $($index.Parent.Schema)).$(Get-SafeFileName $($index.Parent.Name)).$(Get-SafeFileName $($index.Name)).sql"
+                    Ensure-DirectoryExists $fileName
+                    $opts.FileName = $fileName
+                    $Scripter.Options = $opts
+                    $index.Script($opts) | Out-Null
+                    Write-Host "        [SUCCESS]" -ForegroundColor Green
+                    $successCount++
+                } catch {
+                    Write-Host "        [FAILED]" -ForegroundColor Red
+                    Write-ExportError -ObjectType 'Index' -ObjectName "$($index.Parent.Schema).$($index.Parent.Name).$($index.Name)" -ErrorRecord $_ -FilePath $fileName
+                    $failCount++
+                }
+            }
+            Write-Output "  [SUMMARY] Exported $successCount/$($indexes.Count) index(es) successfully" + $(if ($failCount -gt 0) { " ($failCount failed)" } else { "" })
+            $functionMetrics.TotalObjects += $indexes.Count
+            $functionMetrics.SuccessCount += $successCount
+            $functionMetrics.FailCount += $failCount
+        }
     }
-    }
+    $indexesTimer.Stop()
+    $functionMetrics.CategoryTimings['Indexes'] = $indexesTimer.ElapsedMilliseconds
     
     # 11. Defaults
     Write-Output ''
@@ -1457,6 +1621,7 @@ function Export-DatabaseObjects {
     # 16. Stored Procedures (including Extended Stored Procedures)
     Write-Output ''
     Write-Output 'Exporting stored procedures...'
+    $procsTimer = [System.Diagnostics.Stopwatch]::StartNew()
     $storedProcs = @($Database.StoredProcedures | Where-Object { -not $_.IsSystemObject })
     $extendedProcs = @($Database.ExtendedStoredProcedures | Where-Object { -not $_.IsSystemObject })
     $totalProcs = $storedProcs.Count + $extendedProcs.Count
@@ -1509,7 +1674,12 @@ function Export-DatabaseObjects {
             }
         }
         Write-Output "  [SUMMARY] Exported $successCount/$totalProcs stored procedure(s) successfully" + $(if ($failCount -gt 0) { " ($failCount failed)" } else { "" })
+        $functionMetrics.TotalObjects += $totalProcs
+        $functionMetrics.SuccessCount += $successCount
+        $functionMetrics.FailCount += $failCount
     }
+    $procsTimer.Stop()
+    $functionMetrics.CategoryTimings['StoredProcedures'] = $procsTimer.ElapsedMilliseconds
     
     # 17. Database Triggers
     Write-Output ''
@@ -1664,7 +1834,6 @@ function Export-DatabaseObjects {
             }
         }
         Write-Output "  [SUMMARY] Exported $successCount/$($synonyms.Count) synonym(s) successfully" + $(if ($failCount -gt 0) { " ($failCount failed)" } else { "" })
-    }
     }
     
     # 21. Full-Text Search
@@ -2145,12 +2314,17 @@ function Export-DatabaseObjects {
     } catch {
         Write-Output "  [INFO] Security policies not available (SQL Server 2016+)"
     }
+    
+    # Return metrics summary
+    return $functionMetrics
 }
 
 function Export-TableData {
     <#
     .SYNOPSIS
         Exports table data as INSERT statements.
+    .OUTPUTS
+        Returns a hashtable with TablesWithData, SuccessCount, FailCount, and EmptyCount for metrics.
     #>
     param(
         [Microsoft.SqlServer.Management.Smo.Database]$Database,
@@ -2158,6 +2332,15 @@ function Export-TableData {
         [Microsoft.SqlServer.Management.Smo.Scripter]$Scripter,
         [Microsoft.SqlServer.Management.Smo.SqlServerVersion]$TargetVersion
     )
+    
+    # Initialize metrics tracking for this function
+    $dataMetrics = @{
+        TablesWithData = 0
+        SuccessCount = 0
+        FailCount = 0
+        EmptyCount = 0
+        TotalRows = 0
+    }
     
     Write-Output ''
     Write-Output '═══════════════════════════════════════════════'
@@ -2168,7 +2351,7 @@ function Export-TableData {
     
     if ($tables.Count -eq 0) {
         Write-Output 'No tables found.'
-        return
+        return $dataMetrics
     }
     
     Write-Output "  Found $($tables.Count) table(s) to check for data export"
@@ -2219,6 +2402,13 @@ function Export-TableData {
     if ($failCount -gt 0) {
         Write-Output "  [WARNING] Failed to export data from $failCount table(s)"
     }
+    
+    # Return metrics summary
+    $dataMetrics.TablesWithData = $successCount + $failCount
+    $dataMetrics.SuccessCount = $successCount
+    $dataMetrics.FailCount = $failCount
+    $dataMetrics.EmptyCount = $emptyCount
+    return $dataMetrics
 }
 
 function New-DeploymentManifest {
@@ -2441,6 +2631,13 @@ function Show-ExportSummary {
 #region Main Script
 
 try {
+    # Initialize metrics collection
+    $script:CollectMetrics = $CollectMetrics.IsPresent
+    if ($script:CollectMetrics) {
+        $script:Metrics.StartTime = Get-Date
+        Write-Output '[INFO] Performance metrics collection enabled'
+    }
+    
     # Load configuration if provided
     $config = @{ export = @{ excludeObjectTypes = @(); includeData = $false; excludeObjects = @() } }
     $configSource = "None (using defaults)"
@@ -2530,6 +2727,7 @@ try {
     
     # Connect to SQL Server
     Write-Output 'Connecting to SQL Server...'
+    $connectionTimer = Start-MetricsTimer -Category 'Connection'
     
     $smServer = $null
     if ($Credential) {
@@ -2583,17 +2781,45 @@ For more details, see: https://go.microsoft.com/fwlink/?linkid=2226722
     Write-Output "[SUCCESS] Connected to $Server\$Database"
     Write-Log "Connected successfully to $Server\$Database" -Severity INFO
     
+    # Record connection time
+    if ($connectionTimer) {
+        $connectionTimer.Stop()
+        $script:Metrics.ConnectionTimeMs = $connectionTimer.ElapsedMilliseconds
+    }
+    
     # Create scripter
     $sqlVersion = Get-SqlServerVersion -VersionString $TargetSqlVersion
     $scripter = [Microsoft.SqlServer.Management.Smo.Scripter]::new($smServer)
     $scripter.Options.TargetServerVersion = $sqlVersion
     
-    # Export schema objects
-    Export-DatabaseObjects -Database $smDatabase -OutputDir $exportDir -Scripter $scripter -TargetVersion $sqlVersion
+    # Export schema objects with timing
+    $schemaTimer = Start-MetricsTimer -Category 'SchemaExport'
+    $schemaResult = Export-DatabaseObjects -Database $smDatabase -OutputDir $exportDir -Scripter $scripter -TargetVersion $sqlVersion
+    if ($schemaTimer) {
+        $schemaTimer.Stop()
+        $script:Metrics.Categories['SchemaExport'] = @{
+            DurationMs = $schemaTimer.ElapsedMilliseconds
+            ObjectCount = if ($schemaResult) { $schemaResult.TotalObjects } else { 0 }
+            SuccessCount = if ($schemaResult) { $schemaResult.SuccessCount } else { 0 }
+            FailCount = if ($schemaResult) { $schemaResult.FailCount } else { 0 }
+            AvgMsPerObject = 0
+        }
+    }
     
-    # Export data if requested
+    # Export data if requested with timing
     if ($IncludeData) {
-        Export-TableData -Database $smDatabase -OutputDir $exportDir -Scripter $scripter -TargetVersion $sqlVersion
+        $dataTimer = Start-MetricsTimer -Category 'DataExport'
+        $dataResult = Export-TableData -Database $smDatabase -OutputDir $exportDir -Scripter $scripter -TargetVersion $sqlVersion
+        if ($dataTimer) {
+            $dataTimer.Stop()
+            $script:Metrics.Categories['DataExport'] = @{
+                DurationMs = $dataTimer.ElapsedMilliseconds
+                ObjectCount = if ($dataResult) { $dataResult.TablesWithData } else { 0 }
+                SuccessCount = if ($dataResult) { $dataResult.SuccessCount } else { 0 }
+                FailCount = if ($dataResult) { $dataResult.FailCount } else { 0 }
+                AvgMsPerObject = 0
+            }
+        }
     }
     
     # Create deployment manifest
@@ -2601,6 +2827,9 @@ For more details, see: https://go.microsoft.com/fwlink/?linkid=2226722
     
     # Show export summary
     Show-ExportSummary -OutputDir $exportDir -DatabaseName $Database -ServerName $Server -DataExported $IncludeData
+    
+    # Save performance metrics if collection enabled
+    Save-PerformanceMetrics -OutputDir $exportDir
     
     Write-Output '═══════════════════════════════════════════════'
     Write-Output 'EXPORT COMPLETE'
