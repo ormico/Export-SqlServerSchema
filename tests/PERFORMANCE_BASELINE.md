@@ -77,13 +77,13 @@ Created using: `tests/create-perf-test-db.sql`
 
 | Metric | Baseline | Phase 1 | Phase 2 | Phase 3 | Phase 4 |
 |--------|----------|---------|---------|---------|---------|
-| **Total Duration** | **61.21 sec** | **61.26 sec** | - | - | - |
-| Connection Time | 0.01 sec | 0.01 sec | - | - | - |
-| Schema Export | 53.01 sec | 53.06 sec | - | - | - |
-| Data Export | 8.11 sec | 8.11 sec | - | - | - |
-| Files Created | 314 | 314 | - | - | - |
-| Errors | 0 | 0 | - | - | - |
-| **Improvement** | - | **0%** | - | - | - |
+| **Total Duration** | **61.21 sec** | **61.26 sec** | **30.69 sec** | - | - |
+| Connection Time | 0.01 sec | 0.01 sec | 0.01 sec | - | - |
+| Schema Export | 53.01 sec | 53.06 sec | 22.65 sec | - | - |
+| Data Export | 8.11 sec | 8.11 sec | 7.93 sec | - | - |
+| Files Created | 314 | 314 | 314 | - | - |
+| Errors | 0 | 0 | 0 | - | - |
+| **Improvement** | - | **0%** | **-49.9%** | - | - |
 
 ### Phase Details
 
@@ -91,7 +91,7 @@ Created using: `tests/create-perf-test-db.sql`
 |-------|------------|-------------|----------|-------------|
 | Baseline | `053665e` | Original code before optimizations | 61.21 sec | - |
 | Phase 1 | `053665e` | Single-pass row count via sys.partitions | 61.26 sec | +0.08% |
-| Phase 2 | - | SMO prefetch with SetDefaultInitFields | - | - |
+| Phase 2 | `7b4a4ef` | SMO prefetch with SetDefaultInitFields | 30.69 sec | **-49.9%** |
 | Phase 3 | - | Batch scripting with EnumScript | - | - |
 | Phase 4 | - | Reduce console output frequency | - | - |
 
@@ -105,6 +105,20 @@ Created using: `tests/create-perf-test-db.sql`
 - Exporting over a network connection with latency
 - Database has hundreds of tables  
 - Each COUNT(*) query would otherwise take 10-50ms round-trip
+
+### Phase 2 Analysis
+
+**Change**: Added `SetDefaultInitFields($type, $true)` for 13 SMO object types immediately after connection. This tells SMO to prefetch ALL properties for these types in bulk when collections are first accessed, instead of lazy-loading each property on demand.
+
+**Result**: **49.9% improvement** - Schema export dropped from 53.01 sec to 22.65 sec.
+
+**Explanation**: By default, SMO uses lazy loading - accessing a property like `Table.IsSystemObject` triggers a separate SQL query. With 50 tables and 100+ indexes, this creates hundreds of extra round-trips. SetDefaultInitFields eliminates this N+1 query problem by fetching all properties in the initial collection query.
+
+**Types prefetched**:
+- Table, Column, Index, ForeignKey
+- StoredProcedure, View, UserDefinedFunction, Trigger
+- Schema, UserDefinedType, UserDefinedTableType
+- Synonym, Sequence
 
 ---
 
@@ -130,4 +144,5 @@ $cred = New-Object PSCredential -ArgumentList 'sa', (ConvertTo-SecureString 'Tes
 |------|-------------|
 | `baseline-metrics.json` | Raw baseline metrics (original code) |
 | `phase1-metrics.json` | Phase 1 metrics (single-pass row count) |
+| `phase2-metrics.json` | Phase 2 metrics (SMO prefetch) |
 | `create-perf-test-db.sql` | Script to create PerfTestDb |

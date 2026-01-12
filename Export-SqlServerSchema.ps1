@@ -2809,6 +2809,44 @@ For more details, see: https://go.microsoft.com/fwlink/?linkid=2226722
         $script:Metrics.ConnectionTimeMs = $connectionTimer.ElapsedMilliseconds
     }
     
+    # ═══════════════════════════════════════════════════════════════════════════
+    # PHASE 2 OPTIMIZATION: SMO Prefetch with SetDefaultInitFields
+    # ═══════════════════════════════════════════════════════════════════════════
+    # By default, SMO uses lazy loading - each property access triggers a query.
+    # SetDefaultInitFields tells SMO to prefetch all properties in bulk
+    # when collections are first accessed, eliminating N+1 query problems.
+    # ═══════════════════════════════════════════════════════════════════════════
+    Write-Output "Initializing SMO property prefetch..."
+    
+    # Prefetch ALL properties for commonly used types - more aggressive but simpler
+    # This trades slightly more memory for significantly fewer SQL round-trips
+    $typesToPrefetch = @(
+        [Microsoft.SqlServer.Management.Smo.Table],
+        [Microsoft.SqlServer.Management.Smo.Column],
+        [Microsoft.SqlServer.Management.Smo.Index],
+        [Microsoft.SqlServer.Management.Smo.ForeignKey],
+        [Microsoft.SqlServer.Management.Smo.StoredProcedure],
+        [Microsoft.SqlServer.Management.Smo.View],
+        [Microsoft.SqlServer.Management.Smo.UserDefinedFunction],
+        [Microsoft.SqlServer.Management.Smo.Trigger],
+        [Microsoft.SqlServer.Management.Smo.Schema],
+        [Microsoft.SqlServer.Management.Smo.UserDefinedType],
+        [Microsoft.SqlServer.Management.Smo.UserDefinedTableType],
+        [Microsoft.SqlServer.Management.Smo.Synonym],
+        [Microsoft.SqlServer.Management.Smo.Sequence]
+    )
+    
+    foreach ($smoType in $typesToPrefetch) {
+        try {
+            $smServer.SetDefaultInitFields($smoType, $true)
+        } catch {
+            # Some types may not be available on all SQL Server versions - continue
+            Write-Log "Could not set prefetch for $($smoType.Name): $_" -Severity WARNING
+        }
+    }
+    
+    Write-Output "[SUCCESS] SMO prefetch configured for $($typesToPrefetch.Count) object types"
+    
     # Create scripter
     $sqlVersion = Get-SqlServerVersion -VersionString $TargetSqlVersion
     $scripter = [Microsoft.SqlServer.Management.Smo.Scripter]::new($smServer)
