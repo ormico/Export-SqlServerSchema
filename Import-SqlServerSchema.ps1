@@ -126,13 +126,69 @@ param(
     [int]$MaxRetries = 0,
     
     [Parameter(HelpMessage = 'Initial retry delay in seconds (overrides config file)')]
-    [int]$RetryDelaySeconds = 0
+    [int]$RetryDelaySeconds = 0,
+    
+    [Parameter(HelpMessage = 'Collect performance metrics and save to JSON file')]
+    [switch]$CollectMetrics
 )
 
 $ErrorActionPreference = if ($ContinueOnError) { 'Continue' } else { 'Stop' }
 $script:LogFile = $null  # Will be set during import
 
+# Performance metrics tracking (when -CollectMetrics is used)
+$script:Metrics = @{
+    timestamp = $null
+    phase = 'phase1.5'
+    server = $null
+    database = $null
+    sourcePath = $null
+    importMode = $null
+    totalDurationSeconds = 0.0
+    initializationSeconds = 0.0
+    connectionTimeSeconds = 0.0
+    preliminaryChecksSeconds = 0.0
+    scriptCollectionSeconds = 0.0
+    scriptExecutionSeconds = 0.0
+    fkDisableSeconds = 0.0
+    fkEnableSeconds = 0.0
+    scriptsProcessed = 0
+    scriptsSucceeded = 0
+    scriptsFailed = 0
+    scriptsSkipped = 0
+    dataScriptsCount = 0
+    nonDataScriptsCount = 0
+}
+$script:ImportStopwatch = $null
+$script:InitStopwatch = $null
+$script:ConnectionStopwatch = $null
+$script:PrelimStopwatch = $null
+$script:ScriptCollectStopwatch = $null
+$script:ScriptStopwatch = $null
+$script:FKStopwatch = $null
+
 #region Helper Functions
+
+function Export-Metrics {
+    <#
+    .SYNOPSIS
+        Exports collected metrics to a JSON file.
+    #>
+    param(
+        [string]$OutputPath
+    )
+    
+    if (-not $CollectMetrics) { return }
+    
+    $script:Metrics.timestamp = (Get-Date).ToString('o')
+    $script:Metrics.server = $Server
+    $script:Metrics.database = $Database
+    $script:Metrics.sourcePath = $SourcePath
+    $script:Metrics.importMode = $ImportMode
+    
+    $metricsFile = Join-Path $OutputPath "import-metrics-$(Get-Date -Format 'yyyyMMdd_HHmmss').json"
+    $script:Metrics | ConvertTo-Json -Depth 10 | Set-Content -Path $metricsFile -Encoding UTF8
+    Write-Output "[METRICS] Saved to: $metricsFile"
+}
 
 function Write-Log {
     <#
@@ -291,17 +347,27 @@ function Get-TargetServerOS {
     <#
     .SYNOPSIS
         Detects the target SQL Server's operating system (Windows or Linux).
+    .PARAMETER Connection
+        Optional existing SMO Server connection to reuse. If not provided, uses sqlcmd.
     #>
     param(
         [string]$ServerName,
         [pscredential]$Cred,
-        [hashtable]$Config
+        [hashtable]$Config,
+        [Microsoft.SqlServer.Management.Smo.Server]$Connection
     )
     
+    $query = "SELECT CASE WHEN host_platform = 'Windows' THEN 'Windows' ELSE 'Linux' END AS OS FROM sys.dm_os_host_info"
+    
     try {
-        $query = "SELECT CASE WHEN host_platform = 'Windows' THEN 'Windows' ELSE 'Linux' END AS OS FROM sys.dm_os_host_info"
+        # If we have an open SMO connection, use it
+        if ($Connection -and $Connection.ConnectionContext.IsOpen) {
+            $result = $Connection.ConnectionContext.ExecuteScalar($query)
+            Write-Verbose "Target server OS detected via SMO: $result"
+            return $result
+        }
         
-        # Build sqlcmd parameters
+        # Fallback to sqlcmd if no connection provided
         $sqlcmdParams = @("-S", $ServerName, "-Q", $query, "-h", "-1", "-W")
         
         if ($Cred) {
@@ -328,33 +394,42 @@ function Test-DatabaseConnection {
     <#
     .SYNOPSIS
         Tests connection to target SQL Server.
+    .PARAMETER Connection
+        Optional existing SMO Server connection to reuse. If not provided, creates a new connection.
     #>
     param(
         [string]$ServerName,
         [pscredential]$Cred,
         [hashtable]$Config,
-        [int]$Timeout = 30
+        [int]$Timeout = 30,
+        [Microsoft.SqlServer.Management.Smo.Server]$Connection
     )
     
     Write-Host "Testing connection to $ServerName..."
     
     $server = $null
+    $ownConnection = $false
     try {
-        $server = [Microsoft.SqlServer.Management.Smo.Server]::new($ServerName)
-        $server.ConnectionContext.ConnectTimeout = $Timeout
-        
-        # Apply TrustServerCertificate from config if specified
-        if ($Config -and $Config.ContainsKey('trustServerCertificate')) {
-            $server.ConnectionContext.TrustServerCertificate = $Config.trustServerCertificate
+        if ($Connection -and $Connection.ConnectionContext.IsOpen) {
+            $server = $Connection
+        } else {
+            $ownConnection = $true
+            $server = [Microsoft.SqlServer.Management.Smo.Server]::new($ServerName)
+            $server.ConnectionContext.ConnectTimeout = $Timeout
+            
+            # Apply TrustServerCertificate from config if specified
+            if ($Config -and $Config.ContainsKey('trustServerCertificate')) {
+                $server.ConnectionContext.TrustServerCertificate = $Config.trustServerCertificate
+            }
+            
+            if ($Cred) {
+                $server.ConnectionContext.LoginSecure = $false
+                $server.ConnectionContext.Login = $Cred.UserName
+                $server.ConnectionContext.SecurePassword = $Cred.Password
+            }
+            
+            $server.ConnectionContext.Connect()
         }
-        
-        if ($Cred) {
-            $server.ConnectionContext.LoginSecure = $false
-            $server.ConnectionContext.Login = $Cred.UserName
-            $server.ConnectionContext.SecurePassword = $Cred.Password
-        }
-        
-        $server.ConnectionContext.Connect()
         Write-Host '[SUCCESS] Connection successful' -ForegroundColor Green
         return $true
     } catch {
@@ -377,7 +452,7 @@ For more details, see: https://go.microsoft.com/fwlink/?linkid=2226722
         }
         return $false
     } finally {
-        if ($server -and $server.ConnectionContext.IsOpen) {
+        if ($ownConnection -and $server -and $server.ConnectionContext.IsOpen) {
             $server.ConnectionContext.Disconnect()
         }
     }
@@ -387,38 +462,47 @@ function Test-DatabaseExists {
     <#
     .SYNOPSIS
         Checks if target database exists.
+    .PARAMETER Connection
+        Optional existing SMO Server connection to reuse. If not provided, creates a new connection.
     #>
     param(
         [string]$ServerName,
         [string]$DatabaseName,
         [pscredential]$Cred,
         [hashtable]$Config,
-        [int]$Timeout = 30
+        [int]$Timeout = 30,
+        [Microsoft.SqlServer.Management.Smo.Server]$Connection
     )
     
     $server = $null
+    $ownConnection = $false
     try {
-        $server = [Microsoft.SqlServer.Management.Smo.Server]::new($ServerName)
-        if ($Cred) {
-            $server.ConnectionContext.LoginSecure = $false
-            $server.ConnectionContext.Login = $Cred.UserName
-            $server.ConnectionContext.SecurePassword = $Cred.Password
+        if ($Connection -and $Connection.ConnectionContext.IsOpen) {
+            $server = $Connection
+        } else {
+            $ownConnection = $true
+            $server = [Microsoft.SqlServer.Management.Smo.Server]::new($ServerName)
+            if ($Cred) {
+                $server.ConnectionContext.LoginSecure = $false
+                $server.ConnectionContext.Login = $Cred.UserName
+                $server.ConnectionContext.SecurePassword = $Cred.Password
+            }
+            
+            # Apply TrustServerCertificate from config if specified
+            if ($Config -and $Config.ContainsKey('trustServerCertificate')) {
+                $server.ConnectionContext.TrustServerCertificate = $Config.trustServerCertificate
+            }
+            
+            $server.ConnectionContext.ConnectTimeout = $Timeout
+            $server.ConnectionContext.Connect()
         }
-        
-        # Apply TrustServerCertificate from config if specified
-        if ($Config -and $Config.ContainsKey('trustServerCertificate')) {
-            $server.ConnectionContext.TrustServerCertificate = $Config.trustServerCertificate
-        }
-        
-        $server.ConnectionContext.ConnectTimeout = $Timeout
-        $server.ConnectionContext.Connect()
         $exists = $null -ne $server.Databases[$DatabaseName]
         return $exists
     } catch {
         Write-Error "[ERROR] Error checking database: $_"
         return $false
     } finally {
-        if ($server -and $server.ConnectionContext.IsOpen) {
+        if ($ownConnection -and $server -and $server.ConnectionContext.IsOpen) {
             $server.ConnectionContext.Disconnect()
         }
     }
@@ -428,48 +512,67 @@ function Test-SchemaExists {
     <#
     .SYNOPSIS
         Checks if schema already exists in target database.
+    .DESCRIPTION
+        Uses a direct SQL query to check for user objects, which is much faster than
+        iterating through SMO collections (which triggers full metadata loading).
+    .PARAMETER Connection
+        Optional existing SMO Server connection to reuse. If not provided, creates a new connection.
     #>
     param(
         [string]$ServerName,
         [string]$DatabaseName,
         [pscredential]$Cred,
         [hashtable]$Config,
-        [int]$Timeout = 30
+        [int]$Timeout = 30,
+        [Microsoft.SqlServer.Management.Smo.Server]$Connection
     )
     
     $server = $null
+    $ownConnection = $false
     try {
-        $server = [Microsoft.SqlServer.Management.Smo.Server]::new($ServerName)
-        if ($Cred) {
-            $server.ConnectionContext.LoginSecure = $false
-            $server.ConnectionContext.Login = $Cred.UserName
-            $server.ConnectionContext.SecurePassword = $Cred.Password
+        if ($Connection -and $Connection.ConnectionContext.IsOpen) {
+            $server = $Connection
+        } else {
+            $ownConnection = $true
+            $server = [Microsoft.SqlServer.Management.Smo.Server]::new($ServerName)
+            if ($Cred) {
+                $server.ConnectionContext.LoginSecure = $false
+                $server.ConnectionContext.Login = $Cred.UserName
+                $server.ConnectionContext.SecurePassword = $Cred.Password
+            }
+            
+            # Apply TrustServerCertificate from config if specified
+            if ($Config -and $Config.ContainsKey('trustServerCertificate')) {
+                $server.ConnectionContext.TrustServerCertificate = $Config.trustServerCertificate
+            }
+            
+            $server.ConnectionContext.ConnectTimeout = $Timeout
+            $server.ConnectionContext.Connect()
         }
-        
-        # Apply TrustServerCertificate from config if specified
-        if ($Config -and $Config.ContainsKey('trustServerCertificate')) {
-            $server.ConnectionContext.TrustServerCertificate = $Config.trustServerCertificate
-        }
-        
-        $server.ConnectionContext.ConnectTimeout = $Timeout
-        $server.ConnectionContext.Connect()
         
         $db = $server.Databases[$DatabaseName]
         if ($null -eq $db) {
             return $false
         }
         
-        # Check if any user objects exist (excluding system objects)
-        $userTables = @($db.Tables | Where-Object { -not $_.IsSystemObject })
-        $userViews = @($db.Views | Where-Object { -not $_.IsSystemObject })
-        $userProcs = @($db.StoredProcedures | Where-Object { -not $_.IsSystemObject })
-        $hasObjects = ($userTables.Count -gt 0) -or ($userViews.Count -gt 0) -or ($userProcs.Count -gt 0)
+        # Use direct SQL query instead of SMO collection enumeration (MUCH faster)
+        # SMO collections trigger full metadata loading which can take 30+ seconds
+        # This query checks for user tables, views, or stored procedures in < 0.1s
+        $checkQuery = @"
+SELECT CASE WHEN EXISTS (
+    SELECT 1 FROM sys.objects 
+    WHERE is_ms_shipped = 0 
+    AND type IN ('U', 'V', 'P')  -- U=User Table, V=View, P=Stored Procedure
+) THEN 1 ELSE 0 END
+"@
+        $result = $db.ExecuteWithResults($checkQuery)
+        $hasObjects = $result.Tables[0].Rows[0][0] -eq 1
         return $hasObjects
     } catch {
         Write-Error "[ERROR] Error checking schema: $_"
         return $false
     } finally {
-        if ($server -and $server.ConnectionContext.IsOpen) {
+        if ($ownConnection -and $server -and $server.ConnectionContext.IsOpen) {
             $server.ConnectionContext.Disconnect()
         }
     }
@@ -521,10 +624,68 @@ function New-Database {
     }
 }
 
+function New-SqlServerConnection {
+    <#
+    .SYNOPSIS
+        Creates a reusable SMO Server connection for script execution.
+    .DESCRIPTION
+        Creates a single connection that can be reused across multiple Invoke-SqlScript calls
+        to avoid connection establishment overhead (typically 100-150ms per connection).
+    #>
+    param(
+        [Parameter(Mandatory)]
+        [string]$ServerName,
+        [Parameter(Mandatory)]
+        [string]$DatabaseName,
+        [pscredential]$Cred,
+        [int]$Timeout = 300,
+        [int]$ConnectionTimeout = 15,
+        [hashtable]$Config
+    )
+    
+    $server = [Microsoft.SqlServer.Management.Smo.Server]::new($ServerName)
+    if ($Cred) {
+        $server.ConnectionContext.LoginSecure = $false
+        $server.ConnectionContext.Login = $Cred.UserName
+        $server.ConnectionContext.SecurePassword = $Cred.Password
+    }
+    
+    $server.ConnectionContext.ConnectTimeout = $ConnectionTimeout
+    $server.ConnectionContext.DatabaseName = $DatabaseName
+    $server.ConnectionContext.StatementTimeout = $Timeout
+    
+    # Apply TrustServerCertificate from config if specified
+    if ($Config -and $Config.ContainsKey('trustServerCertificate')) {
+        $server.ConnectionContext.TrustServerCertificate = $Config.trustServerCertificate
+    }
+    
+    try {
+        $server.ConnectionContext.Connect()
+        return $server
+    } catch {
+        if ($_.Exception.Message -match 'certificate|SSL|TLS') {
+            Write-Error @"
+[ERROR] SSL/Certificate error connecting to SQL Server: $_
+
+This usually occurs with SQL Server 2022+ using self-signed certificates.
+
+SOLUTION: Add to your config file:
+  trustServerCertificate: true
+
+For more details, see: https://go.microsoft.com/fwlink/?linkid=2226722
+"@
+        }
+        throw
+    }
+}
+
 function Invoke-SqlScript {
     <#
     .SYNOPSIS
         Executes a SQL script file or content against the target database.
+    .DESCRIPTION
+        Accepts either a pre-existing SMO Server connection (for performance) or creates a new one.
+        When using a shared connection, the connection is NOT disconnected after script execution.
     #>
     param(
         [string]$FilePath,
@@ -535,8 +696,11 @@ function Invoke-SqlScript {
         [int]$Timeout,
         [switch]$Show,
         [hashtable]$SqlCmdVariables = @{},
-        [hashtable]$Config
+        [hashtable]$Config,
+        [Microsoft.SqlServer.Management.Smo.Server]$Connection  # Pre-existing connection for reuse
     )
+    
+    $ownConnection = $false  # Track if we created the connection (and should disconnect)
     
     # Determine script source
     if ($ScriptContent) {
@@ -584,26 +748,36 @@ function Invoke-SqlScript {
             Write-Output $sql.Substring(0, [Math]::Min(200, $sql.Length)) | Write-Verbose
         }
         
-        $server = [Microsoft.SqlServer.Management.Smo.Server]::new($ServerName)
-        if ($Cred) {
-            $server.ConnectionContext.LoginSecure = $false
-            $server.ConnectionContext.Login = $Cred.UserName
-            $server.ConnectionContext.SecurePassword = $Cred.Password
-        }
-        
-        $server.ConnectionContext.ConnectTimeout = 15
-        $server.ConnectionContext.DatabaseName = $DatabaseName
-        
-        # Apply TrustServerCertificate from config if specified
-        if ($Config -and $Config.ContainsKey('trustServerCertificate')) {
-            $server.ConnectionContext.TrustServerCertificate = $Config.trustServerCertificate
-        }
-        
-        try {
-            $server.ConnectionContext.Connect()
-        } catch {
-            if ($_.Exception.Message -match 'certificate|SSL|TLS') {
-                Write-Error @"
+        # Use existing connection if provided, otherwise create a new one
+        $server = $null
+        if ($Connection) {
+            $server = $Connection
+            # Ensure we're connected
+            if (-not $server.ConnectionContext.IsOpen) {
+                $server.ConnectionContext.Connect()
+            }
+        } else {
+            $ownConnection = $true
+            $server = [Microsoft.SqlServer.Management.Smo.Server]::new($ServerName)
+            if ($Cred) {
+                $server.ConnectionContext.LoginSecure = $false
+                $server.ConnectionContext.Login = $Cred.UserName
+                $server.ConnectionContext.SecurePassword = $Cred.Password
+            }
+            
+            $server.ConnectionContext.ConnectTimeout = 15
+            $server.ConnectionContext.DatabaseName = $DatabaseName
+            
+            # Apply TrustServerCertificate from config if specified
+            if ($Config -and $Config.ContainsKey('trustServerCertificate')) {
+                $server.ConnectionContext.TrustServerCertificate = $Config.trustServerCertificate
+            }
+            
+            try {
+                $server.ConnectionContext.Connect()
+            } catch {
+                if ($_.Exception.Message -match 'certificate|SSL|TLS') {
+                    Write-Error @"
 [ERROR] SSL/Certificate error connecting to SQL Server for script execution: $_
 
 This usually occurs with SQL Server 2022+ using self-signed certificates.
@@ -614,8 +788,9 @@ SOLUTION: Add to your config file:
 Failed script: $scriptName
 For more details, see: https://go.microsoft.com/fwlink/?linkid=2226722
 "@
+                }
+                throw
             }
-            throw
         }
         
         $server.ConnectionContext.StatementTimeout = $Timeout
@@ -631,9 +806,13 @@ For more details, see: https://go.microsoft.com/fwlink/?linkid=2226722
             }
         }
         
-        $server.ConnectionContext.Disconnect()
+        # Only disconnect if we created the connection
+        if ($ownConnection -and $server.ConnectionContext.IsOpen) {
+            $server.ConnectionContext.Disconnect()
+        }
         
-        Write-Output "  [SUCCESS] Applied: $scriptName"
+        # Output success message to Verbose stream only (quiet by default for performance)
+        Write-Verbose "  [SUCCESS] Applied: $scriptName"
         return $true
     } catch {
         $errorMessage = "Exception: $($_.Exception.GetType().FullName)`n      Message: $($_.Exception.Message)"
@@ -981,6 +1160,12 @@ function Show-ImportConfiguration {
 #region Main Script
 
 try {
+    # Start overall timing if collecting metrics
+    if ($CollectMetrics) {
+        $script:ImportStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+        $script:InitStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+    }
+    
     # Load configuration if provided
     $config = @{ 
         import = @{ 
@@ -1099,33 +1284,83 @@ try {
     $execMethod = Test-Dependencies
     Write-Output ''
     
-    # Test connection to server
-    if (-not (Test-DatabaseConnection -ServerName $Server -Cred $Credential -Config $config -Timeout $effectiveConnectionTimeout)) {
+    # End initialization timing, start preliminary checks timing
+    if ($CollectMetrics) {
+        $script:InitStopwatch.Stop()
+        $script:Metrics.initializationSeconds = $script:InitStopwatch.Elapsed.TotalSeconds
+        $script:PrelimStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+        Write-Verbose "[TIMING] Preliminary checks starting..."
+    }
+    
+    # Create shared connection for preliminary checks and script execution
+    # This eliminates connection overhead from multiple check functions
+    # Note: Connect to 'master' first if -CreateDatabase is used (target DB might not exist yet)
+    if ($CollectMetrics) { 
+        $script:ConnectionStopwatch = [System.Diagnostics.Stopwatch]::StartNew() 
+        Write-Verbose "[TIMING] Creating shared connection..."
+    }
+    try {
+        # Connect to master first for preliminary checks - reconnect to target DB later if needed
+        $initialDb = if ($CreateDatabase) { 'master' } else { $Database }
+        $script:SharedConnection = New-SqlServerConnection -ServerName $Server -DatabaseName $initialDb -Cred $Credential -Config $config -Timeout $effectiveCommandTimeout
+    } catch {
+        Write-Error "[ERROR] Failed to create connection: $_"
+        Write-Log "Failed to create connection to $Server" -Severity ERROR
+        exit 1
+    }
+    if ($CollectMetrics) {
+        $script:ConnectionStopwatch.Stop()
+        $script:Metrics.connectionTimeSeconds = $script:ConnectionStopwatch.Elapsed.TotalSeconds
+        Write-Verbose "[TIMING] Shared connection created in $([math]::Round($script:ConnectionStopwatch.Elapsed.TotalSeconds, 3))s"
+    }
+    
+    # Test connection to server (reuse shared connection)
+    if ($CollectMetrics) { Write-Verbose "[TIMING] Starting Test-DatabaseConnection..." }
+    $testConnSw = [System.Diagnostics.Stopwatch]::StartNew()
+    if (-not (Test-DatabaseConnection -ServerName $Server -Cred $Credential -Config $config -Timeout $effectiveConnectionTimeout -Connection $script:SharedConnection)) {
         Write-Log "Connection test failed to $Server" -Severity ERROR
         exit 1
     }
+    $testConnSw.Stop()
+    if ($CollectMetrics) { Write-Verbose "[TIMING] Test-DatabaseConnection completed in $([math]::Round($testConnSw.Elapsed.TotalSeconds, 3))s" }
     Write-Log "Connection test successful to $Server" -Severity INFO
     Write-Output ''
     
-    # Check if database exists
-    $dbExists = Test-DatabaseExists -ServerName $Server -DatabaseName $Database -Cred $Credential -Config $config -Timeout $effectiveConnectionTimeout
+    # Check if database exists (reuse shared connection)
+    if ($CollectMetrics) { Write-Verbose "[TIMING] Starting Test-DatabaseExists..." }
+    $testDbSw = [System.Diagnostics.Stopwatch]::StartNew()
+    $dbExists = Test-DatabaseExists -ServerName $Server -DatabaseName $Database -Cred $Credential -Config $config -Timeout $effectiveConnectionTimeout -Connection $script:SharedConnection
+    $testDbSw.Stop()
+    if ($CollectMetrics) { Write-Verbose "[TIMING] Test-DatabaseExists completed in $([math]::Round($testDbSw.Elapsed.TotalSeconds, 3))s" }
     
     if (-not $dbExists) {
         if ($CreateDatabase) {
             if (-not (New-Database -ServerName $Server -DatabaseName $Database -Cred $Credential -Config $config -Timeout $effectiveConnectionTimeout)) {
                 exit 1
             }
+            # Reconnect shared connection to the new database
+            Write-Verbose "[TIMING] Reconnecting to target database..."
+            $script:SharedConnection.ConnectionContext.Disconnect()
+            $script:SharedConnection = New-SqlServerConnection -ServerName $Server -DatabaseName $Database -Cred $Credential -Config $config -Timeout $effectiveCommandTimeout
         } else {
             Write-Error "Database '$Database' does not exist. Use -CreateDatabase to create it."
             exit 1
         }
     } else {
         Write-Output "[SUCCESS] Target database exists: $Database"
+        # If we connected to master initially (CreateDatabase flag), reconnect to target database
+        if ($CreateDatabase) {
+            Write-Verbose "[TIMING] Reconnecting to target database..."
+            $script:SharedConnection.ConnectionContext.Disconnect()
+            $script:SharedConnection = New-SqlServerConnection -ServerName $Server -DatabaseName $Database -Cred $Credential -Config $config -Timeout $effectiveCommandTimeout
+        }
     }
     Write-Output ''
     
-    # Check for existing schema
-    if (Test-SchemaExists -ServerName $Server -DatabaseName $Database -Cred $Credential -Config $config -Timeout $effectiveConnectionTimeout) {
+    # Check for existing schema (reuse shared connection)
+    if ($CollectMetrics) { Write-Verbose "[TIMING] Starting Test-SchemaExists..." }
+    $testSchemaSw = [System.Diagnostics.Stopwatch]::StartNew()
+    if (Test-SchemaExists -ServerName $Server -DatabaseName $Database -Cred $Credential -Config $config -Timeout $effectiveConnectionTimeout -Connection $script:SharedConnection) {
         if (-not $Force) {
             Write-Output "[INFO[ Database $Database already contains schema objects."
             Write-Output "Use -Force to proceed with redeployment."
@@ -1133,7 +1368,18 @@ try {
         }
         Write-Output '[INFO[ Proceeding with redeployment due to -Force flag'
     }
+    $testSchemaSw.Stop()
+    if ($CollectMetrics) { Write-Verbose "[TIMING] Test-SchemaExists completed in $([math]::Round($testSchemaSw.Elapsed.TotalSeconds, 3))s" }
     Write-Output ''
+    
+    if ($CollectMetrics) { Write-Verbose "[TIMING] Preliminary checks total so far: $([math]::Round($script:PrelimStopwatch.Elapsed.TotalSeconds, 3))s" }
+    
+    # End preliminary checks timing, start script collection timing
+    if ($CollectMetrics) {
+        $script:PrelimStopwatch.Stop()
+        $script:Metrics.preliminaryChecksSeconds = $script:PrelimStopwatch.Elapsed.TotalSeconds
+        $script:ScriptCollectStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+    }
     
     # Get scripts in order
     Write-Output "Collecting scripts from: $(Split-Path -Leaf $SourcePath)"
@@ -1148,10 +1394,16 @@ try {
     
     Write-Output "Found $($scripts.Count) script(s)"
     
-    # Detect target server OS for path separator
-    $targetOS = Get-TargetServerOS -ServerName $Server -Cred $Credential -Config $config
+    # Detect target server OS for path separator (reuse shared connection)
+    $targetOS = Get-TargetServerOS -ServerName $Server -Cred $Credential -Config $config -Connection $script:SharedConnection
     $pathSeparator = if ($targetOS -eq 'Linux') { '/' } else { '\' }
     Write-Verbose "Using path separator for $targetOS`: $pathSeparator"
+    
+    # End script collection timing
+    if ($CollectMetrics) {
+        $script:ScriptCollectStopwatch.Stop()
+        $script:Metrics.scriptCollectionSeconds = $script:ScriptCollectStopwatch.Elapsed.TotalSeconds
+    }
     
     # Build SQLCMD variables from config (for FileGroup path mappings, etc.)
     $sqlCmdVars = @{}
@@ -1246,14 +1498,33 @@ try {
     $dataScripts = $scripts | Where-Object { $_.Name -match '\.data\.sql$' }
     $nonDataScripts = $scripts | Where-Object { $_.Name -notmatch '\.data\.sql$' }
     
+    # Track counts for metrics
+    if ($CollectMetrics) {
+        $script:Metrics.dataScriptsCount = $dataScripts.Count
+        $script:Metrics.nonDataScriptsCount = $nonDataScripts.Count
+        $script:ScriptStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+    }
+    
     Write-Verbose "Found $($nonDataScripts.Count) non-data script(s) and $($dataScripts.Count) data script(s)"
+    
+    # Create a shared connection for all script executions (Phase 1 optimization)
+    $script:SharedConnection = $null
+    try {
+        $script:SharedConnection = New-SqlServerConnection -ServerName $Server -DatabaseName $Database `
+            -Cred $Credential -Timeout $effectiveCommandTimeout -ConnectionTimeout $effectiveConnectionTimeout `
+            -Config $config
+        Write-Verbose "Created shared SMO connection for script execution"
+    } catch {
+        Write-Error "[ERROR] Failed to create shared connection: $_"
+        exit 1
+    }
     
     # Process non-data scripts first
     foreach ($script in $nonDataScripts) {
         $result = Invoke-WithRetry -MaxAttempts $effectiveMaxRetries -InitialDelaySeconds $effectiveRetryDelay -OperationName "Script: $($script.Name)" -ScriptBlock {
             Invoke-SqlScript -FilePath $script.FullName -ServerName $Server `
                 -DatabaseName $Database -Cred $Credential -Timeout $effectiveCommandTimeout -Show:$ShowSQL `
-                -SqlCmdVariables $sqlCmdVars -Config $config
+                -SqlCmdVariables $sqlCmdVars -Config $config -Connection $script:SharedConnection
         }
         
         if ($result -eq $true) {
@@ -1278,6 +1549,7 @@ try {
         # Disable all foreign key constraints  
         # Get list of FKs and disable them individually
         $smServer = $null
+        if ($CollectMetrics) { $script:FKStopwatch = [System.Diagnostics.Stopwatch]::StartNew() }
         try {
             Write-Verbose "Connecting to $Server database $Database to disable FKs..."
             $smServer = [Microsoft.SqlServer.Management.Smo.Server]::new($Server)
@@ -1327,6 +1599,10 @@ try {
             if ($smServer -and $smServer.ConnectionContext.IsOpen) {
                 $smServer.ConnectionContext.Disconnect()
             }
+            if ($CollectMetrics -and $script:FKStopwatch) {
+                $script:FKStopwatch.Stop()
+                $script:Metrics.fkDisableSeconds = $script:FKStopwatch.Elapsed.TotalSeconds
+            }
         }
         
         Write-Output ''
@@ -1337,7 +1613,7 @@ try {
             $result = Invoke-WithRetry -MaxAttempts $effectiveMaxRetries -InitialDelaySeconds $effectiveRetryDelay -OperationName "Data Script: $($script.Name)" -ScriptBlock {
                 Invoke-SqlScript -FilePath $script.FullName -ServerName $Server `
                     -DatabaseName $Database -Cred $Credential -Timeout $effectiveCommandTimeout -Show:$ShowSQL `
-                    -SqlCmdVariables $sqlCmdVars -Config $config
+                    -SqlCmdVariables $sqlCmdVars -Config $config -Connection $script:SharedConnection
             }
             
             if ($result -eq $true) {
@@ -1354,6 +1630,7 @@ try {
         
         # Re-enable all foreign key constraints and validate data
         $smServer = $null
+        if ($CollectMetrics) { $script:FKStopwatch = [System.Diagnostics.Stopwatch]::StartNew() }
         try {
             $smServer = [Microsoft.SqlServer.Management.Smo.Server]::new($Server)
             if ($Credential) {
@@ -1405,7 +1682,23 @@ try {
             if ($smServer -and $smServer.ConnectionContext.IsOpen) {
                 $smServer.ConnectionContext.Disconnect()
             }
+            if ($CollectMetrics -and $script:FKStopwatch) {
+                $script:FKStopwatch.Stop()
+                $script:Metrics.fkEnableSeconds = $script:FKStopwatch.Elapsed.TotalSeconds
+            }
         }
+    }
+    
+    # Close the shared connection
+    if ($script:SharedConnection -and $script:SharedConnection.ConnectionContext.IsOpen) {
+        $script:SharedConnection.ConnectionContext.Disconnect()
+        Write-Verbose "Closed shared SMO connection"
+    }
+    
+    # Stop script execution timing
+    if ($CollectMetrics -and $script:ScriptStopwatch) {
+        $script:ScriptStopwatch.Stop()
+        $script:Metrics.scriptExecutionSeconds = $script:ScriptStopwatch.Elapsed.TotalSeconds
     }
     
     Write-Output '───────────────────────────────────────────────'
@@ -1517,6 +1810,38 @@ try {
         Write-Output '[SUCCESS] Import completed successfully'
         Write-Output ''
         Write-Log "Import completed successfully - $successCount script(s) executed" -Severity INFO
+    }
+    
+    # Stop overall timing and export metrics
+    if ($CollectMetrics) {
+        if ($script:ImportStopwatch) {
+            $script:ImportStopwatch.Stop()
+            $script:Metrics.totalDurationSeconds = $script:ImportStopwatch.Elapsed.TotalSeconds
+        }
+        $script:Metrics.scriptsProcessed = $successCount + $failureCount + $skipCount
+        $script:Metrics.scriptsSucceeded = $successCount
+        $script:Metrics.scriptsFailed = $failureCount
+        $script:Metrics.scriptsSkipped = $skipCount
+        
+        # Export metrics to tests folder or source path
+        $metricsPath = if (Test-Path (Join-Path (Split-Path $PSScriptRoot) 'tests')) {
+            Join-Path (Split-Path $PSScriptRoot) 'tests'
+        } else {
+            $SourcePath
+        }
+        Export-Metrics -OutputPath $metricsPath
+        
+        Write-Output ''
+        Write-Output "Performance Metrics:"
+        Write-Output "  Total duration:     $([math]::Round($script:Metrics.totalDurationSeconds, 2))s"
+        Write-Output "  Connection time:    $([math]::Round($script:Metrics.connectionTimeSeconds, 2))s"
+        Write-Output "  Script execution:   $([math]::Round($script:Metrics.scriptExecutionSeconds, 2))s"
+        if ($script:Metrics.fkDisableSeconds -gt 0 -or $script:Metrics.fkEnableSeconds -gt 0) {
+            Write-Output "  FK disable:         $([math]::Round($script:Metrics.fkDisableSeconds, 2))s"
+            Write-Output "  FK re-enable:       $([math]::Round($script:Metrics.fkEnableSeconds, 2))s"
+        }
+        Write-Output "  Scripts processed:  $($script:Metrics.scriptsProcessed)"
+        Write-Output ''
     }
     
     Write-Output '═══════════════════════════════════════════════'
