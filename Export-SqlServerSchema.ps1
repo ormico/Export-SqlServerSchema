@@ -1408,16 +1408,16 @@ function Export-DatabaseObjects {
                 $currentItem++
                 $percentComplete = [math]::Round(($currentItem / $foreignKeys.Count) * 100)
                 try {
-                    Write-Host ("  [{0,3}%]{1}.{2}.{3}..." -f $percentComplete, $fk.Parent.Schema, $fk.Parent.Name, $fk.Name)
+                    Write-ObjectProgress -ObjectName "$($fk.Parent.Schema).$($fk.Parent.Name).$($fk.Name)" -Current $currentItem -Total $foreignKeys.Count
                     $fileName = Join-Path $OutputDir '09_Tables_ForeignKeys' "$(Get-SafeFileName $($fk.Parent.Schema)).$(Get-SafeFileName $($fk.Parent.Name)).$(Get-SafeFileName $($fk.Name)).sql"
                     Ensure-DirectoryExists $fileName
                     $opts.FileName = $fileName
                     $Scripter.Options = $opts
                     $fk.Script($opts) | Out-Null
-                    Write-Host "        [SUCCESS]" -ForegroundColor Green
+                    Write-ObjectProgress -ObjectName "$($fk.Parent.Schema).$($fk.Parent.Name).$($fk.Name)" -Current $currentItem -Total $foreignKeys.Count -Success
                     $successCount++
                 } catch {
-                    Write-Host "        [FAILED]" -ForegroundColor Red
+                    Write-ObjectProgress -ObjectName "$($fk.Parent.Schema).$($fk.Parent.Name).$($fk.Name)" -Current $currentItem -Total $foreignKeys.Count -Failed
                     Write-ExportError -ObjectType 'ForeignKey' -ObjectName "$($fk.Parent.Schema).$($fk.Parent.Name).$($fk.Name)" -ErrorRecord $_ -FilePath $fileName
                     $failCount++
                 }
