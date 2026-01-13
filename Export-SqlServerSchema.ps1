@@ -2832,14 +2832,24 @@ try {
             Write-Error @"
 [ERROR] SSL/Certificate error connecting to SQL Server: $_
 
-This usually occurs with SQL Server 2022+ using self-signed certificates.
+This occurs when SQL Server's certificate is not trusted by the client.
 
-SOLUTION: Add to your config file:
-  trustServerCertificate: true
+RECOMMENDED SOLUTIONS (in order of preference):
 
-Or create a config file with:
-  trustServerCertificate: true
-  
+1. PRODUCTION: Install a certificate from a trusted CA on SQL Server
+   - Obtain a certificate from your organization's CA or a public CA
+   - Configure SQL Server to use the trusted certificate
+   - This provides full encryption AND server identity verification
+
+2. PRODUCTION: Add the SQL Server certificate to your trusted root store
+   - Export the server's certificate and install it on client machines
+   - Maintains server identity verification
+
+3. DEVELOPMENT ONLY: Disable certificate validation (SECURITY RISK)
+   - Add to your config file: trustServerCertificate: true
+   - WARNING: This disables server identity verification and allows
+     man-in-the-middle attacks. Use ONLY in isolated dev environments.
+
 For more details, see: https://go.microsoft.com/fwlink/?linkid=2226722
 "@
         }
