@@ -1516,9 +1516,9 @@ try {
     Write-Verbose "Reusing shared SMO connection for script execution"
     
     # Process non-data scripts first
-    foreach ($script in $nonDataScripts) {
-        $result = Invoke-WithRetry -MaxAttempts $effectiveMaxRetries -InitialDelaySeconds $effectiveRetryDelay -OperationName "Script: $($script.Name)" -ScriptBlock {
-            Invoke-SqlScript -FilePath $script.FullName -ServerName $Server `
+    foreach ($scriptFile in $nonDataScripts) {
+        $result = Invoke-WithRetry -MaxAttempts $effectiveMaxRetries -InitialDelaySeconds $effectiveRetryDelay -OperationName "Script: $($scriptFile.Name)" -ScriptBlock {
+            Invoke-SqlScript -FilePath $scriptFile.FullName -ServerName $Server `
                 -DatabaseName $Database -Cred $Credential -Timeout $effectiveCommandTimeout -Show:$ShowSQL `
                 -SqlCmdVariables $sqlCmdVars -Config $config -Connection $script:SharedConnection
         }
@@ -1605,9 +1605,9 @@ try {
         Write-Output 'Importing data files...'
         
         # Process data scripts
-        foreach ($script in $dataScripts) {
-            $result = Invoke-WithRetry -MaxAttempts $effectiveMaxRetries -InitialDelaySeconds $effectiveRetryDelay -OperationName "Data Script: $($script.Name)" -ScriptBlock {
-                Invoke-SqlScript -FilePath $script.FullName -ServerName $Server `
+        foreach ($scriptFile in $dataScripts) {
+            $result = Invoke-WithRetry -MaxAttempts $effectiveMaxRetries -InitialDelaySeconds $effectiveRetryDelay -OperationName "Data Script: $($scriptFile.Name)" -ScriptBlock {
+                Invoke-SqlScript -FilePath $scriptFile.FullName -ServerName $Server `
                     -DatabaseName $Database -Cred $Credential -Timeout $effectiveCommandTimeout -Show:$ShowSQL `
                     -SqlCmdVariables $sqlCmdVars -Config $config -Connection $script:SharedConnection
             }
