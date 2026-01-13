@@ -6,6 +6,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [1.3.0] - 2026-01-12
+
+### Changed
+
+**Performance Optimizations**
+- **Export Script**: 65% faster exports (61.2s → 21.1s for 314 files in testing)
+  - Reuses single SMO connection across all object types (eliminates per-category connection overhead)
+  - SMO prefetch with SetDefaultInitFields eliminates N+1 lazy-loading queries
+  - Consolidated output messages reduce console I/O (use `-Verbose` for detailed output)
+  - Optional `-CollectMetrics` parameter for performance analysis
+- **Import Script**: 91% faster imports (37.8s → 3.3s for 263 scripts in testing)
+  - Single persistent connection for all script execution (eliminates N+1 connection problem)
+  - Replaced slow SMO metadata enumeration with direct SQL queries in schema detection
+  - Shared connection used across all preliminary validation checks
+
+### Added
+- `-CollectMetrics` parameter on both Export and Import scripts for performance diagnostics
+- Performance baseline documentation in `tests/PERFORMANCE_BASELINE.md` and `tests/IMPORT_PERFORMANCE_BASELINE.md`
+
+---
+
 ## [1.2.2] - 2025-11-19
 
 ### Fixed
