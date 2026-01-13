@@ -1507,17 +1507,13 @@ try {
     
     Write-Verbose "Found $($nonDataScripts.Count) non-data script(s) and $($dataScripts.Count) data script(s)"
     
-    # Create a shared connection for all script executions (Phase 1 optimization)
-    $script:SharedConnection = $null
-    try {
-        $script:SharedConnection = New-SqlServerConnection -ServerName $Server -DatabaseName $Database `
-            -Cred $Credential -Timeout $effectiveCommandTimeout -ConnectionTimeout $effectiveConnectionTimeout `
-            -Config $config
-        Write-Verbose "Created shared SMO connection for script execution"
-    } catch {
-        Write-Error "[ERROR] Failed to create shared connection: $_"
+    # Reuse the shared connection created during preliminary checks
+    # It's already connected to the target database at this point
+    if (-not $script:SharedConnection -or -not $script:SharedConnection.ConnectionContext.IsOpen) {
+        Write-Error "[ERROR] Shared connection not available for script execution"
         exit 1
     }
+    Write-Verbose "Reusing shared SMO connection for script execution"
     
     # Process non-data scripts first
     foreach ($script in $nonDataScripts) {
