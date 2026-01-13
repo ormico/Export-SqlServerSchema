@@ -1380,11 +1380,11 @@ try {
     $testSchemaSw = [System.Diagnostics.Stopwatch]::StartNew()
     if (Test-SchemaExists -ServerName $Server -DatabaseName $Database -Cred $Credential -Config $config -Timeout $effectiveConnectionTimeout -Connection $script:SharedConnection) {
         if (-not $Force) {
-            Write-Output "[INFO[ Database $Database already contains schema objects."
+            Write-Output "[INFO] Database $Database already contains schema objects."
             Write-Output "Use -Force to proceed with redeployment."
             exit 0
         }
-        Write-Output '[INFO[ Proceeding with redeployment due to -Force flag'
+        Write-Output '[INFO] Proceeding with redeployment due to -Force flag'
     }
     $testSchemaSw.Stop()
     if ($CollectMetrics) { Write-Verbose "[TIMING] Test-SchemaExists completed in $([math]::Round($testSchemaSw.Elapsed.TotalSeconds, 3))s" }
