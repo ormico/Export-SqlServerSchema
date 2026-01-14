@@ -1503,7 +1503,7 @@ try {
         
         if ($modeConfig -and $modeConfig.fileGroupPathMapping) {
             # SECURITY: Sanitize database name for use in filesystem paths
-            $sanitizedDbName = $Database -replace '[^a-zA-Z0-9_\-]', '_'
+            $sanitizedDbName = $Database -replace '[^a-zA-Z0-9_-]', '_'
             
             # First pass: read FileGroups SQL to extract file names
             $fileGroupScript = Join-Path $SourcePath '00_FileGroups' '001_FileGroups.sql'
@@ -1517,7 +1517,7 @@ try {
                         $fgName = $matches[1].Trim()
                         
                         # SECURITY: Sanitize FileGroup name
-                        if ($fgName -notmatch '^[a-zA-Z0-9_\-]+$') {
+                        if ($fgName -notmatch '^[a-zA-Z0-9_-]+$') {
                             Write-Warning "[WARNING] FileGroup name '$fgName' contains unsafe characters. Skipping."
                             $currentFG = $null
                             continue
@@ -1530,7 +1530,7 @@ try {
                         $fileName = $matches[1].Trim()
                         
                         # SECURITY: Sanitize filename
-                        if ($fileName -notmatch '^[a-zA-Z0-9_\-\.]+$') {
+                        if ($fileName -notmatch '^[a-zA-Z0-9_.-]+$') {
                             Write-Warning "[WARNING] FileGroup file name '$fileName' contains unsafe characters. Skipping."
                             continue
                         }
@@ -1585,7 +1585,7 @@ try {
                 Write-Output "[INFO] Auto-remapping FileGroup paths to: $defaultDataPath"
                 
                 # SECURITY: Sanitize database name for use in filesystem paths
-                $sanitizedDbName = $Database -replace '[^a-zA-Z0-9_\-]', '_'
+                $sanitizedDbName = $Database -replace '[^a-zA-Z0-9_-]', '_'
                 
                 # Parse FileGroup file to extract names
                 $currentFG = $null
@@ -1600,7 +1600,7 @@ try {
                         # 1) SQLCMD variable names must be valid PowerShell variable names
                         # 2) Filesystem paths should avoid special characters for cross-platform safety
                         # 3) Prevents potential injection via special character sequences
-                        if ($fgName -notmatch '^[a-zA-Z0-9_\-]+$') {
+                        if ($fgName -notmatch '^[a-zA-Z0-9_-]+$') {
                             Write-Warning "[WARNING] FileGroup name '$fgName' contains unsafe characters. Skipping."
                             $currentFG = $null
                             continue
@@ -1614,7 +1614,7 @@ try {
                         
                         # SECURITY: Sanitize filename to prevent SQL injection via SQLCMD variable substitution
                         # Only allow alphanumeric, dash, underscore, and period for safe filesystem names
-                        if ($originalFileName -notmatch '^[a-zA-Z0-9_\-\.]+$') {
+                        if ($originalFileName -notmatch '^[a-zA-Z0-9_.-]+$') {
                             Write-Warning "[WARNING] FileGroup file name '$originalFileName' contains unsafe characters. Skipping."
                             continue
                         }
