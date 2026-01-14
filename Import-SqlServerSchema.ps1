@@ -1559,16 +1559,13 @@ try {
                 
                 # Parse FileGroup file to extract names
                 $currentFG = $null
-                $fileIndex = @{}  # Track file count per FileGroup for uniqueness
                 
                 foreach ($line in (Get-Content $fileGroupScript)) {
                     if ($line -match '-- FileGroup: (.+)') {
                         $currentFG = $matches[1]
-                        $fileIndex[$currentFG] = 0
                     }
                     elseif ($line -match '-- File: (.+)' -and $currentFG) {
                         $originalFileName = $matches[1]
-                        $fileIndex[$currentFG]++
                         
                         # Build unique filename: DatabaseName_FileGroupName_OriginalName.ndf
                         $uniqueFileName = "${Database}_${currentFG}_${originalFileName}"
