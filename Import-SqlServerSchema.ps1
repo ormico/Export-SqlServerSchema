@@ -1574,7 +1574,13 @@ try {
                         $fullPath = "${defaultDataPath}${pathSeparator}${uniqueFileName}.ndf"
                         
                         # Set the SQLCMD variable
-                        $varName = "${currentFG}_PATH_FILE"
+                        # Preserve original behavior for first file, add numeric suffix for additional files
+                        $index = $fileIndex[$currentFG]
+                        if ($index -le 1) {
+                            $varName = "${currentFG}_PATH_FILE"
+                        } else {
+                            $varName = "{0}_PATH_FILE{1}" -f $currentFG, $index
+                        }
                         $sqlCmdVars[$varName] = $fullPath
                         Write-Verbose "  Auto-mapped: `$($varName) = $fullPath"
                     }
