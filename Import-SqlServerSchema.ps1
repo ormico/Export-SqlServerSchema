@@ -1502,6 +1502,9 @@ try {
         }
         
         if ($modeConfig -and $modeConfig.fileGroupPathMapping) {
+            # SECURITY: Sanitize database name for use in filesystem paths
+            $sanitizedDbName = $Database -replace '[^a-zA-Z0-9_\-]', '_'
+            
             # First pass: read FileGroups SQL to extract file names
             $fileGroupScript = Join-Path $SourcePath '00_FileGroups' '001_FileGroups.sql'
             $fileGroupFiles = @{}  # Map: FileGroup -> [list of file names]
@@ -1511,11 +1514,28 @@ try {
                 $currentFG = $null
                 foreach ($line in (Get-Content $fileGroupScript)) {
                     if ($line -match '-- FileGroup: (.+)') {
-                        $currentFG = $matches[1]
+                        $fgName = $matches[1].Trim()
+                        
+                        # SECURITY: Sanitize FileGroup name
+                        if ($fgName -notmatch '^[a-zA-Z0-9_\-]+$') {
+                            Write-Warning "[WARNING] FileGroup name '$fgName' contains unsafe characters. Skipping."
+                            $currentFG = $null
+                            continue
+                        }
+                        
+                        $currentFG = $fgName
                         $fileGroupFiles[$currentFG] = @()
                     }
                     elseif ($line -match '-- File: (.+)' -and $currentFG) {
-                        $fileGroupFiles[$currentFG] += $matches[1]
+                        $fileName = $matches[1].Trim()
+                        
+                        # SECURITY: Sanitize filename
+                        if ($fileName -notmatch '^[a-zA-Z0-9_\-\.]+$') {
+                            Write-Warning "[WARNING] FileGroup file name '$fileName' contains unsafe characters. Skipping."
+                            continue
+                        }
+                        
+                        $fileGroupFiles[$currentFG] += $fileName
                     }
                 }
             }
@@ -1534,8 +1554,8 @@ try {
                 if ($fileGroupFiles.ContainsKey($fg)) {
                     foreach ($fileName in $fileGroupFiles[$fg]) {
                         $fileVarName = "${fg}_PATH_FILE"
-                        # Use database name + original file name for uniqueness
-                        $uniqueFileName = "${Database}_${fileName}"
+                        # Use sanitized database name + original file name for uniqueness
+                        $uniqueFileName = "${sanitizedDbName}_${fileName}"
                         $fullPath = "${basePath}${pathSeparator}${uniqueFileName}.ndf"
                         $sqlCmdVars[$fileVarName] = $fullPath
                         Write-Verbose "SQLCMD Variable: `$($fileVarName) = $fullPath"
@@ -1557,18 +1577,46 @@ try {
             if (Test-Path $fileGroupScript) {
                 Write-Output "[INFO] Auto-remapping FileGroup paths to: $defaultDataPath"
                 
+                # SECURITY: Sanitize database name for use in filesystem paths
+                $sanitizedDbName = $Database -replace '[^a-zA-Z0-9_\-]', '_'
+                
                 # Parse FileGroup file to extract names
                 $currentFG = $null
+                $fileIndex = @{}  # Track file count per FileGroup for uniqueness
                 
                 foreach ($line in (Get-Content $fileGroupScript)) {
                     if ($line -match '-- FileGroup: (.+)') {
-                        $currentFG = $matches[1]
+                        $fgName = $matches[1].Trim()
+                        
+                        # SECURITY: Sanitize FileGroup name to prevent injection attacks
+                        # SQL Server identifiers can contain letters, digits, @, #, _, $, but we use stricter rules
+                        # for filesystem safety and SQLCMD variable names
+                        if ($fgName -notmatch '^[a-zA-Z0-9_\-]+$') {
+                            Write-Warning "[WARNING] FileGroup name '$fgName' contains unsafe characters. Skipping."
+                            $currentFG = $null
+                            continue
+                        }
+                        
+                        $currentFG = $fgName
+                        $fileIndex[$currentFG] = 0
                     }
                     elseif ($line -match '-- File: (.+)' -and $currentFG) {
-                        $originalFileName = $matches[1]
+                        $originalFileName = $matches[1].Trim()
+                        
+                        # SECURITY: Sanitize filename to prevent SQL injection via SQLCMD variable substitution
+                        # Only allow alphanumeric, dash, underscore, and period for safe filesystem names
+                        if ($originalFileName -notmatch '^[a-zA-Z0-9_\-\.]+$') {
+                            Write-Warning "[WARNING] FileGroup file name '$originalFileName' contains unsafe characters. Skipping."
+                            continue
+                        }
+                        
+                        # Additional defense-in-depth: escape single quotes for SQL string literals
+                        $sanitizedFileName = $originalFileName -replace "'", "''"
+                        
+                        $fileIndex[$currentFG]++
                         
                         # Build unique filename: DatabaseName_FileGroupName_OriginalName.ndf
-                        $uniqueFileName = "${Database}_${currentFG}_${originalFileName}"
+                        $uniqueFileName = "${sanitizedDbName}_${currentFG}_${sanitizedFileName}"
                         $fullPath = "${defaultDataPath}${pathSeparator}${uniqueFileName}.ndf"
                         
                         # Set the SQLCMD variable
