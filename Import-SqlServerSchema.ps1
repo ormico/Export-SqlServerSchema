@@ -781,7 +781,7 @@ function Invoke-SqlScript {
             
             # 1. Tables/Indexes: Replace ) ON [FileGroup] with ) ON [PRIMARY]
             #    Pattern: closing paren followed by ON [anything-except-PRIMARY]
-            $sql = $sql -replace '\)\s*ON\s*\[(?!PRIMARY\])([^\]]+)\]', ') ON [PRIMARY]'
+            $sql = $sql -replace '\)\s*ON\s*\[(?!PRIMARY\])[^\]]+\]', ') ON [PRIMARY]'
             
             # 2. Partition Schemes: Replace TO ([FG1], [FG2], ...) with ALL TO ([PRIMARY])
             #    Pattern: TO ( followed by list of filegroups in brackets
