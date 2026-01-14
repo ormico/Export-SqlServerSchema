@@ -1552,8 +1552,15 @@ try {
                 # Build full file path variables for each file in this filegroup
                 # Include database name in filename to avoid conflicts with other databases
                 if ($fileGroupFiles.ContainsKey($fg)) {
+                    $fileIdx = 0
                     foreach ($fileName in $fileGroupFiles[$fg]) {
-                        $fileVarName = "${fg}_PATH_FILE"
+                        $fileIdx++
+                        # Use numeric suffix for multiple files per FileGroup (consistent with auto-remap behavior)
+                        if ($fileIdx -le 1) {
+                            $fileVarName = "${fg}_PATH_FILE"
+                        } else {
+                            $fileVarName = "{0}_PATH_FILE{1}" -f $fg, $fileIdx
+                        }
                         # Use sanitized database name + original file name for uniqueness
                         $uniqueFileName = "${sanitizedDbName}_${fileName}"
                         $fullPath = "${basePath}${pathSeparator}${uniqueFileName}.ndf"
@@ -1589,8 +1596,10 @@ try {
                         $fgName = $matches[1].Trim()
                         
                         # SECURITY: Sanitize FileGroup name to prevent injection attacks
-                        # SQL Server identifiers can contain letters, digits, @, #, _, $, but we use stricter rules
-                        # for filesystem safety and SQLCMD variable names
+                        # SQL Server identifiers can contain @, #, $, but we exclude these because:
+                        # 1) SQLCMD variable names must be valid PowerShell variable names
+                        # 2) Filesystem paths should avoid special characters for cross-platform safety
+                        # 3) Prevents potential injection via special character sequences
                         if ($fgName -notmatch '^[a-zA-Z0-9_\-]+$') {
                             Write-Warning "[WARNING] FileGroup name '$fgName' contains unsafe characters. Skipping."
                             $currentFG = $null
@@ -1610,13 +1619,10 @@ try {
                             continue
                         }
                         
-                        # Additional defense-in-depth: escape single quotes for SQL string literals
-                        $sanitizedFileName = $originalFileName -replace "'", "''"
-                        
                         $fileIndex[$currentFG]++
                         
                         # Build unique filename: DatabaseName_FileGroupName_OriginalName.ndf
-                        $uniqueFileName = "${sanitizedDbName}_${currentFG}_${sanitizedFileName}"
+                        $uniqueFileName = "${sanitizedDbName}_${currentFG}_${originalFileName}"
                         $fullPath = "${defaultDataPath}${pathSeparator}${uniqueFileName}.ndf"
                         
                         # Set the SQLCMD variable
