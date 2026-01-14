@@ -783,10 +783,14 @@ function Invoke-SqlScript {
             #    Pattern: closing paren followed by ON [anything-except-PRIMARY]
             $sql = $sql -replace '\)\s*ON\s*\[(?!PRIMARY\])[^\]]+\]', ') ON [PRIMARY]'
             
-            # 2. Partition Schemes: Replace TO ([FG1], [FG2], ...) with ALL TO ([PRIMARY])
+            # 2. Partition Schemes (TO ...): Replace TO ([FG1], [FG2], ...) with ALL TO ([PRIMARY])
             #    Pattern: TO ( followed by list of filegroups in brackets
             #    Guard against already-transformed "ALL TO ([PRIMARY])" and PRIMARY-only "TO ([PRIMARY])"
             $sql = $sql -replace '(?<!ALL\s)TO\s*\(\s*(?!\[PRIMARY\]\s*\))\[[^\]]+\](?:\s*,\s*\[[^\]]+\])*\s*\)', 'ALL TO ([PRIMARY])'
+            
+            # 3. Partition Schemes (ALL TO ...): Replace ALL TO ([NonPrimary]) with ALL TO ([PRIMARY])
+            #    Pattern: ALL TO ([FileGroup]) where FileGroup is not PRIMARY
+            $sql = $sql -replace 'ALL\s+TO\s*\(\s*\[(?!PRIMARY\])[^\]]+\]\s*\)', 'ALL TO ([PRIMARY])'
         }
         
         # Replace ALTER DATABASE CURRENT with actual database name
