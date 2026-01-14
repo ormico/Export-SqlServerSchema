@@ -139,9 +139,15 @@
       "type": "object",
       "description": "Import mode settings",
       "properties": {
+        "fileGroupStrategy": {
+          "type": "string",
+          "enum": ["autoRemap", "removeToPrimary"],
+          "description": "FileGroup handling strategy (autoRemap = import with auto-detected paths, removeToPrimary = skip FileGroups and remap to PRIMARY)",
+          "default": "autoRemap"
+        },
         "includeFileGroups": {
           "type": "boolean",
-          "description": "Import FileGroup definitions and create files",
+          "description": "Import FileGroup definitions and create files (legacy, ignored if fileGroupStrategy is set)",
           "default": false
         },
         "includeConfigurations": {

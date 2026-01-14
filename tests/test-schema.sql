@@ -46,6 +46,21 @@ ALTER DATABASE [TestDb] ADD FILE (
 GO
 
 -- ═══════════════════════════════════════════════════════════════
+-- PARTITION FUNCTIONS AND SCHEMES
+-- ═══════════════════════════════════════════════════════════════
+-- Partition function for order dates (tests partition scheme FileGroup handling)
+
+CREATE PARTITION FUNCTION [PF_OrderYear](datetime)
+AS RANGE RIGHT FOR VALUES ('2025-01-01', '2026-01-01');
+GO
+
+-- Partition scheme using our FileGroups
+CREATE PARTITION SCHEME [PS_OrderYear]
+AS PARTITION [PF_OrderYear]
+TO ([FG_ARCHIVE], [FG_CURRENT], [PRIMARY]);
+GO
+
+-- ═══════════════════════════════════════════════════════════════
 -- DATABASE SCOPED CONFIGURATIONS (SQL Server 2016+)
 -- ═══════════════════════════════════════════════════════════════
 -- These settings override server-level defaults for this database
@@ -130,7 +145,7 @@ CREATE TABLE Sales.Orders (
     Status NVARCHAR(20) DEFAULT 'Pending',
     CONSTRAINT FK_Orders_Customers FOREIGN KEY (CustomerId) 
         REFERENCES dbo.Customers(CustomerId)
-);
+) ON [FG_CURRENT];
 GO
 
 CREATE TABLE Sales.OrderDetails (
@@ -155,7 +170,17 @@ CREATE TABLE Warehouse.Inventory (
     LastUpdated DATETIME DEFAULT GETDATE(),
     CONSTRAINT FK_Inventory_Products FOREIGN KEY (ProductId) 
         REFERENCES dbo.Products(ProductId)
-);
+) ON [FG_ARCHIVE];
+GO
+
+-- Create partitioned table to test partition scheme FileGroup handling
+CREATE TABLE Sales.OrderHistory (
+    OrderHistoryId INT IDENTITY(1,1),
+    OrderDate DATETIME NOT NULL,
+    CustomerId INT NOT NULL,
+    Amount DECIMAL(12,2),
+    CONSTRAINT PK_OrderHistory PRIMARY KEY CLUSTERED (OrderHistoryId, OrderDate)
+) ON [PS_OrderYear](OrderDate);
 GO
 
 -- Create indexes
@@ -172,7 +197,8 @@ CREATE NONCLUSTERED INDEX IX_Orders_CustomerId
 GO
 
 CREATE NONCLUSTERED INDEX IX_Orders_OrderDate 
-    ON Sales.Orders(OrderDate DESC);
+    ON Sales.Orders(OrderDate DESC)
+    ON [FG_CURRENT];
 GO
 
 -- Create a view
@@ -465,11 +491,14 @@ PRINT '  - Warehouse';
 PRINT '';
 PRINT 'INFRASTRUCTURE OBJECTS';
 PRINT '  - FileGroups: 3 (PRIMARY, FG_CURRENT, FG_ARCHIVE)';
+PRINT '  - Partition Function: 1 (PF_OrderYear)';
+PRINT '  - Partition Scheme: 1 (PS_OrderYear using FG_ARCHIVE, FG_CURRENT, PRIMARY)';
 PRINT '  - Database Scoped Configurations: 4 settings';
 PRINT '  - Database Scoped Credentials: 2 (with test secrets)';
 PRINT '';
 PRINT 'SCHEMA OBJECTS';
-PRINT '  - Tables: 5 (Customers, Products, Orders, OrderDetails, Inventory)';
+PRINT '  - Tables: 6 (Customers, Products, Orders on FG_CURRENT, OrderDetails, Inventory on FG_ARCHIVE, OrderHistory partitioned)';
+PRINT '  - Indexes: 4 (including IX_Orders_OrderDate on FG_CURRENT)';
 PRINT '  - Views: 1';
 PRINT '  - Functions: 3 (2 scalar + 1 table-valued for RLS)';
 PRINT '  - Stored Procedures: 2';

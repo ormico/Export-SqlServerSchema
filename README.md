@@ -190,7 +190,10 @@ DbScripts/
 ## Import Modes Explained
 
 **Developer Mode (default)**:
-- Skips FileGroups (objects remapped to PRIMARY)
+- **FileGroups**: Auto-remap strategy (default) - imports FileGroups with auto-detected paths
+  - Automatically detects SQL Server's default data path
+  - Creates .ndf files in server's data directory
+  - Alternative: `removeToPrimary` strategy skips FileGroups and remaps to PRIMARY
 - Skips Database Scoped Configurations (uses server defaults)
 - Skips External Data Sources (external dependencies)
 - Disables Security Policies (RLS state OFF for data visibility)
@@ -204,6 +207,59 @@ DbScripts/
 - Full fidelity deployment for staging/production
 
 **Selective Overrides**: Command-line parameters override mode defaults and config file settings.
+
+### FileGroup Strategy Examples
+
+**`autoRemap` Strategy** (default in Dev mode):
+```sql
+-- Exported script contains:
+ALTER DATABASE [TestDb] ADD FILEGROUP [FG_CURRENT];
+ALTER DATABASE [TestDb] ADD FILE (
+    NAME = N'TestDb_Current',
+    FILENAME = N'$(FG_CURRENT_PATH_FILE)',
+    SIZE = 8MB
+) TO FILEGROUP [FG_CURRENT];
+
+CREATE TABLE Sales.Orders (
+    OrderId INT PRIMARY KEY
+) ON [FG_CURRENT];
+
+-- Import auto-detects default data path and replaces variables:
+ALTER DATABASE [TestDb_Dev] ADD FILEGROUP [FG_CURRENT];
+ALTER DATABASE [TestDb_Dev] ADD FILE (
+    NAME = N'TestDb_Dev_TestDb_Current',
+    FILENAME = N'/var/opt/mssql/data/TestDb_Dev_FG_CURRENT_TestDb_Current.ndf',
+    SIZE = 8MB
+) TO FILEGROUP [FG_CURRENT];
+
+CREATE TABLE Sales.Orders (
+    OrderId INT PRIMARY KEY
+) ON [FG_CURRENT];
+-- Table created on [FG_CURRENT] with auto-generated file path
+```
+
+**`removeToPrimary` Strategy** (optional in Dev mode):
+```sql
+-- Exported script contains:
+CREATE TABLE Sales.Orders (
+    OrderId INT PRIMARY KEY
+) ON [FG_CURRENT];
+
+CREATE PARTITION SCHEME PS_OrderYear
+AS PARTITION PF_OrderYear
+TO ([FG_ARCHIVE], [FG_CURRENT], [PRIMARY]);
+
+-- Import transforms before execution:
+CREATE TABLE Sales.Orders (
+    OrderId INT PRIMARY KEY
+) ON [PRIMARY];  -- ← Changed from [FG_CURRENT]
+
+CREATE PARTITION SCHEME PS_OrderYear
+AS PARTITION PF_OrderYear
+ALL TO ([PRIMARY]);  -- ← Changed from TO ([FG_ARCHIVE], [FG_CURRENT], [PRIMARY])
+
+-- FileGroups folder skipped entirely → all objects on PRIMARY
+```
 
 ## YAML Configuration Files
 
@@ -239,9 +295,19 @@ import:
       FG_CURRENT: "E:\\SQLData\\Current"
       FG_ARCHIVE: "F:\\SQLArchive\\Archive"
   developerMode:
-    includeFileGroups: false
+    # FileGroup handling strategy (Dev mode only):
+    fileGroupStrategy: autoRemap     # 'autoRemap' (default) or 'removeToPrimary'
     includeDatabaseScopedConfigurations: false
 ```
+
+**FileGroup Strategies** (Developer Mode):
+- **`autoRemap`** (default): Imports FileGroups with auto-detected paths
+  - Detects SQL Server's default data directory automatically
+  - No configuration required
+  - Preserves FileGroup structure for accurate testing
+- **`removeToPrimary`**: Skips FileGroups entirely
+  - All tables/indexes/partitions moved to PRIMARY
+  - Simplest setup, but loses FileGroup structure
 
 See `tests/test-dev-config.yml` and `tests/test-prod-config.yml` for examples.
 

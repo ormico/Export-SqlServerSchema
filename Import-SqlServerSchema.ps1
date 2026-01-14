@@ -390,6 +390,37 @@ function Get-TargetServerOS {
     }
 }
 
+function Get-DefaultDataPath {
+    <#
+    .SYNOPSIS
+        Gets the SQL Server instance's default data file path.
+    .DESCRIPTION
+        Queries SERVERPROPERTY('InstanceDefaultDataPath') to get the path where
+        SQL Server creates data files by default. Used for auto-remapping FileGroup
+        paths in Developer mode.
+    .PARAMETER Connection
+        SMO Server connection to query.
+    #>
+    param(
+        [Parameter(Mandatory)]
+        [Microsoft.SqlServer.Management.Smo.Server]$Connection
+    )
+    
+    $query = "SELECT CAST(SERVERPROPERTY('InstanceDefaultDataPath') AS NVARCHAR(256))"
+    
+    try {
+        $result = $Connection.ConnectionContext.ExecuteScalar($query)
+        if ($result) {
+            # Remove trailing slash if present for consistency
+            return $result.TrimEnd('\', '/')
+        }
+        return $null
+    } catch {
+        Write-Warning "Could not detect default data path: $_"
+        return $null
+    }
+}
+
 function Test-DatabaseConnection {
     <#
     .SYNOPSIS
@@ -745,6 +776,23 @@ function Invoke-SqlScript {
             $sql = $sql -replace [regex]::Escape("`$($varName)"), $varValue
         }
         
+        # Transform FileGroup references to PRIMARY when using removeToPrimary strategy
+        if ($SqlCmdVariables.ContainsKey('__RemapFileGroupsToPrimary__')) {
+            
+            # 1. Tables/Indexes: Replace ) ON [FileGroup] with ) ON [PRIMARY]
+            #    Pattern: closing paren followed by ON [anything-except-PRIMARY]
+            $sql = $sql -replace '\)\s*ON\s*\[(?!PRIMARY\])[^\]]+\]', ') ON [PRIMARY]'
+            
+            # 2. Partition Schemes (TO ...): Replace TO ([FG1], [FG2], ...) with ALL TO ([PRIMARY])
+            #    Pattern: TO ( followed by list of filegroups in brackets
+            #    Guard against already-transformed "ALL TO ([PRIMARY])" and PRIMARY-only "TO ([PRIMARY])"
+            $sql = $sql -replace '(?<!ALL\s)TO\s*\(\s*(?!\[PRIMARY\]\s*\))\[[^\]]+\](?:\s*,\s*\[[^\]]+\])*\s*\)', 'ALL TO ([PRIMARY])'
+            
+            # 3. Partition Schemes (ALL TO ...): Replace ALL TO ([NonPrimary]) with ALL TO ([PRIMARY])
+            #    Pattern: ALL TO ([FileGroup]) where FileGroup is not PRIMARY
+            $sql = $sql -replace 'ALL\s+TO\s*\(\s*\[(?!PRIMARY\])[^\]]+\]\s*\)', 'ALL TO ([PRIMARY])'
+        }
+        
         # Replace ALTER DATABASE CURRENT with actual database name
         # CURRENT keyword doesn't work with SMO ExecuteNonQuery
         $sql = $sql -replace '\bALTER\s+DATABASE\s+CURRENT\b', "ALTER DATABASE [$DatabaseName]"
@@ -884,7 +932,8 @@ function Get-ScriptFiles {
         } else {
             # Simplified config or no config - use Dev defaults
             @{
-                includeFileGroups = $false
+                fileGroupStrategy = 'autoRemap'  # Default: auto-remap FileGroups
+                includeFileGroups = $false       # Will be overridden by strategy
                 includeConfigurations = $false
                 includeDatabaseScopedCredentials = $false
                 includeExternalData = $false
@@ -911,8 +960,26 @@ function Get-ScriptFiles {
     # Build ordered directory list based on mode
     $orderedDirs = @()
     
-    # FileGroups - skip in Dev mode unless explicitly enabled
-    if ($modeSettings.includeFileGroups) {
+    # FileGroups - handle based on strategy in Dev mode
+    if ($Mode -eq 'Dev') {
+        $fileGroupStrategy = if ($modeSettings.ContainsKey('fileGroupStrategy')) { 
+            $modeSettings.fileGroupStrategy 
+        } else { 
+            'autoRemap'  # Default strategy
+        }
+        
+        if ($fileGroupStrategy -eq 'autoRemap') {
+            # Check if source has FileGroups
+            $sourceFileGroups = Join-Path $Path '00_FileGroups'
+            if (Test-Path $sourceFileGroups) {
+                $orderedDirs += '00_FileGroups'
+                # Signal that we need auto-generate paths (handled later in main script)
+            }
+        } elseif ($fileGroupStrategy -eq 'removeToPrimary') {
+            # Skip FileGroups entirely, transformations will handle references
+        }
+    } elseif ($modeSettings.includeFileGroups) {
+        # Prod mode - use explicit includeFileGroups setting
         $orderedDirs += '00_FileGroups'
     }
     
@@ -1001,6 +1068,7 @@ function Get-ScriptFiles {
     return @{
         Scripts = $scripts
         SkippedFolders = $skippedFolders
+        IncludedFolders = $orderedDirs
     }
 }
 
@@ -1404,6 +1472,7 @@ try {
     $scriptInfo = Get-ScriptFiles -Path $SourcePath -IncludeData:$IncludeData -Mode $ImportMode -Config $config
     $scripts = $scriptInfo.Scripts
     $skippedFolders = $scriptInfo.SkippedFolders
+    $includedFolders = $scriptInfo.IncludedFolders
     
     if ($scripts.Count -eq 0) {
         Write-Error "No SQL scripts found in $SourcePath"
@@ -1437,6 +1506,9 @@ try {
         }
         
         if ($modeConfig -and $modeConfig.fileGroupPathMapping) {
+            # SECURITY: Sanitize database name for use in filesystem paths
+            $sanitizedDbName = $Database -replace '[^a-zA-Z0-9_-]', '_'
+            
             # First pass: read FileGroups SQL to extract file names
             $fileGroupScript = Join-Path $SourcePath '00_FileGroups' '001_FileGroups.sql'
             $fileGroupFiles = @{}  # Map: FileGroup -> [list of file names]
@@ -1446,11 +1518,28 @@ try {
                 $currentFG = $null
                 foreach ($line in (Get-Content $fileGroupScript)) {
                     if ($line -match '-- FileGroup: (.+)') {
-                        $currentFG = $matches[1]
+                        $fgName = $matches[1].Trim()
+                        
+                        # SECURITY: Sanitize FileGroup name
+                        if ($fgName -notmatch '^[a-zA-Z0-9_-]+$') {
+                            Write-Warning "[WARNING] FileGroup name '$fgName' contains unsafe characters. Skipping."
+                            $currentFG = $null
+                            continue
+                        }
+                        
+                        $currentFG = $fgName
                         $fileGroupFiles[$currentFG] = @()
                     }
                     elseif ($line -match '-- File: (.+)' -and $currentFG) {
-                        $fileGroupFiles[$currentFG] += $matches[1]
+                        $fileName = $matches[1].Trim()
+                        
+                        # SECURITY: Sanitize filename
+                        if ($fileName -notmatch '^[a-zA-Z0-9_.-]+$') {
+                            Write-Warning "[WARNING] FileGroup file name '$fileName' contains unsafe characters. Skipping."
+                            continue
+                        }
+                        
+                        $fileGroupFiles[$currentFG] += $fileName
                     }
                 }
             }
@@ -1467,16 +1556,117 @@ try {
                 # Build full file path variables for each file in this filegroup
                 # Include database name in filename to avoid conflicts with other databases
                 if ($fileGroupFiles.ContainsKey($fg)) {
+                    $fileIdx = 0
                     foreach ($fileName in $fileGroupFiles[$fg]) {
-                        $fileVarName = "${fg}_PATH_FILE"
-                        # Use database name + original file name for uniqueness
-                        $uniqueFileName = "${Database}_${fileName}"
+                        $fileIdx++
+                        # Use numeric suffix for multiple files per FileGroup (consistent with auto-remap behavior)
+                        if ($fileIdx -le 1) {
+                            $fileVarName = "${fg}_PATH_FILE"
+                        } else {
+                            $fileVarName = "{0}_PATH_FILE{1}" -f $fg, $fileIdx
+                        }
+                        # Use sanitized database name + original file name for uniqueness
+                        $uniqueFileName = "${sanitizedDbName}_${fileName}"
                         $fullPath = "${basePath}${pathSeparator}${uniqueFileName}.ndf"
                         $sqlCmdVars[$fileVarName] = $fullPath
                         Write-Verbose "SQLCMD Variable: `$($fileVarName) = $fullPath"
                     }
                 }
             }
+        }
+    }
+    
+    # Auto-remap FileGroup paths in Dev mode with autoRemap strategy
+    if ($ImportMode -eq 'Dev' -and 
+        $sqlCmdVars.Count -eq 0 -and 
+        '00_FileGroups' -in $includedFolders) {
+        
+        $defaultDataPath = Get-DefaultDataPath -Connection $script:SharedConnection
+        
+        if ($defaultDataPath) {
+            $fileGroupScript = Join-Path $SourcePath '00_FileGroups' '001_FileGroups.sql'
+            if (Test-Path $fileGroupScript) {
+                Write-Output "[INFO] Auto-remapping FileGroup paths to: $defaultDataPath"
+                
+                # SECURITY: Sanitize database name for use in filesystem paths
+                $sanitizedDbName = $Database -replace '[^a-zA-Z0-9_-]', '_'
+                
+                # Parse FileGroup file to extract names
+                $currentFG = $null
+                $fileIndex = @{}  # Track file count per FileGroup for uniqueness
+                
+                foreach ($line in (Get-Content $fileGroupScript)) {
+                    if ($line -match '-- FileGroup: (.+)') {
+                        $fgName = $matches[1].Trim()
+                        
+                        # SECURITY: Sanitize FileGroup name to prevent injection attacks
+                        # SQL Server identifiers can contain @, #, $, but we exclude these because:
+                        # 1) SQLCMD variable names must be valid PowerShell variable names
+                        # 2) Filesystem paths should avoid special characters for cross-platform safety
+                        # 3) Prevents potential injection via special character sequences
+                        if ($fgName -notmatch '^[a-zA-Z0-9_-]+$') {
+                            Write-Warning "[WARNING] FileGroup name '$fgName' contains unsafe characters. Skipping."
+                            $currentFG = $null
+                            continue
+                        }
+                        
+                        $currentFG = $fgName
+                        $fileIndex[$currentFG] = 0
+                    }
+                    elseif ($line -match '-- File: (.+)' -and $currentFG) {
+                        $originalFileName = $matches[1].Trim()
+                        
+                        # SECURITY: Sanitize filename to prevent SQL injection via SQLCMD variable substitution
+                        # Only allow alphanumeric, dash, underscore, and period for safe filesystem names
+                        if ($originalFileName -notmatch '^[a-zA-Z0-9_.-]+$') {
+                            Write-Warning "[WARNING] FileGroup file name '$originalFileName' contains unsafe characters. Skipping."
+                            continue
+                        }
+                        
+                        $fileIndex[$currentFG]++
+                        
+                        # Build unique filename: DatabaseName_FileGroupName_OriginalName.ndf
+                        $uniqueFileName = "${sanitizedDbName}_${currentFG}_${originalFileName}"
+                        $fullPath = "${defaultDataPath}${pathSeparator}${uniqueFileName}.ndf"
+                        
+                        # Set the SQLCMD variable
+                        # Preserve original behavior for first file, add numeric suffix for additional files
+                        $index = $fileIndex[$currentFG]
+                        if ($index -le 1) {
+                            $varName = "${currentFG}_PATH_FILE"
+                        } else {
+                            $varName = "{0}_PATH_FILE{1}" -f $currentFG, $index
+                        }
+                        $sqlCmdVars[$varName] = $fullPath
+                        Write-Verbose "  Auto-mapped: `$($varName) = $fullPath"
+                    }
+                }
+            }
+        } else {
+            Write-Warning "[WARNING] Could not auto-detect default data path"
+            Write-Warning "  Falling back to FileGroup strategy: removeToPrimary (all FileGroups will map to PRIMARY)."
+            $sqlCmdVars['__RemapFileGroupsToPrimary__'] = $true
+            Write-Warning "  To customize FileGroup paths, provide fileGroupPathMapping in config or define SQLCMD variables explicitly."
+        }
+    }
+    
+    # Set flag for removeToPrimary transformations
+    if ($ImportMode -eq 'Dev') {
+        $devSettings = if ($config -and $config.import -and $config.import.developerMode) {
+            $config.import.developerMode
+        } else {
+            @{ fileGroupStrategy = 'autoRemap' }
+        }
+        
+        $fileGroupStrategy = if ($devSettings.ContainsKey('fileGroupStrategy')) {
+            $devSettings.fileGroupStrategy
+        } else {
+            'autoRemap'
+        }
+        
+        if ($fileGroupStrategy -eq 'removeToPrimary') {
+            $sqlCmdVars['__RemapFileGroupsToPrimary__'] = $true
+            Write-Output "[INFO] FileGroup strategy: removeToPrimary - all FileGroup references will map to PRIMARY"
         }
     }
     
