@@ -6,7 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
-## [Unreleased]
+## [1.4.0] - 2026-01-13
+
+### Fixed
+
+**GO Batch Separator Handling**
+- Improved regex pattern for splitting SQL scripts on GO statements
+- Now correctly handles:
+  - `GO` with trailing spaces (e.g., `GO  `)
+  - `GO` with inline comments (e.g., `GO -- comment`)
+- Limitation: `GO` with repeat counts (e.g., `GO 5`) is currently treated as a single batch separator; repeat execution is not yet supported
+- Note: Regex assumes SMO-generated scripts (GO not inside strings/block comments)
 
 ### Added
 
