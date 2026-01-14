@@ -14,8 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Improved regex pattern for splitting SQL scripts on GO statements
 - Now correctly handles:
   - `GO` with trailing spaces (e.g., `GO  `)
-  - `GO` with repeat counts (e.g., `GO 5`)
   - `GO` with inline comments (e.g., `GO -- comment`)
+- Limitation: `GO` with repeat counts (e.g., `GO 5`) is currently treated as a single batch separator; repeat execution is not yet supported
 - Note: Regex assumes SMO-generated scripts (GO not inside strings/block comments)
 
 ### Added
