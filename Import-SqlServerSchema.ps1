@@ -1588,7 +1588,9 @@ try {
             }
         } else {
             Write-Warning "[WARNING] Could not auto-detect default data path"
-            Write-Warning "  FileGroup import may fail. Consider providing fileGroupPathMapping in config."
+            Write-Warning "  Falling back to FileGroup strategy: removeToPrimary (all FileGroups will map to PRIMARY)."
+            $sqlCmdVars['__RemapFileGroupsToPrimary__'] = $true
+            Write-Warning "  To customize FileGroup paths, provide fileGroupPathMapping in config or define SQLCMD variables explicitly."
         }
     }
     
