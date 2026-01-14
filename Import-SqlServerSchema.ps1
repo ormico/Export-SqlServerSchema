@@ -857,8 +857,12 @@ For more details, see: https://go.microsoft.com/fwlink/?linkid=2226722
         $server.ConnectionContext.StatementTimeout = $Timeout
         
         # Split by GO statements (batch separator)
-        # GO must be on its own line (with optional whitespace)
-        $batches = $sql -split '(?m)^\s*GO\s*$' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+        # GO must be on its own line with optional:
+        # - Leading/trailing whitespace
+        # - Repeat count (GO 5)
+        # - Inline comment after GO (GO -- comment)
+        # This regex does NOT handle GO inside strings or block comments - caller must ensure clean SQL
+        $batches = $sql -split '(?m)^\s*GO\s*(?:\d+)?\s*(?:--.*)?$' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
         
         foreach ($batch in $batches) {
             $trimmedBatch = $batch.Trim()
