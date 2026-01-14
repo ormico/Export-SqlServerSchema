@@ -1530,7 +1530,7 @@ try {
                         $fileName = $matches[1].Trim()
                         
                         # SECURITY: Sanitize filename
-                        if ($fileName -notmatch '^[a-zA-Z0-9_.-]+$') {
+                        if ($fileName -notmatch '^[a-zA-Z0-9_.\\-]+$') {
                             Write-Warning "[WARNING] FileGroup file name '$fileName' contains unsafe characters. Skipping."
                             continue
                         }
@@ -1614,7 +1614,7 @@ try {
                         
                         # SECURITY: Sanitize filename to prevent SQL injection via SQLCMD variable substitution
                         # Only allow alphanumeric, dash, underscore, and period for safe filesystem names
-                        if ($originalFileName -notmatch '^[a-zA-Z0-9_.-]+$') {
+                        if ($originalFileName -notmatch '^[a-zA-Z0-9_.\\-]+$') {
                             Write-Warning "[WARNING] FileGroup file name '$originalFileName' contains unsafe characters. Skipping."
                             continue
                         }
