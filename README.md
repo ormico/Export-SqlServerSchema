@@ -375,7 +375,7 @@ retryDelaySeconds: 3  # 3s → 6s → 12s → 24s → 48s
 The Import script splits SQL files on `GO` batch separators using regex pattern matching. Supported GO formats:
 - Standard: `GO` on its own line
 - With spaces: `GO  ` (trailing whitespace)
-- With repeat count: `GO 5` (executes batch 5 times)
+- With repeat count: `GO 5` (repeat count syntax is accepted but ignored; the batch runs once)
 - With comment: `GO -- comment` (inline comment after GO)
 
 **Important**: The regex assumes SMO-generated scripts where GO is never inside quoted strings or block comments. If using manually edited SQL files from other sources, ensure GO statements are properly formatted on separate lines.
