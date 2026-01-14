@@ -6,6 +6,32 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [Unreleased]
+
+### Added
+
+**FileGroup Handling in Developer Mode**
+- **`autoRemap` Strategy** (new default): Automatically imports FileGroups with auto-detected paths
+  - Detects SQL Server's default data directory using `SERVERPROPERTY('InstanceDefaultDataPath')`
+  - Generates unique .ndf file paths automatically (no configuration required)
+  - Preserves FileGroup structure for accurate development/testing
+  - Works cross-platform (Windows/Linux SQL Server)
+- **`removeToPrimary` Strategy** (optional): Skips FileGroups and remaps all references to PRIMARY
+  - Simplifies local setup when FileGroup structure isn't needed
+  - Uses regex transformations to rewrite table/index/partition scheme DDL
+- New `fileGroupStrategy` configuration option in `developerMode` settings (`autoRemap` or `removeToPrimary`)
+- New `Get-DefaultDataPath` function in Import-SqlServerSchema.ps1
+- Enhanced test database with partitioned tables to validate partition scheme handling
+
+### Changed
+- **Breaking**: Developer Mode now imports FileGroups by default (using `autoRemap`)
+  - Previous behavior (skip FileGroups) available via `fileGroupStrategy: removeToPrimary`
+- Updated test validation to verify FileGroup placement
+- Updated README.md with FileGroup strategy documentation
+- Updated export-import-config.example.yml with `fileGroupStrategy` examples
+
+---
+
 ## [1.3.0] - 2026-01-12
 
 ### Changed

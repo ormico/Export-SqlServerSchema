@@ -303,12 +303,34 @@ try {
     Write-Host "  Dev FileGroups (non-PRIMARY): $($devFileGroupCount.Trim())" -ForegroundColor White
     Write-Host "  Dev Security Policies: $($devSecurityPolicyCount.Trim())" -ForegroundColor White
     
-    # Dev mode should skip FileGroups (infrastructure)
-    if ($devFileGroupCount.Trim() -eq "0") {
-        Write-TestStep "Dev mode correctly skipped FileGroups" -Type Success
+    # Dev mode with autoRemap strategy should import FileGroups (with auto-detected paths)
+    if ($devFileGroupCount.Trim() -eq "2") {
+        Write-TestStep "Dev mode correctly imported FileGroups with autoRemap strategy" -Type Success
+        
+        # Verify tables are on correct FileGroups
+        $ordersFileGroup = Invoke-SqlCommand @"
+SELECT fg.name FROM sys.tables t 
+INNER JOIN sys.indexes i ON t.object_id = i.object_id AND i.index_id IN (0, 1)
+INNER JOIN sys.filegroups fg ON i.data_space_id = fg.data_space_id 
+WHERE t.name = 'Orders' AND SCHEMA_NAME(t.schema_id) = 'Sales'
+"@ $TargetDatabaseDev
+        
+        $inventoryFileGroup = Invoke-SqlCommand @"
+SELECT fg.name FROM sys.tables t 
+INNER JOIN sys.indexes i ON t.object_id = i.object_id AND i.index_id IN (0, 1)
+INNER JOIN sys.filegroups fg ON i.data_space_id = fg.data_space_id 
+WHERE t.name = 'Inventory' AND SCHEMA_NAME(t.schema_id) = 'Warehouse'
+"@ $TargetDatabaseDev
+        
+        if ($ordersFileGroup.Trim() -eq "FG_CURRENT" -and $inventoryFileGroup.Trim() -eq "FG_ARCHIVE") {
+            Write-TestStep "Tables correctly placed on custom FileGroups" -Type Success
+        } else {
+            Write-TestStep "Tables not on expected FileGroups (Orders: $ordersFileGroup, Inventory: $inventoryFileGroup)" -Type Error
+            throw "FileGroup placement verification failed"
+        }
     } else {
-        Write-TestStep "Dev mode incorrectly imported FileGroups" -Type Error
-        throw "Dev mode verification failed: FileGroups should be skipped"
+        Write-TestStep "Dev mode FileGroup count incorrect: expected 2, got $($devFileGroupCount.Trim())" -Type Error
+        throw "Dev mode verification failed: FileGroups not imported correctly with autoRemap"
     }
     
     # Schema objects should match

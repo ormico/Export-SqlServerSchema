@@ -390,6 +390,37 @@ function Get-TargetServerOS {
     }
 }
 
+function Get-DefaultDataPath {
+    <#
+    .SYNOPSIS
+        Gets the SQL Server instance's default data file path.
+    .DESCRIPTION
+        Queries SERVERPROPERTY('InstanceDefaultDataPath') to get the path where
+        SQL Server creates data files by default. Used for auto-remapping FileGroup
+        paths in Developer mode.
+    .PARAMETER Connection
+        SMO Server connection to query.
+    #>
+    param(
+        [Parameter(Mandatory)]
+        [Microsoft.SqlServer.Management.Smo.Server]$Connection
+    )
+    
+    $query = "SELECT CAST(SERVERPROPERTY('InstanceDefaultDataPath') AS NVARCHAR(256))"
+    
+    try {
+        $result = $Connection.ConnectionContext.ExecuteScalar($query)
+        if ($result) {
+            # Remove trailing slash if present for consistency
+            return $result.TrimEnd('\', '/')
+        }
+        return $null
+    } catch {
+        Write-Warning "Could not detect default data path: $_"
+        return $null
+    }
+}
+
 function Test-DatabaseConnection {
     <#
     .SYNOPSIS
@@ -745,6 +776,18 @@ function Invoke-SqlScript {
             $sql = $sql -replace [regex]::Escape("`$($varName)"), $varValue
         }
         
+        # Transform FileGroup references to PRIMARY when using removeToPrimary strategy
+        if ($SqlCmdVariables.ContainsKey('__RemapFileGroupsToPrimary__')) {
+            
+            # 1. Tables/Indexes: Replace ) ON [FileGroup] with ) ON [PRIMARY]
+            #    Pattern: closing paren followed by ON [anything-except-PRIMARY]
+            $sql = $sql -replace '\)\s*ON\s*\[(?!PRIMARY\])([^\]]+)\]', ') ON [PRIMARY]'
+            
+            # 2. Partition Schemes: Replace TO ([FG1], [FG2], ...) with ALL TO ([PRIMARY])
+            #    Pattern: TO ( followed by list of filegroups in brackets
+            $sql = $sql -replace 'TO\s*\(\s*\[[^\]]+\](?:\s*,\s*\[[^\]]+\])*\s*\)', 'ALL TO ([PRIMARY])'
+        }
+        
         # Replace ALTER DATABASE CURRENT with actual database name
         # CURRENT keyword doesn't work with SMO ExecuteNonQuery
         $sql = $sql -replace '\bALTER\s+DATABASE\s+CURRENT\b', "ALTER DATABASE [$DatabaseName]"
@@ -884,7 +927,8 @@ function Get-ScriptFiles {
         } else {
             # Simplified config or no config - use Dev defaults
             @{
-                includeFileGroups = $false
+                fileGroupStrategy = 'autoRemap'  # Default: auto-remap FileGroups
+                includeFileGroups = $false       # Will be overridden by strategy
                 includeConfigurations = $false
                 includeDatabaseScopedCredentials = $false
                 includeExternalData = $false
@@ -911,8 +955,26 @@ function Get-ScriptFiles {
     # Build ordered directory list based on mode
     $orderedDirs = @()
     
-    # FileGroups - skip in Dev mode unless explicitly enabled
-    if ($modeSettings.includeFileGroups) {
+    # FileGroups - handle based on strategy in Dev mode
+    if ($Mode -eq 'Dev') {
+        $fileGroupStrategy = if ($modeSettings.ContainsKey('fileGroupStrategy')) { 
+            $modeSettings.fileGroupStrategy 
+        } else { 
+            'autoRemap'  # Default strategy
+        }
+        
+        if ($fileGroupStrategy -eq 'autoRemap') {
+            # Check if source has FileGroups
+            $sourceFileGroups = Join-Path $Path '00_FileGroups'
+            if (Test-Path $sourceFileGroups) {
+                $orderedDirs += '00_FileGroups'
+                # Signal that we need auto-generate paths (handled later in main script)
+            }
+        } elseif ($fileGroupStrategy -eq 'removeToPrimary') {
+            # Skip FileGroups entirely, transformations will handle references
+        }
+    } elseif ($modeSettings.includeFileGroups) {
+        # Prod mode - use explicit includeFileGroups setting
         $orderedDirs += '00_FileGroups'
     }
     
@@ -1001,6 +1063,7 @@ function Get-ScriptFiles {
     return @{
         Scripts = $scripts
         SkippedFolders = $skippedFolders
+        IncludedFolders = $orderedDirs
     }
 }
 
@@ -1404,6 +1467,7 @@ try {
     $scriptInfo = Get-ScriptFiles -Path $SourcePath -IncludeData:$IncludeData -Mode $ImportMode -Config $config
     $scripts = $scriptInfo.Scripts
     $skippedFolders = $scriptInfo.SkippedFolders
+    $includedFolders = $scriptInfo.IncludedFolders
     
     if ($scripts.Count -eq 0) {
         Write-Error "No SQL scripts found in $SourcePath"
@@ -1477,6 +1541,68 @@ try {
                     }
                 }
             }
+        }
+    }
+    
+    # Auto-remap FileGroup paths in Dev mode with autoRemap strategy
+    if ($ImportMode -eq 'Dev' -and 
+        $sqlCmdVars.Count -eq 0 -and 
+        '00_FileGroups' -in $includedFolders) {
+        
+        $defaultDataPath = Get-DefaultDataPath -Connection $script:SharedConnection
+        
+        if ($defaultDataPath) {
+            $fileGroupScript = Join-Path $SourcePath '00_FileGroups' '001_FileGroups.sql'
+            if (Test-Path $fileGroupScript) {
+                Write-Output "[INFO] Auto-remapping FileGroup paths to: $defaultDataPath"
+                
+                # Parse FileGroup file to extract names
+                $currentFG = $null
+                $fileIndex = @{}  # Track file count per FileGroup for uniqueness
+                
+                foreach ($line in (Get-Content $fileGroupScript)) {
+                    if ($line -match '-- FileGroup: (.+)') {
+                        $currentFG = $matches[1]
+                        $fileIndex[$currentFG] = 0
+                    }
+                    elseif ($line -match '-- File: (.+)' -and $currentFG) {
+                        $originalFileName = $matches[1]
+                        $fileIndex[$currentFG]++
+                        
+                        # Build unique filename: DatabaseName_FileGroupName_OriginalName.ndf
+                        $uniqueFileName = "${Database}_${currentFG}_${originalFileName}"
+                        $fullPath = "${defaultDataPath}${pathSeparator}${uniqueFileName}.ndf"
+                        
+                        # Set the SQLCMD variable
+                        $varName = "${currentFG}_PATH_FILE"
+                        $sqlCmdVars[$varName] = $fullPath
+                        Write-Verbose "  Auto-mapped: `$($varName) = $fullPath"
+                    }
+                }
+            }
+        } else {
+            Write-Warning "[WARNING] Could not auto-detect default data path"
+            Write-Warning "  FileGroup import may fail. Consider providing fileGroupPathMapping in config."
+        }
+    }
+    
+    # Set flag for removeToPrimary transformations
+    if ($ImportMode -eq 'Dev') {
+        $devSettings = if ($config -and $config.import -and $config.import.developerMode) {
+            $config.import.developerMode
+        } else {
+            @{ fileGroupStrategy = 'autoRemap' }
+        }
+        
+        $fileGroupStrategy = if ($devSettings.ContainsKey('fileGroupStrategy')) {
+            $devSettings.fileGroupStrategy
+        } else {
+            'autoRemap'
+        }
+        
+        if ($fileGroupStrategy -eq 'removeToPrimary') {
+            $sqlCmdVars['__RemapFileGroupsToPrimary__'] = $true
+            Write-Output "[INFO] FileGroup strategy: removeToPrimary - all FileGroup references will map to PRIMARY"
         }
     }
     
