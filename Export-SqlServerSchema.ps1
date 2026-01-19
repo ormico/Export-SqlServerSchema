@@ -2028,8 +2028,8 @@ function Export-DatabaseObjects {
     if (Test-ObjectTypeExcluded -ObjectType 'FullTextSearch') {
         Write-Host '  [SKIPPED] FullTextSearch excluded by configuration' -ForegroundColor Yellow
     } else {
-    $ftCatalogs = @($Database.FullTextCatalogs | Where-Object { -not $_.IsSystemObject })
-    $ftStopLists = @($Database.FullTextStopLists | Where-Object { -not $_.IsSystemObject })
+    $ftCatalogs = @($Database.FullTextCatalogs | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Name $_.Name) })
+    $ftStopLists = @($Database.FullTextStopLists | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Name $_.Name) })
     
     if ($ftCatalogs.Count -gt 0) {
         Write-Output "  Found $($ftCatalogs.Count) full-text catalog(s) to export"
