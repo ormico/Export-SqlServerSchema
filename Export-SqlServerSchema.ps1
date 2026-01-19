@@ -2180,7 +2180,10 @@ function Export-DatabaseObjects {
         Write-Host '  [SKIPPED] SearchPropertyLists excluded by configuration' -ForegroundColor Yellow
     } else {
     try {
-        $searchPropertyLists = @($Database.SearchPropertyLists)
+        $searchPropertyLists = @(
+            $Database.SearchPropertyLists |
+            Where-Object { -not (Test-ObjectExcluded -ObjectType 'SearchPropertyLists' -ObjectName $_.Name) }
+        )
         if ($searchPropertyLists.Count -gt 0) {
             Write-Output "  Found $($searchPropertyLists.Count) search property list(s) to export"
             $successCount = 0
