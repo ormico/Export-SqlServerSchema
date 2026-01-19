@@ -1677,7 +1677,7 @@ function Export-DatabaseObjects {
     if (Test-ObjectTypeExcluded -ObjectType 'Assemblies') {
         Write-Host '  [SKIPPED] Assemblies excluded by configuration' -ForegroundColor Yellow
     } else {
-    $assemblies = @($Database.Assemblies | Where-Object { -not $_.IsSystemObject })
+    $assemblies = @($Database.Assemblies | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $null -Name $_.Name) })
     if ($assemblies.Count -gt 0) {
         Write-Output "  Found $($assemblies.Count) assembly(ies) to export"
         $successCount = 0
