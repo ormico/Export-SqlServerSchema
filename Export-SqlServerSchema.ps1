@@ -2097,8 +2097,14 @@ function Export-DatabaseObjects {
         Write-Host '  [SKIPPED] ExternalData excluded by configuration' -ForegroundColor Yellow
     } else {
     try {
-        $externalDataSources = @($Database.ExternalDataSources)
-        $externalFileFormats = @($Database.ExternalFileFormats)
+        $externalDataSources = @(
+            $Database.ExternalDataSources |
+                Where-Object { -not (Test-ObjectExcluded -ObjectType 'ExternalData' -Name $_.Name) }
+        )
+        $externalFileFormats = @(
+            $Database.ExternalFileFormats |
+                Where-Object { -not (Test-ObjectExcluded -ObjectType 'ExternalData' -Name $_.Name) }
+        )
         
         if ($externalDataSources.Count -gt 0) {
             Write-Output "  Found $($externalDataSources.Count) external data source(s) to export"
