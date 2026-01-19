@@ -7,3 +7,5 @@ tests/.env
 # Test outputs
 tests/exports/
 
+
+tests/exports_exclude_test/

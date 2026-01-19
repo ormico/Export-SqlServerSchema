@@ -57,7 +57,7 @@ export:
     # - Sequences                      # Sequence objects
     # - PartitionFunctions             # Table partitioning functions
     # - PartitionSchemes               # Partition scheme mappings
-    # - UserDefinedTypes               # User-defined data types
+    # - UserDefinedTypes               # User-defined data types (UDT/UDTT/UDDT)
     # - XmlSchemaCollections           # XML schema definitions
     # - Tables                         # Table definitions (PKs only)
     # - ForeignKeys                    # Foreign key constraints
@@ -67,19 +67,17 @@ export:
     # - Assemblies                     # CLR assemblies
     # - Functions                      # User-defined functions
     # - UserDefinedAggregates          # CLR aggregates
-    # - StoredProcedures               # Stored procedures
+    # - StoredProcedures               # Stored procedures (regular + extended)
     # - DatabaseTriggers               # Database-level triggers
     # - TableTriggers                  # Table-level triggers
     # - Views                          # Database views
     # - Synonyms                       # Object aliases
-    # - FullTextCatalogs               # Full-text search catalogs
-    # - ExternalDataSources            # PolyBase/External data sources
-    # - ExternalFileFormats            # External data file definitions
+    # - FullTextSearch                 # Full-text catalogs and stop lists
+    # - ExternalData                   # PolyBase data sources and file formats
     # - SearchPropertyLists            # Full-text search properties
     # - PlanGuides                     # Query hint overrides
-    # - SecurityObjects                # Keys, certificates, roles, users
-    # - SecurityPolicies               # Row-Level Security
-    # - Data                           # Table data (INSERT statements)
+    # - Security                       # Keys, certificates, roles, users, audits
+    # - SecurityPolicies               # Row-Level Security policies
   
   # Specific objects to exclude (supports wildcards)
   # Pattern: schema.objectname

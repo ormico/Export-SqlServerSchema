@@ -1,6 +1,10 @@
 -- Test file for GO delimiter variations
 -- This file tests various GO patterns that should be handled correctly
 
+-- Pre-cleanup to avoid conflicts from previous runs
+DROP TABLE IF EXISTS ##Test1, ##Test2, ##Test3, ##Test4, ##Test5;
+GO
+
 -- Test 1: Standard GO
 CREATE TABLE ##Test1 (ID INT);
 GO
@@ -19,6 +23,7 @@ CREATE TABLE ##Test4 (ID INT);
 
 -- Test 5: GO with repeat count (inserts 3 rows)
 CREATE TABLE ##Test5 (ID INT IDENTITY(1,1));
+GO
 INSERT INTO ##Test5 DEFAULT VALUES
 GO 3
 

@@ -143,6 +143,13 @@ jobs:
         run: |
           Write-Host "Running integration test suite..."
           ./run-integration-test.ps1
+
+      - name: Run exclusion feature tests
+        shell: pwsh
+        working-directory: ./tests
+        run: |
+          Write-Host "Running exclusion feature tests..."
+          ./test-exclude-feature.ps1
       
       - name: Cleanup
         if: always()
