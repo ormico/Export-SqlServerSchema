@@ -1858,7 +1858,7 @@ function Export-DatabaseObjects {
     if (Test-ObjectTypeExcluded -ObjectType 'DatabaseTriggers') {
         Write-Host '  [SKIPPED] DatabaseTriggers excluded by configuration' -ForegroundColor Yellow
     } else {
-    $dbTriggers = @($Database.Triggers | Where-Object { -not $_.IsSystemObject })
+    $dbTriggers = @($Database.Triggers | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $null -Name $_.Name) })
     if ($dbTriggers.Count -gt 0) {
         Write-Output "  Found $($dbTriggers.Count) database trigger(s) to export"
         $successCount = 0
@@ -1905,7 +1905,12 @@ function Export-DatabaseObjects {
     foreach ($table in $tables) {
         try {
             if ($table.Triggers -and $table.Triggers.Count -gt 0) {
-                $tableTriggers += @($table.Triggers | Where-Object { -not $_.IsSystemObject })
+                $tableTriggers += @(
+                    $table.Triggers |
+                    Where-Object {
+                        -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $_.Parent.Schema -Name $_.Name)
+                    }
+                )
             }
         } catch {
             Write-ExportError -ObjectType 'TriggerCollection' -ObjectName "$($table.Schema).$($table.Name)" -ErrorRecord $_ -AdditionalContext "Accessing triggers collection"
@@ -2226,7 +2231,7 @@ function Export-DatabaseObjects {
         Write-Host '  [SKIPPED] PlanGuides excluded by configuration' -ForegroundColor Yellow
     } else {
     try {
-        $planGuides = @($Database.PlanGuides)
+        $planGuides = @($Database.PlanGuides | Where-Object { -not (Test-ObjectExcluded -Schema $null -Name $_.Name) })
         if ($planGuides.Count -gt 0) {
             Write-Output "  Found $($planGuides.Count) plan guide(s) to export"
             $successCount = 0
@@ -2269,13 +2274,13 @@ function Export-DatabaseObjects {
     if (Test-ObjectTypeExcluded -ObjectType 'Security') {
         Write-Host '  [SKIPPED] Security objects excluded by configuration' -ForegroundColor Yellow
     } else {
-    $asymmetricKeys = @($Database.AsymmetricKeys | Where-Object { -not $_.IsSystemObject })
-    $certs = @($Database.Certificates | Where-Object { -not $_.IsSystemObject })
-    $symKeys = @($Database.SymmetricKeys | Where-Object { -not $_.IsSystemObject })
-    $appRoles = @($Database.ApplicationRoles | Where-Object { -not $_.IsSystemObject })
-    $dbRoles = @($Database.Roles | Where-Object { -not $_.IsSystemObject -and -not $_.IsFixedRole })
-    $dbUsers = @($Database.Users | Where-Object { -not $_.IsSystemObject })
-    $auditSpecs = @($Database.DatabaseAuditSpecifications)
+    $asymmetricKeys = @($Database.AsymmetricKeys | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $null -Name $_.Name) })
+    $certs = @($Database.Certificates | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $null -Name $_.Name) })
+    $symKeys = @($Database.SymmetricKeys | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $null -Name $_.Name) })
+    $appRoles = @($Database.ApplicationRoles | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $null -Name $_.Name) })
+    $dbRoles = @($Database.Roles | Where-Object { -not $_.IsSystemObject -and -not $_.IsFixedRole -and -not (Test-ObjectExcluded -Schema $null -Name $_.Name) })
+    $dbUsers = @($Database.Users | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $null -Name $_.Name) })
+    $auditSpecs = @($Database.DatabaseAuditSpecifications | Where-Object { -not (Test-ObjectExcluded -Schema $null -Name $_.Name) })
     
     if ($asymmetricKeys.Count -gt 0) {
         Write-Output "  Found $($asymmetricKeys.Count) asymmetric key(s) to export"
@@ -2488,7 +2493,7 @@ function Export-DatabaseObjects {
         Write-Host '  [SKIPPED] SecurityPolicies excluded by configuration' -ForegroundColor Yellow
     } else {
     try {
-        $securityPolicies = @($Database.SecurityPolicies)
+        $securityPolicies = @($Database.SecurityPolicies | Where-Object { -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) })
         if ($securityPolicies.Count -gt 0) {
             Write-Output "  Found $($securityPolicies.Count) security policy(ies) to export"
             $successCount = 0

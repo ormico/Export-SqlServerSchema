@@ -17,6 +17,12 @@ export:
     - PartitionFunctions             # Test excluding partition functions
     - PartitionSchemes               # Test excluding partition schemes
     - SecurityPolicies               # Test excluding Row-Level Security
+    - Assemblies                     # Test excluding assemblies
+    - FullTextSearch                 # Test excluding full-text catalogs and stop lists
+    - ExternalData                   # Test excluding external data sources and file formats
+    - SearchPropertyLists            # Test excluding search property lists
+    - PlanGuides                     # Test excluding plan guides
+    - Security                       # Test excluding security objects
 
   # Exclude specific schemas
   excludeSchemas:

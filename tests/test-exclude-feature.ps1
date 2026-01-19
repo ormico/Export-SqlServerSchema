@@ -333,8 +333,105 @@ try {
         Write-TestStep "PASS: Security directory not created or no security policies exported" -Type Success
         $testResults['SecurityPolicies'] = $true
     }
+
+    # Test 11: Assemblies should not be exported
+    $asmDir = Join-Path $exportDir "13_Programmability/01_Assemblies"
+    if (Test-Path $asmDir) {
+        $asmFiles = Get-ChildItem $asmDir -Filter "*.sql" -ErrorAction SilentlyContinue
+        if ($asmFiles.Count -gt 0) {
+            Write-TestStep "FAIL: Assemblies were exported despite exclusion ($($asmFiles.Count) files found)" -Type Error
+            $testResults['Assemblies'] = $false
+        } else {
+            Write-TestStep "PASS: Assemblies directory empty" -Type Success
+            $testResults['Assemblies'] = $true
+        }
+    } else {
+        Write-TestStep "PASS: Assemblies directory not created" -Type Success
+        $testResults['Assemblies'] = $true
+    }
+
+    # Test 12: FullTextSearch should not be exported
+    $ftsDir = Join-Path $exportDir "15_FullTextSearch"
+    if (Test-Path $ftsDir) {
+        $ftsFiles = Get-ChildItem $ftsDir -Filter "*.sql" -ErrorAction SilentlyContinue
+        if ($ftsFiles.Count -gt 0) {
+            Write-TestStep "FAIL: FullTextSearch objects were exported despite exclusion ($($ftsFiles.Count) files found)" -Type Error
+            $testResults['FullTextSearch'] = $false
+        } else {
+            Write-TestStep "PASS: FullTextSearch directory empty" -Type Success
+            $testResults['FullTextSearch'] = $true
+        }
+    } else {
+        Write-TestStep "PASS: FullTextSearch directory not created" -Type Success
+        $testResults['FullTextSearch'] = $true
+    }
+
+    # Test 13: ExternalData should not be exported
+    $extDir = Join-Path $exportDir "16_ExternalData"
+    if (Test-Path $extDir) {
+        $extFiles = Get-ChildItem $extDir -Filter "*.sql" -ErrorAction SilentlyContinue
+        if ($extFiles.Count -gt 0) {
+            Write-TestStep "FAIL: ExternalData objects were exported despite exclusion ($($extFiles.Count) files found)" -Type Error
+            $testResults['ExternalData'] = $false
+        } else {
+            Write-TestStep "PASS: ExternalData directory empty" -Type Success
+            $testResults['ExternalData'] = $true
+        }
+    } else {
+        Write-TestStep "PASS: ExternalData directory not created" -Type Success
+        $testResults['ExternalData'] = $true
+    }
+
+    # Test 14: SearchPropertyLists should not be exported
+    $splDir = Join-Path $exportDir "17_SearchPropertyLists"
+    if (Test-Path $splDir) {
+        $splFiles = Get-ChildItem $splDir -Filter "*.sql" -ErrorAction SilentlyContinue
+        if ($splFiles.Count -gt 0) {
+            Write-TestStep "FAIL: SearchPropertyLists were exported despite exclusion ($($splFiles.Count) files found)" -Type Error
+            $testResults['SearchPropertyLists'] = $false
+        } else {
+            Write-TestStep "PASS: SearchPropertyLists directory empty" -Type Success
+            $testResults['SearchPropertyLists'] = $true
+        }
+    } else {
+        Write-TestStep "PASS: SearchPropertyLists directory not created" -Type Success
+        $testResults['SearchPropertyLists'] = $true
+    }
+
+    # Test 15: PlanGuides should not be exported
+    $pgDir = Join-Path $exportDir "18_PlanGuides"
+    if (Test-Path $pgDir) {
+        $pgFiles = Get-ChildItem $pgDir -Filter "*.sql" -ErrorAction SilentlyContinue
+        if ($pgFiles.Count -gt 0) {
+            Write-TestStep "FAIL: PlanGuides were exported despite exclusion ($($pgFiles.Count) files found)" -Type Error
+            $testResults['PlanGuides'] = $false
+        } else {
+            Write-TestStep "PASS: PlanGuides directory empty" -Type Success
+            $testResults['PlanGuides'] = $true
+        }
+    } else {
+        Write-TestStep "PASS: PlanGuides directory not created" -Type Success
+        $testResults['PlanGuides'] = $true
+    }
+
+    # Test 16: Security objects should not be exported
+    if (Test-Path $spDir) {
+        $securityFiles = Get-ChildItem $spDir -Filter "*.sql" -ErrorAction SilentlyContinue | Where-Object {
+            $_.Name -match '\.(asymmetrickey|certificate|symmetrickey|approle|role|user|auditspec)\.sql$'
+        }
+        if ($securityFiles.Count -gt 0) {
+            Write-TestStep "FAIL: Security objects were exported despite exclusion ($($securityFiles.Count) files found)" -Type Error
+            $testResults['Security'] = $false
+        } else {
+            Write-TestStep "PASS: Security objects not exported" -Type Success
+            $testResults['Security'] = $true
+        }
+    } else {
+        Write-TestStep "PASS: Security directory not created" -Type Success
+        $testResults['Security'] = $true
+    }
     
-    # Test 11: Tables SHOULD be exported (not in exclusion list)
+    # Test 17: Tables SHOULD be exported (not in exclusion list)
     $tablesDir = Join-Path $exportDir "08_Tables_PrimaryKey"
     if (Test-Path $tablesDir) {
         $tableFiles = Get-ChildItem $tablesDir -Filter "*.sql" -ErrorAction SilentlyContinue
@@ -350,7 +447,7 @@ try {
         $testResults['Tables_Included'] = $false
     }
     
-    # Test 12: Schemas SHOULD be exported (not in exclusion list)
+    # Test 18: Schemas SHOULD be exported (not in exclusion list)
     $schemasDir = Join-Path $exportDir "02_Schemas"
     if (Test-Path $schemasDir) {
         $schemaFiles = Get-ChildItem $schemasDir -Filter "*.sql" -ErrorAction SilentlyContinue
