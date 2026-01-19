@@ -1,0 +1,37 @@
+# Export Configuration for Testing excludeObjectTypes Feature
+# Tests that various object types can be selectively excluded
+
+# CONNECTION SETTINGS
+trustServerCertificate: true
+
+export:
+  # Exclude a diverse set of object types to test the feature
+  excludeObjectTypes:
+    - Views                          # Test excluding views
+    - StoredProcedures               # Test excluding stored procedures
+    - Functions                      # Test excluding user-defined functions
+    - Synonyms                       # Test excluding synonyms
+    - Sequences                      # Test excluding sequences
+    - DatabaseTriggers               # Test excluding database triggers
+    - TableTriggers                  # Test excluding table triggers
+    - PartitionFunctions             # Test excluding partition functions
+    - PartitionSchemes               # Test excluding partition schemes
+    - SecurityPolicies               # Test excluding Row-Level Security
+
+  # Exclude specific schemas
+  excludeSchemas:
+    - Warehouse                       # Exclude all Warehouse schema objects
+
+  # Exclude specific objects (supports wildcards)
+  excludeObjects:
+    - "dbo.Products"                  # Exclude a specific table
+    - "*.OrderDetails"                # Exclude any OrderDetails object
+  
+  # Include data for testing
+  includeData: true
+
+# Connection settings
+connectionTimeout: 30
+commandTimeout: 300
+maxRetries: 3
+retryDelaySeconds: 2

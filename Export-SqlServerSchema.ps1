@@ -97,6 +97,17 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+
+# Early module load - required for SMO type resolution in function definitions
+try {
+    $sqlModule = Get-Module -ListAvailable -Name SqlServer | Sort-Object Version -Descending | Select-Object -First 1
+    if ($sqlModule) {
+        Import-Module SqlServer -ErrorAction Stop -WarningAction SilentlyContinue | Out-Null
+    }
+} catch {
+    # Will be handled properly in Test-Dependencies
+}
+
 $script:LogFile = $null  # Will be set after output directory is created
 $script:VerboseOutput = ($VerbosePreference -eq 'Continue')  # Default is quiet; -Verbose shows per-object progress
 
@@ -503,8 +514,9 @@ function Test-Dependencies {
     # Check for SMO assembly
     try {
         # Try to import SqlServer module if available
-        if (Get-Module -ListAvailable -Name SqlServer) {
-            Import-Module SqlServer -ErrorAction Stop
+        $sqlModule = Get-Module -ListAvailable -Name SqlServer | Sort-Object Version -Descending | Select-Object -First 1
+        if ($sqlModule) {
+            Import-Module SqlServer -ErrorAction Stop -WarningAction SilentlyContinue
             Write-Output '[SUCCESS] SQL Server Management Objects (SMO) available (SqlServer module)'
         } else {
             # Fallback to direct assembly load
@@ -689,16 +701,41 @@ function Get-SqlServerVersion {
     #>
     param([string]$VersionString)
     
-    $versionMap = @{
-        'Sql2012' = [Microsoft.SqlServer.Management.Smo.SqlServerVersion]::Version110
-        'Sql2014' = [Microsoft.SqlServer.Management.Smo.SqlServerVersion]::Version120
-        'Sql2016' = [Microsoft.SqlServer.Management.Smo.SqlServerVersion]::Version130
-        'Sql2017' = [Microsoft.SqlServer.Management.Smo.SqlServerVersion]::Version140
-        'Sql2019' = [Microsoft.SqlServer.Management.Smo.SqlServerVersion]::Version150
-        'Sql2022' = [Microsoft.SqlServer.Management.Smo.SqlServerVersion]::Version160
-    }
+    Write-Verbose "Get-SqlServerVersion called with: '$VersionString'"
     
-    return $versionMap[$VersionString]
+    try {
+        # Map version strings to enum value names
+        $versionNameMap = @{
+            'Sql2012' = 'Version110'
+            'Sql2014' = 'Version120'
+            'Sql2016' = 'Version130'
+            'Sql2017' = 'Version140'
+            'Sql2019' = 'Version150'
+            'Sql2022' = 'Version160'
+        }
+        
+        if (-not $versionNameMap.ContainsKey($VersionString)) {
+            Write-Error "Invalid SQL Server version: '$VersionString'. Valid values: $($versionNameMap.Keys -join ', ')"
+            throw "Invalid SQL Server version: $VersionString"
+        }
+        
+        # Convert enum name to actual enum value using dynamic type resolution
+        $enumTypeName = 'Microsoft.SqlServer.Management.Smo.SqlServerVersion'
+        $enumType = $enumTypeName -as [Type]
+        if ($null -eq $enumType) {
+            throw "Cannot resolve type [$enumTypeName]. Ensure SqlServer module is loaded."
+        }
+        
+        $enumValueName = $versionNameMap[$VersionString]
+        $result = [Enum]::Parse($enumType, $enumValueName)
+        
+        Write-Verbose "Get-SqlServerVersion returning: $result ($($result.GetType().FullName))"
+        return $result
+    }
+    catch {
+        Write-Error "Error in Get-SqlServerVersion for '$VersionString': $_"
+        throw
+    }
 }
 
 function Import-YamlConfig {
@@ -828,9 +865,11 @@ function New-ScriptingOptions {
         Creates a configured ScriptingOptions object.
     #>
     param(
-        [Microsoft.SqlServer.Management.Smo.SqlServerVersion]$TargetVersion,
+        $TargetVersion,  # Don't type this as SMO enum - allow dynamic resolution
         [hashtable]$Overrides = @{}
     )
+    
+    $targetType = if ($TargetVersion) { $TargetVersion.GetType().FullName } else { 'NULL' }
     
     $options = [Microsoft.SqlServer.Management.Smo.ScriptingOptions]::new()
     
@@ -896,6 +935,56 @@ function Test-ObjectTypeExcluded {
     return $false
 }
 
+function Test-SchemaExcluded {
+    <#
+    .SYNOPSIS
+        Checks if a schema should be excluded from export based on configuration.
+    #>
+    param(
+        [string]$Schema
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Schema)) {
+        return $false
+    }
+
+    if ($script:Config -and $script:Config.export -and $script:Config.export.excludeSchemas) {
+        return $script:Config.export.excludeSchemas -contains $Schema
+    }
+
+    return $false
+}
+
+function Test-ObjectExcluded {
+    <#
+    .SYNOPSIS
+        Checks if a schema-bound object should be excluded based on configuration.
+    #>
+    param(
+        [string]$Schema,
+        [string]$Name
+    )
+
+    if (Test-SchemaExcluded -Schema $Schema) {
+        return $true
+    }
+
+    if (-not $Name) {
+        return $false
+    }
+
+    if ($script:Config -and $script:Config.export -and $script:Config.export.excludeObjects) {
+        $fullName = if ([string]::IsNullOrWhiteSpace($Schema)) { $Name } else { "$Schema.$Name" }
+        foreach ($pattern in $script:Config.export.excludeObjects) {
+            if ($fullName -ilike $pattern) {
+                return $true
+            }
+        }
+    }
+
+    return $false
+}
+
 function Export-DatabaseObjects {
     <#
     .SYNOPSIS
@@ -904,10 +993,10 @@ function Export-DatabaseObjects {
         Returns a hashtable with TotalObjects, SuccessCount, and FailCount for metrics.
     #>
     param(
-        [Microsoft.SqlServer.Management.Smo.Database]$Database,
+        $Database,  # Don't type-constrain SMO objects
         [string]$OutputDir,
-        [Microsoft.SqlServer.Management.Smo.Scripter]$Scripter,
-        [Microsoft.SqlServer.Management.Smo.SqlServerVersion]$TargetVersion
+        $Scripter,  # Don't type-constrain SMO objects
+        $TargetVersion  # Don't type-constrain SMO enums
     )
     
     # Initialize metrics tracking for this function
@@ -927,7 +1016,7 @@ function Export-DatabaseObjects {
     Write-Output ''
     Write-Output 'Exporting filegroups...'
     if (Test-ObjectTypeExcluded -ObjectType 'FileGroups') {
-        Write-Output '  [SKIPPED] FileGroups excluded by configuration' -ForegroundColor Yellow
+        Write-Host '  [SKIPPED] FileGroups excluded by configuration' -ForegroundColor Yellow
     } else {
         $fileGroups = @($Database.FileGroups | Where-Object { $_.Name -ne 'PRIMARY' })
         if ($fileGroups.Count -gt 0) {
@@ -1003,12 +1092,13 @@ function Export-DatabaseObjects {
     } else {
         Write-Output "  [INFO] No user-defined filegroups found"
     }
+    }
     
     # 1. Database Scoped Configurations (Hardware-specific settings)
     Write-Output ''
     Write-Output 'Exporting database scoped configurations...'
     if (Test-ObjectTypeExcluded -ObjectType 'DatabaseScopedConfigurations') {
-        Write-Output '  [SKIPPED] DatabaseScopedConfigurations excluded by configuration' -ForegroundColor Yellow
+        Write-Host '  [SKIPPED] DatabaseScopedConfigurations excluded by configuration' -ForegroundColor Yellow
     } else {
     try {
         $dbConfigs = @($Database.DatabaseScopedConfigurations)
@@ -1043,7 +1133,7 @@ function Export-DatabaseObjects {
     Write-Output ''
     Write-Output 'Exporting database scoped credentials (structure only)...'
     if (Test-ObjectTypeExcluded -ObjectType 'DatabaseScopedCredentials') {
-        Write-Output '  [SKIPPED] DatabaseScopedCredentials excluded by configuration' -ForegroundColor Yellow
+        Write-Host '  [SKIPPED] DatabaseScopedCredentials excluded by configuration' -ForegroundColor Yellow
     } else {
     try {
         # Filter to actual credentials (collection may contain null/empty elements)
@@ -1085,9 +1175,9 @@ function Export-DatabaseObjects {
     Write-Output ''
     Write-Output 'Exporting schemas...'
     if (Test-ObjectTypeExcluded -ObjectType 'Schemas') {
-        Write-Output '  [SKIPPED] Schemas excluded by configuration' -ForegroundColor Yellow
+        Write-Host '  [SKIPPED] Schemas excluded by configuration' -ForegroundColor Yellow
     } else {
-    $schemas = @($Database.Schemas | Where-Object { -not $_.IsSystemObject -and $_.Name -ne $_.Owner })
+    $schemas = @($Database.Schemas | Where-Object { -not $_.IsSystemObject -and $_.Name -ne $_.Owner -and -not (Test-SchemaExcluded -Schema $_.Name) })
     if ($schemas.Count -gt 0) {
         Write-Output "  Found $($schemas.Count) schema(s) to export"
         $successCount = 0
@@ -1118,16 +1208,10 @@ function Export-DatabaseObjects {
             } catch {
                 Write-ObjectProgress -ObjectName $schema.Name -Current $currentItem -Total $schemas.Count -Failed
                 Write-ExportError -ObjectType 'Schema' -ObjectName $schema.Name -ErrorRecord $_ -FilePath $fileName
-                Write-Host "  [DEBUG] Original name: [$($schema.Name)]" -ForegroundColor Yellow
-                Write-Host "  [DEBUG] Safe name: [$safeName]" -ForegroundColor Yellow
-                Write-Host "  [DEBUG] Target file: [$fileName]" -ForegroundColor Yellow
-                Write-Host "  [DEBUG] Target dir: [$(Split-Path $fileName -Parent)]" -ForegroundColor Yellow
-                Write-Host "  [DEBUG] Dir exists: $(Test-Path (Split-Path $fileName -Parent))" -ForegroundColor Yellow
                 $failCount++
             }
         }
             Write-Output "  [SUMMARY] Exported $successCount/$($schemas.Count) schema(s) successfully" + $(if ($failCount -gt 0) { " ($failCount failed)" } else { "" })
-        }
     }
     }
     
@@ -1135,9 +1219,9 @@ function Export-DatabaseObjects {
     Write-Output ''
     Write-Output 'Exporting sequences...'
     if (Test-ObjectTypeExcluded -ObjectType 'Sequences') {
-        Write-Output '  [SKIPPED] Sequences excluded by configuration' -ForegroundColor Yellow
+        Write-Host '  [SKIPPED] Sequences excluded by configuration' -ForegroundColor Yellow
     } else {
-    $sequences = @($Database.Sequences | Where-Object { -not $_.IsSystemObject })
+    $sequences = @($Database.Sequences | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) })
     if ($sequences.Count -gt 0) {
         Write-Output "  Found $($sequences.Count) sequence(s) to export"
         $successCount = 0
@@ -1179,7 +1263,10 @@ function Export-DatabaseObjects {
     # 4. Partition Functions
     Write-Output ''
     Write-Output 'Exporting partition functions...'
-    $partitionFunctions = @($Database.PartitionFunctions)
+    if (Test-ObjectTypeExcluded -ObjectType 'PartitionFunctions') {
+        Write-Host '  [SKIPPED] PartitionFunctions excluded by configuration' -ForegroundColor Yellow
+    } else {
+    $partitionFunctions = @($Database.PartitionFunctions | Where-Object { -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) })
     if ($partitionFunctions.Count -gt 0) {
         Write-Output "  Found $($partitionFunctions.Count) partition function(s) to export"
         $successCount = 0
@@ -1208,11 +1295,15 @@ function Export-DatabaseObjects {
         }
         Write-Output "  [SUMMARY] Exported $successCount/$($partitionFunctions.Count) partition function(s) successfully" + $(if ($failCount -gt 0) { " ($failCount failed)" } else { "" })
     }
+    }
     
     # 5. Partition Schemes
     Write-Output ''
     Write-Output 'Exporting partition schemes...'
-    $partitionSchemes = @($Database.PartitionSchemes)
+    if (Test-ObjectTypeExcluded -ObjectType 'PartitionSchemes') {
+        Write-Host '  [SKIPPED] PartitionSchemes excluded by configuration' -ForegroundColor Yellow
+    } else {
+    $partitionSchemes = @($Database.PartitionSchemes | Where-Object { -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) })
     if ($partitionSchemes.Count -gt 0) {
         Write-Output "  Found $($partitionSchemes.Count) partition scheme(s) to export"
         $successCount = 0
@@ -1241,14 +1332,18 @@ function Export-DatabaseObjects {
         }
         Write-Output "  [SUMMARY] Exported $successCount/$($partitionSchemes.Count) partition scheme(s) successfully" + $(if ($failCount -gt 0) { " ($failCount failed)" } else { "" })
     }
+    }
     
     # 6. User-Defined Types (UDTs, UDTTs, UDDTs)
     Write-Output ''
     Write-Output 'Exporting user-defined types...'
+    if (Test-ObjectTypeExcluded -ObjectType 'UserDefinedTypes') {
+        Write-Host '  [SKIPPED] UserDefinedTypes excluded by configuration' -ForegroundColor Yellow
+    } else {
     $allTypes = @()
-    $allTypes += @($Database.UserDefinedDataTypes | Where-Object { -not $_.IsSystemObject })
-    $allTypes += @($Database.UserDefinedTableTypes | Where-Object { -not $_.IsSystemObject })
-    $allTypes += @($Database.UserDefinedTypes | Where-Object { -not $_.IsSystemObject })
+    $allTypes += @($Database.UserDefinedDataTypes | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) })
+    $allTypes += @($Database.UserDefinedTableTypes | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) })
+    $allTypes += @($Database.UserDefinedTypes | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) })
     
     if ($allTypes.Count -gt 0) {
         Write-Output "  Found $($allTypes.Count) type(s) to export"
@@ -1281,11 +1376,15 @@ function Export-DatabaseObjects {
         }
         Write-Output "  [SUMMARY] Exported $successCount/$($allTypes.Count) type(s) successfully" + $(if ($failCount -gt 0) { " ($failCount failed)" } else { "" })
     }
+    }
     
     # 7. XML Schema Collections
     Write-Output ''
     Write-Output 'Exporting XML schema collections...'
-    $xmlSchemaCollections = @($Database.XmlSchemaCollections | Where-Object { -not $_.IsSystemObject })
+    if (Test-ObjectTypeExcluded -ObjectType 'XmlSchemaCollections') {
+        Write-Host '  [SKIPPED] XmlSchemaCollections excluded by configuration' -ForegroundColor Yellow
+    } else {
+    $xmlSchemaCollections = @($Database.XmlSchemaCollections | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) })
     if ($xmlSchemaCollections.Count -gt 0) {
         Write-Output "  Found $($xmlSchemaCollections.Count) XML schema collection(s) to export"
         $successCount = 0
@@ -1316,15 +1415,16 @@ function Export-DatabaseObjects {
         }
         Write-Output "  [SUMMARY] Exported $successCount/$($xmlSchemaCollections.Count) XML schema collection(s) successfully" + $(if ($failCount -gt 0) { " ($failCount failed)" } else { "" })
     }
+    }
     
     # 8. Tables (Primary Keys only - no FK)
     Write-Output ''
     Write-Output 'Exporting tables (PKs only)...'
     $tablesTimer = [System.Diagnostics.Stopwatch]::StartNew()
     if (Test-ObjectTypeExcluded -ObjectType 'Tables') {
-        Write-Output '  [SKIPPED] Tables excluded by configuration' -ForegroundColor Yellow
+        Write-Host '  [SKIPPED] Tables excluded by configuration' -ForegroundColor Yellow
     } else {
-        $tables = @($Database.Tables | Where-Object { -not $_.IsSystemObject })
+        $tables = @($Database.Tables | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) })
         if ($tables.Count -gt 0) {
             Write-Output "  Found $($tables.Count) table(s) to export"
             $successCount = 0
@@ -1375,11 +1475,11 @@ function Export-DatabaseObjects {
     Write-Output ''
     Write-Output 'Exporting foreign keys...'
     if (Test-ObjectTypeExcluded -ObjectType 'ForeignKeys') {
-        Write-Output '  [SKIPPED] ForeignKeys excluded by configuration' -ForegroundColor Yellow
+        Write-Host '  [SKIPPED] ForeignKeys excluded by configuration' -ForegroundColor Yellow
     } else {
         # Initialize tables collection if not already defined (in case Tables were excluded)
         if (-not (Get-Variable -Name tables -Scope Local -ErrorAction SilentlyContinue)) {
-            $tables = @($Database.Tables | Where-Object { -not $_.IsSystemObject })
+            $tables = @($Database.Tables | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) })
         }
         
         $foreignKeys = @()
@@ -1434,11 +1534,11 @@ function Export-DatabaseObjects {
     Write-Output 'Exporting indexes...'
     $indexesTimer = [System.Diagnostics.Stopwatch]::StartNew()
     if (Test-ObjectTypeExcluded -ObjectType 'Indexes') {
-        Write-Output '  [SKIPPED] Indexes excluded by configuration' -ForegroundColor Yellow
+        Write-Host '  [SKIPPED] Indexes excluded by configuration' -ForegroundColor Yellow
     } else {
         # Initialize tables collection if not already defined (in case Tables were excluded)
         if (-not (Get-Variable -Name tables -Scope Local -ErrorAction SilentlyContinue)) {
-            $tables = @($Database.Tables | Where-Object { -not $_.IsSystemObject })
+            $tables = @($Database.Tables | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) })
         }
         
         $indexes = @()
@@ -1500,7 +1600,10 @@ function Export-DatabaseObjects {
     # 11. Defaults
     Write-Output ''
     Write-Output 'Exporting defaults...'
-    $defaults = @($Database.Defaults | Where-Object { -not $_.IsSystemObject })
+    if (Test-ObjectTypeExcluded -ObjectType 'Defaults') {
+        Write-Host '  [SKIPPED] Defaults excluded by configuration' -ForegroundColor Yellow
+    } else {
+    $defaults = @($Database.Defaults | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) })
     if ($defaults.Count -gt 0) {
         Write-Output "  Found $($defaults.Count) default constraint(s) to export"
         $successCount = 0
@@ -1529,11 +1632,15 @@ function Export-DatabaseObjects {
         }
         Write-Output "  [SUMMARY] Exported $successCount/$($defaults.Count) default constraint(s) successfully" + $(if ($failCount -gt 0) { " ($failCount failed)" } else { "" })
     }
+    }
     
     # 12. Rules
     Write-Output ''
     Write-Output 'Exporting rules...'
-    $rules = @($Database.Rules | Where-Object { -not $_.IsSystemObject })
+    if (Test-ObjectTypeExcluded -ObjectType 'Rules') {
+        Write-Host '  [SKIPPED] Rules excluded by configuration' -ForegroundColor Yellow
+    } else {
+    $rules = @($Database.Rules | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) })
     if ($rules.Count -gt 0) {
         Write-Output "  Found $($rules.Count) rule(s) to export"
         $successCount = 0
@@ -1562,10 +1669,14 @@ function Export-DatabaseObjects {
         }
         Write-Output "  [SUMMARY] Exported $successCount/$($rules.Count) rule(s) successfully" + $(if ($failCount -gt 0) { " ($failCount failed)" } else { "" })
     }
+    }
     
     # 13. Assemblies
     Write-Output ''
     Write-Output 'Exporting assemblies...'
+    if (Test-ObjectTypeExcluded -ObjectType 'Assemblies') {
+        Write-Host '  [SKIPPED] Assemblies excluded by configuration' -ForegroundColor Yellow
+    } else {
     $assemblies = @($Database.Assemblies | Where-Object { -not $_.IsSystemObject })
     if ($assemblies.Count -gt 0) {
         Write-Output "  Found $($assemblies.Count) assembly(ies) to export"
@@ -1595,14 +1706,15 @@ function Export-DatabaseObjects {
         }
         Write-Output "  [SUMMARY] Exported $successCount/$($assemblies.Count) assembly(ies) successfully" + $(if ($failCount -gt 0) { " ($failCount failed)" } else { "" })
     }
+    }
     
     # 14. User-Defined Functions
     Write-Output ''
     Write-Output 'Exporting user-defined functions...'
     if (Test-ObjectTypeExcluded -ObjectType 'Functions') {
-        Write-Output '  [SKIPPED] Functions excluded by configuration' -ForegroundColor Yellow
+        Write-Host '  [SKIPPED] Functions excluded by configuration' -ForegroundColor Yellow
     } else {
-    $functions = @($Database.UserDefinedFunctions | Where-Object { -not $_.IsSystemObject })
+    $functions = @($Database.UserDefinedFunctions | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) })
     if ($functions.Count -gt 0) {
         Write-Output "  Found $($functions.Count) function(s) to export"
         $successCount = 0
@@ -1639,7 +1751,10 @@ function Export-DatabaseObjects {
     # 15. User-Defined Aggregates
     Write-Output ''
     Write-Output 'Exporting user-defined aggregates...'
-    $aggregates = @($Database.UserDefinedAggregates | Where-Object { -not $_.IsSystemObject })
+    if (Test-ObjectTypeExcluded -ObjectType 'UserDefinedAggregates') {
+        Write-Host '  [SKIPPED] UserDefinedAggregates excluded by configuration' -ForegroundColor Yellow
+    } else {
+    $aggregates = @($Database.UserDefinedAggregates | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) })
     if ($aggregates.Count -gt 0) {
         Write-Output "  Found $($aggregates.Count) aggregate(s) to export"
         $successCount = 0
@@ -1668,13 +1783,17 @@ function Export-DatabaseObjects {
         }
         Write-Output "  [SUMMARY] Exported $successCount/$($aggregates.Count) aggregate(s) successfully" + $(if ($failCount -gt 0) { " ($failCount failed)" } else { "" })
     }
+    }
     
     # 16. Stored Procedures (including Extended Stored Procedures)
     Write-Output ''
     Write-Output 'Exporting stored procedures...'
     $procsTimer = [System.Diagnostics.Stopwatch]::StartNew()
-    $storedProcs = @($Database.StoredProcedures | Where-Object { -not $_.IsSystemObject })
-    $extendedProcs = @($Database.ExtendedStoredProcedures | Where-Object { -not $_.IsSystemObject })
+    if (Test-ObjectTypeExcluded -ObjectType 'StoredProcedures') {
+        Write-Host '  [SKIPPED] StoredProcedures excluded by configuration' -ForegroundColor Yellow
+    } else {
+    $storedProcs = @($Database.StoredProcedures | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) })
+    $extendedProcs = @($Database.ExtendedStoredProcedures | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) })
     $totalProcs = $storedProcs.Count + $extendedProcs.Count
     if ($totalProcs -gt 0) {
         Write-Output "  Found $($storedProcs.Count) stored procedure(s) and $($extendedProcs.Count) extended stored procedure(s) to export"
@@ -1729,12 +1848,16 @@ function Export-DatabaseObjects {
         $functionMetrics.SuccessCount += $successCount
         $functionMetrics.FailCount += $failCount
     }
+    }
     $procsTimer.Stop()
     $functionMetrics.CategoryTimings['StoredProcedures'] = $procsTimer.ElapsedMilliseconds
     
     # 17. Database Triggers
     Write-Output ''
     Write-Output 'Exporting database triggers...'
+    if (Test-ObjectTypeExcluded -ObjectType 'DatabaseTriggers') {
+        Write-Host '  [SKIPPED] DatabaseTriggers excluded by configuration' -ForegroundColor Yellow
+    } else {
     $dbTriggers = @($Database.Triggers | Where-Object { -not $_.IsSystemObject })
     if ($dbTriggers.Count -gt 0) {
         Write-Output "  Found $($dbTriggers.Count) database trigger(s) to export"
@@ -1767,10 +1890,17 @@ function Export-DatabaseObjects {
         }
         Write-Output "  [SUMMARY] Exported $successCount/$($dbTriggers.Count) database trigger(s) successfully" + $(if ($failCount -gt 0) { " ($failCount failed)" } else { "" })
     }
+    }
     
     # 18. Table Triggers
     Write-Output ''
     Write-Output 'Exporting table triggers...'
+    if (Test-ObjectTypeExcluded -ObjectType 'TableTriggers') {
+        Write-Host '  [SKIPPED] TableTriggers excluded by configuration' -ForegroundColor Yellow
+    } else {
+    if (-not (Get-Variable -Name tables -Scope Local -ErrorAction SilentlyContinue)) {
+        $tables = @($Database.Tables | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) })
+    }
     $tableTriggers = @()
     foreach ($table in $tables) {
         try {
@@ -1816,14 +1946,15 @@ function Export-DatabaseObjects {
         }
         Write-Output "  [SUMMARY] Exported $successCount/$($tableTriggers.Count) table trigger(s) successfully" + $(if ($failCount -gt 0) { " ($failCount failed)" } else { "" })
     }
+    }
     
     # 19. Views
     Write-Output ''
     Write-Output 'Exporting views...'
     if (Test-ObjectTypeExcluded -ObjectType 'Views') {
-        Write-Output '  [SKIPPED] Views excluded by configuration' -ForegroundColor Yellow
+        Write-Host '  [SKIPPED] Views excluded by configuration' -ForegroundColor Yellow
     } else {
-    $views = @($Database.Views | Where-Object { -not $_.IsSystemObject })
+    $views = @($Database.Views | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) })
     if ($views.Count -gt 0) {
         Write-Output "  Found $($views.Count) view(s) to export"
         $successCount = 0
@@ -1857,7 +1988,10 @@ function Export-DatabaseObjects {
     # 20. Synonyms
     Write-Output ''
     Write-Output 'Exporting synonyms...'
-    $synonyms = @($Database.Synonyms | Where-Object { -not $_.IsSystemObject })
+    if (Test-ObjectTypeExcluded -ObjectType 'Synonyms') {
+        Write-Host '  [SKIPPED] Synonyms excluded by configuration' -ForegroundColor Yellow
+    } else {
+    $synonyms = @($Database.Synonyms | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) })
     if ($synonyms.Count -gt 0) {
         Write-Output "  Found $($synonyms.Count) synonym(s) to export"
         $successCount = 0
@@ -1886,10 +2020,14 @@ function Export-DatabaseObjects {
         }
         Write-Output "  [SUMMARY] Exported $successCount/$($synonyms.Count) synonym(s) successfully" + $(if ($failCount -gt 0) { " ($failCount failed)" } else { "" })
     }
+    }
     
     # 21. Full-Text Search
     Write-Output ''
     Write-Output 'Exporting full-text search objects...'
+    if (Test-ObjectTypeExcluded -ObjectType 'FullTextSearch') {
+        Write-Host '  [SKIPPED] FullTextSearch excluded by configuration' -ForegroundColor Yellow
+    } else {
     $ftCatalogs = @($Database.FullTextCatalogs | Where-Object { -not $_.IsSystemObject })
     $ftStopLists = @($Database.FullTextStopLists | Where-Object { -not $_.IsSystemObject })
     
@@ -1950,10 +2088,14 @@ function Export-DatabaseObjects {
         }
         Write-Output "  [SUMMARY] Exported $successCount/$($ftStopLists.Count) full-text stop list(s) successfully" + $(if ($failCount -gt 0) { " ($failCount failed)" } else { "" })
     }
+    }
     
     # 22. External Data Sources and File Formats
     Write-Output ''
     Write-Output 'Exporting external data sources and file formats...'
+    if (Test-ObjectTypeExcluded -ObjectType 'ExternalData') {
+        Write-Host '  [SKIPPED] ExternalData excluded by configuration' -ForegroundColor Yellow
+    } else {
     try {
         $externalDataSources = @($Database.ExternalDataSources)
         $externalFileFormats = @($Database.ExternalFileFormats)
@@ -2023,10 +2165,14 @@ function Export-DatabaseObjects {
     } catch {
         Write-Output "  [INFO] External data objects not available (SQL Server 2016+ with PolyBase)"
     }
+    }
     
     # 23. Search Property Lists
     Write-Output ''
     Write-Output 'Exporting search property lists...'
+    if (Test-ObjectTypeExcluded -ObjectType 'SearchPropertyLists') {
+        Write-Host '  [SKIPPED] SearchPropertyLists excluded by configuration' -ForegroundColor Yellow
+    } else {
     try {
         $searchPropertyLists = @($Database.SearchPropertyLists)
         if ($searchPropertyLists.Count -gt 0) {
@@ -2062,10 +2208,14 @@ function Export-DatabaseObjects {
     } catch {
         Write-Output "  [INFO] Search property lists not available (SQL Server 2008+)"
     }
+    }
     
     # 24. Plan Guides
     Write-Output ''
     Write-Output 'Exporting plan guides...'
+    if (Test-ObjectTypeExcluded -ObjectType 'PlanGuides') {
+        Write-Host '  [SKIPPED] PlanGuides excluded by configuration' -ForegroundColor Yellow
+    } else {
     try {
         $planGuides = @($Database.PlanGuides)
         if ($planGuides.Count -gt 0) {
@@ -2102,10 +2252,14 @@ function Export-DatabaseObjects {
     } catch {
         Write-Output "  [INFO] Plan guides not available"
     }
+    }
     
     # 25. Security Objects (Keys, Certificates, Roles, Users, Audit)
     Write-Output ''
     Write-Output 'Exporting security objects...'
+    if (Test-ObjectTypeExcluded -ObjectType 'Security') {
+        Write-Host '  [SKIPPED] Security objects excluded by configuration' -ForegroundColor Yellow
+    } else {
     $asymmetricKeys = @($Database.AsymmetricKeys | Where-Object { -not $_.IsSystemObject })
     $certs = @($Database.Certificates | Where-Object { -not $_.IsSystemObject })
     $symKeys = @($Database.SymmetricKeys | Where-Object { -not $_.IsSystemObject })
@@ -2316,10 +2470,14 @@ function Export-DatabaseObjects {
         }
         Write-Output "  [SUMMARY] Exported $successCount/$($auditSpecs.Count) database audit specification(s) successfully" + $(if ($failCount -gt 0) { " ($failCount failed)" } else { "" })
     }
+    }
     
     # 26. Security Policies (Row-Level Security)
     Write-Output ''
     Write-Output 'Exporting security policies (Row-Level Security)...'
+    if (Test-ObjectTypeExcluded -ObjectType 'SecurityPolicies') {
+        Write-Host '  [SKIPPED] SecurityPolicies excluded by configuration' -ForegroundColor Yellow
+    } else {
     try {
         $securityPolicies = @($Database.SecurityPolicies)
         if ($securityPolicies.Count -gt 0) {
@@ -2365,6 +2523,7 @@ function Export-DatabaseObjects {
     } catch {
         Write-Output "  [INFO] Security policies not available (SQL Server 2016+)"
     }
+    }
     
     # Return metrics summary
     return $functionMetrics
@@ -2398,7 +2557,7 @@ function Export-TableData {
     Write-Output 'EXPORTING TABLE DATA'
     Write-Output '═══════════════════════════════════════════════'
     
-    $tables = @($Database.Tables | Where-Object { -not $_.IsSystemObject })
+    $tables = @($Database.Tables | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) })
     
     if ($tables.Count -eq 0) {
         Write-Output 'No tables found.'
@@ -2909,12 +3068,25 @@ For more details, see: https://go.microsoft.com/fwlink/?linkid=2226722
     Write-Output "[SUCCESS] SMO prefetch configured for $($typesToPrefetch.Count) object types"
     
     # Create scripter
-    $sqlVersion = Get-SqlServerVersion -VersionString $TargetSqlVersion
+    # Resolve target SQL Server version
+    
+    try {
+        $sqlVersion = Get-SqlServerVersion -VersionString $TargetSqlVersion
+    }
+    catch {
+        throw
+    }
+    
+    if ($null -eq $sqlVersion) {
+        throw "Get-SqlServerVersion returned null for TargetSqlVersion '$TargetSqlVersion'"
+    }
+    
     $scripter = [Microsoft.SqlServer.Management.Smo.Scripter]::new($smServer)
     $scripter.Options.TargetServerVersion = $sqlVersion
     
     # Export schema objects with timing
     $schemaTimer = Start-MetricsTimer -Category 'SchemaExport'
+    Write-Output "═══════════════════════════════════════════════════════════════"
     $schemaResult = Export-DatabaseObjects -Database $smDatabase -OutputDir $exportDir -Scripter $scripter -TargetVersion $sqlVersion
     if ($schemaTimer) {
         $schemaTimer.Stop()

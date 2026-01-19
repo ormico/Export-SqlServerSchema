@@ -16,8 +16,9 @@ This directory contains the CI/CD workflows for Export-SqlServerSchema.
 3. Install required PowerShell modules (SqlServer, powershell-yaml)
 4. Start SQL Server 2022 Docker container
 5. Run integration test suite (`tests/run-integration-test.ps1`)
-6. Cleanup Docker resources
-7. Upload test artifacts on failure
+6. Run exclusion feature tests (`tests/test-exclude-feature.ps1`)
+7. Cleanup Docker resources
+8. Upload test artifacts on failure
 
 **What it validates**:
 - Export functionality with all 21 object types
@@ -26,6 +27,7 @@ This directory contains the CI/CD workflows for Export-SqlServerSchema.
 - Cross-platform FileGroup deployment
 - Data integrity and FK constraints
 - MAXDOP and Security Policy configuration
+- Exclude object types feature coverage
 
 ### ci-main.yml - Main Branch & Release
 
