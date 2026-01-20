@@ -1,0 +1,8 @@
+[2026-01-20 08:10:35] [INFO] Export started
+[2026-01-20 08:10:35] [INFO] Server: localhost,1433
+[2026-01-20 08:10:35] [INFO] Database: TestDb
+[2026-01-20 08:10:35] [INFO] Output: D:\Export-SqlServerSchema\tests\.\exports_manual\localhost,1433_TestDb_20260120_081035
+[2026-01-20 08:10:35] [INFO] Configuration source: .\test-export-config.yml
+[2026-01-20 08:10:35] [INFO] Connected successfully to localhost,1433\TestDb
+[2026-01-20 08:10:42] [INFO] Export completed successfully
+[2026-01-20 08:10:42] [INFO] Disconnected from SQL Server

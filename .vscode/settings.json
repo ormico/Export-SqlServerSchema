@@ -1,0 +1,30 @@
+{
+    "chat.tools.terminal.autoApprove": {
+        "/^pwsh -File \\.\\\\run-integration-test\\.ps1$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^pwsh -File \\.\\.\\\\Export-SqlServerSchema\\.ps1 -Server localhost -Database TestDb -OutputPath \\.\\\\exports_manual -IncludeData -ConfigFile \\.\\\\test-export-config\\.yml$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^pwsh -File \\.\\.\\\\Export-SqlServerSchema\\.ps1 -Server localhost,1433 -Database TestDb -OutputPath \\.\\\\exports_manual -IncludeData -ConfigFile \\.\\\\test-export-config\\.yml$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^pwsh -Command \"\\$secure = ConvertTo-SecureString 'Test@1234' -AsPlainText -Force; \\$cred = New-Object System\\.Management\\.Automation\\.PSCredential\\('sa',\\$secure\\); & '\\.\\.\\\\Export-SqlServerSchema\\.ps1' -Server 'localhost,1433' -Database 'TestDb' -OutputPath '\\.\\\\exports_manual' -IncludeData -Credential \\$cred -ConfigFile '\\.\\\\test-export-config\\.yml'\"$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^pwsh -Command \"& \\{ \\$secure = ConvertTo-SecureString 'Test@1234' -AsPlainText -Force; \\$cred = New-Object System\\.Management\\.Automation\\.PSCredential\\('sa', \\$secure\\); & '\\.\\.\\\\\\\\Export-SqlServerSchema\\.ps1' -Server 'localhost,1433' -Database 'TestDb' -OutputPath '\\.\\\\\\\\exports_manual' -IncludeData -Credential \\$cred -ConfigFile '\\.\\\\\\\\test-export-config\\.yml' \\}\"$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^pwsh -Command '& \\{ \\$secure = ConvertTo-SecureString ''Test@1234'' -AsPlainText -Force; \\$cred = New-Object System\\.Management\\.Automation\\.PSCredential\\(''sa'', \\$secure\\); & ''\\.\\.\\\\Export-SqlServerSchema\\.ps1'' -Server ''localhost,1433'' -Database ''TestDb'' -OutputPath ''\\.\\\\exports_manual'' -IncludeData -Credential \\$cred -ConfigFile ''\\.\\\\test-export-config\\.yml'' \\}'$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "Set-Location": true,
+        "&": true
+    }
+}
