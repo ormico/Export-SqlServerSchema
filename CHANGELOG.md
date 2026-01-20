@@ -8,12 +8,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+---
+
+## [1.4.1] - 2026-01-20
+
 ### Fixed
 
 **excludeObjectTypes Configuration Fully Implemented**
 - The `excludeObjectTypes` configuration setting now works uniformly across all 30+ object types
 
----
+**Export Progress Output Consistency**
+- Default progress output now shows stage headers with milestone-only progress lines
+- Per-object success lines are only shown when `-Verbose` is explicitly passed
 
 ## [1.4.0] - 2026-01-13
 
