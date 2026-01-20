@@ -116,6 +116,39 @@ CREATE TYPE dbo.ContactInfo AS TABLE (
 );
 GO
 
+-- Create user-defined data type
+CREATE TYPE dbo.PhoneNumber FROM NVARCHAR(20) NOT NULL;
+GO
+
+-- XML SCHEMA COLLECTIONS
+CREATE XML SCHEMA COLLECTION dbo.CustomerXmlSchema AS N'
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+    <xs:element name="Customer">
+        <xs:complexType>
+            <xs:sequence>
+                <xs:element name="CustomerId" type="xs:int"/>
+                <xs:element name="Name" type="xs:string"/>
+                <xs:element name="Email" type="xs:string" minOccurs="0"/>
+            </xs:sequence>
+        </xs:complexType>
+    </xs:element>
+</xs:schema>';
+GO
+
+CREATE XML SCHEMA COLLECTION Sales.OrderXmlSchema AS N'
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+    <xs:element name="Order">
+        <xs:complexType>
+            <xs:sequence>
+                <xs:element name="OrderId" type="xs:int"/>
+                <xs:element name="OrderDate" type="xs:dateTime"/>
+                <xs:element name="TotalAmount" type="xs:decimal" minOccurs="0"/>
+            </xs:sequence>
+        </xs:complexType>
+    </xs:element>
+</xs:schema>';
+GO
+
 -- Create tables with relationships
 CREATE TABLE dbo.Customers (
     CustomerId INT PRIMARY KEY IDENTITY(1,1),
@@ -171,6 +204,17 @@ CREATE TABLE Warehouse.Inventory (
     CONSTRAINT FK_Inventory_Products FOREIGN KEY (ProductId) 
         REFERENCES dbo.Products(ProductId)
 ) ON [FG_ARCHIVE];
+GO
+
+-- Add XML schema typed columns
+ALTER TABLE dbo.Customers ADD ProfileXml XML (CONTENT dbo.CustomerXmlSchema);
+GO
+
+ALTER TABLE Sales.Orders ADD OrderXml XML (DOCUMENT Sales.OrderXmlSchema);
+GO
+
+-- Add a column using user-defined data type
+ALTER TABLE dbo.Customers ADD AltPhone dbo.PhoneNumber NULL;
 GO
 
 -- Create partitioned table to test partition scheme FileGroup handling
@@ -310,6 +354,16 @@ BEGIN
 END;
 GO
 
+-- Defaults and rules (deprecated but supported)
+CREATE DEFAULT dbo.df_IsActive AS 1;
+GO
+
+CREATE RULE dbo.rl_PositiveInt AS @value >= 0;
+GO
+
+ALTER TABLE dbo.Customers ADD IsActive BIT NULL;
+GO
+
 -- ═══════════════════════════════════════════════════════════════
 -- DATABASE SCOPED CREDENTIALS (SQL Server 2016+)
 -- ═══════════════════════════════════════════════════════════════
@@ -357,6 +411,26 @@ ADD BLOCK PREDICATE dbo.fn_TenantAccessPredicate(TenantId) ON Sales.Orders AFTER
 WITH (STATE = OFF);  -- Off by default for testing, can be enabled in production
 GO
 
+-- SECURITY OBJECTS
+CREATE ROLE TestDbRole;
+GO
+
+CREATE APPLICATION ROLE TestAppRole WITH PASSWORD = 'TestAppRolePwd!123';
+GO
+
+CREATE USER TestUser WITHOUT LOGIN;
+GO
+
+CREATE CERTIFICATE TestCert WITH SUBJECT = 'Test Certificate';
+GO
+
+CREATE ASYMMETRIC KEY TestAsymKey WITH ALGORITHM = RSA_2048;
+GO
+
+CREATE SYMMETRIC KEY TestSymKey WITH ALGORITHM = AES_256
+    ENCRYPTION BY PASSWORD = 'TestSymKeyPwd!123';
+GO
+
 -- ═══════════════════════════════════════════════════════════════
 -- SYNONYMS
 -- ═══════════════════════════════════════════════════════════════
@@ -395,6 +469,14 @@ WITH (
     PROPERTY_INT_ID = 2,
     PROPERTY_DESCRIPTION = 'Document title metadata'
 );
+GO
+
+-- FULL-TEXT SEARCH (optional)
+IF FULLTEXTSERVICEPROPERTY('IsFullTextInstalled') = 1
+BEGIN
+    CREATE FULLTEXT CATALOG TestFullTextCatalog WITH ACCENT_SENSITIVITY = OFF;
+    CREATE FULLTEXT STOPLIST TestFullTextStopList FROM SYSTEM STOPLIST;
+END
 GO
 
 -- ═══════════════════════════════════════════════════════════════
@@ -504,7 +586,11 @@ PRINT '  - Functions: 3 (2 scalar + 1 table-valued for RLS)';
 PRINT '  - Stored Procedures: 2';
 PRINT '  - Triggers: 2';
 PRINT '  - Sequences: 1';
-PRINT '  - User-Defined Types: 1';
+PRINT '  - User-Defined Types: 2 (table type + alias type)';
+PRINT '  - XML Schema Collections: 2';
+PRINT '  - Defaults: 1';
+PRINT '  - Rules: 1';
+PRINT '  - Security Objects: 6 (role, app role, user, certificate, asymmetric key, symmetric key)';
 PRINT '  - Indexes: 4 non-clustered';
 PRINT '';
 PRINT 'ADVANCED FEATURES';
@@ -512,6 +598,7 @@ PRINT '  - Security Policies: 1 (Row-Level Security - DISABLED for testing)';
 PRINT '  - Synonyms: 2';
 PRINT '  - Search Property Lists: 1 (2 custom properties)';
 PRINT '  - Plan Guides: 1';
+PRINT '  - Full-Text Search: 1 catalog, 1 stoplist (if installed)';
 PRINT '';
 PRINT 'SAMPLE DATA';
 PRINT '  - Customers: 5 rows';
@@ -526,6 +613,5 @@ PRINT '  - External File Formats (depends on External Data Sources)';
 PRINT '  - External Libraries (requires ML Services)';
 PRINT '  - External Languages (requires custom runtime)';
 PRINT '  - Always Encrypted objects (requires certificate store)';
-PRINT '  - Certificates with private keys (complex key management)';
 PRINT '═══════════════════════════════════════════════════════════════';
 GO

@@ -334,7 +334,23 @@ try {
         $testResults['SecurityPolicies'] = $true
     }
 
-    # Test 11: Assemblies should not be exported
+    # Test 11: XML Schema Collections should not be exported
+    $xscDir = Join-Path $exportDir "07_XmlSchemaCollections"
+    if (Test-Path $xscDir) {
+        $xscFiles = Get-ChildItem $xscDir -Filter "*.sql" -ErrorAction SilentlyContinue
+        if ($xscFiles.Count -gt 0) {
+            Write-TestStep "FAIL: XML Schema Collections were exported despite exclusion ($($xscFiles.Count) files found)" -Type Error
+            $testResults['XmlSchemaCollections'] = $false
+        } else {
+            Write-TestStep "PASS: XML Schema Collections directory empty" -Type Success
+            $testResults['XmlSchemaCollections'] = $true
+        }
+    } else {
+        Write-TestStep "PASS: XML Schema Collections directory not created" -Type Success
+        $testResults['XmlSchemaCollections'] = $true
+    }
+
+    # Test 12: Assemblies should not be exported
     $asmDir = Join-Path $exportDir "13_Programmability/01_Assemblies"
     if (Test-Path $asmDir) {
         $asmFiles = Get-ChildItem $asmDir -Filter "*.sql" -ErrorAction SilentlyContinue
@@ -350,7 +366,7 @@ try {
         $testResults['Assemblies'] = $true
     }
 
-    # Test 12: FullTextSearch should not be exported
+    # Test 13: FullTextSearch should not be exported
     $ftsDir = Join-Path $exportDir "15_FullTextSearch"
     if (Test-Path $ftsDir) {
         $ftsFiles = Get-ChildItem $ftsDir -Filter "*.sql" -ErrorAction SilentlyContinue
@@ -366,7 +382,7 @@ try {
         $testResults['FullTextSearch'] = $true
     }
 
-    # Test 13: ExternalData should not be exported
+    # Test 14: ExternalData should not be exported
     $extDir = Join-Path $exportDir "16_ExternalData"
     if (Test-Path $extDir) {
         $extFiles = Get-ChildItem $extDir -Filter "*.sql" -ErrorAction SilentlyContinue
@@ -382,7 +398,7 @@ try {
         $testResults['ExternalData'] = $true
     }
 
-    # Test 14: SearchPropertyLists should not be exported
+    # Test 15: SearchPropertyLists should not be exported
     $splDir = Join-Path $exportDir "17_SearchPropertyLists"
     if (Test-Path $splDir) {
         $splFiles = Get-ChildItem $splDir -Filter "*.sql" -ErrorAction SilentlyContinue
@@ -398,7 +414,7 @@ try {
         $testResults['SearchPropertyLists'] = $true
     }
 
-    # Test 15: PlanGuides should not be exported
+    # Test 16: PlanGuides should not be exported
     $pgDir = Join-Path $exportDir "18_PlanGuides"
     if (Test-Path $pgDir) {
         $pgFiles = Get-ChildItem $pgDir -Filter "*.sql" -ErrorAction SilentlyContinue
@@ -414,7 +430,7 @@ try {
         $testResults['PlanGuides'] = $true
     }
 
-    # Test 16: Security objects should not be exported
+    # Test 17: Security objects should not be exported
     if (Test-Path $spDir) {
         $securityFiles = Get-ChildItem $spDir -Filter "*.sql" -ErrorAction SilentlyContinue | Where-Object {
             $_.Name -match '\.(asymmetrickey|certificate|symmetrickey|approle|role|user|auditspec)\.sql$'
@@ -431,7 +447,7 @@ try {
         $testResults['Security'] = $true
     }
     
-    # Test 17: Tables SHOULD be exported (not in exclusion list)
+    # Test 18: Tables SHOULD be exported (not in exclusion list)
     $tablesDir = Join-Path $exportDir "08_Tables_PrimaryKey"
     if (Test-Path $tablesDir) {
         $tableFiles = Get-ChildItem $tablesDir -Filter "*.sql" -ErrorAction SilentlyContinue
@@ -447,7 +463,7 @@ try {
         $testResults['Tables_Included'] = $false
     }
     
-    # Test 18: Schemas SHOULD be exported (not in exclusion list)
+    # Test 19: Schemas SHOULD be exported (not in exclusion list)
     $schemasDir = Join-Path $exportDir "02_Schemas"
     if (Test-Path $schemasDir) {
         $schemaFiles = Get-ChildItem $schemasDir -Filter "*.sql" -ErrorAction SilentlyContinue

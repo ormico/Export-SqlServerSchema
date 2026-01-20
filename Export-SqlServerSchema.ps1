@@ -109,7 +109,7 @@ try {
 }
 
 $script:LogFile = $null  # Will be set after output directory is created
-$script:VerboseOutput = ($VerbosePreference -eq 'Continue')  # Default is quiet; -Verbose shows per-object progress
+$script:VerboseOutput = $PSBoundParameters.ContainsKey('Verbose')  # Default is quiet; -Verbose shows per-object progress
 
 # Performance metrics tracking
 $script:Metrics = @{
@@ -186,11 +186,13 @@ function Write-ObjectProgress {
     
     $percentComplete = [math]::Round(($Current / $Total) * 100)
     
+    $labelPrefix = if ($script:CurrentProgressLabel) { "$($script:CurrentProgressLabel) " } else { '' }
+
     if ($script:VerboseOutput) {
         # Verbose mode - show every object with SUCCESS/FAILED status
         # Only print object name on initial call (no Success/Failed flag)
         if (-not $Success -and -not $Failed) {
-            Write-Host ("  [{0,3}%]{1}..." -f $percentComplete, $ObjectName)
+            Write-Host ("  [{0,3}%]{1}{2}..." -f $percentComplete, $labelPrefix, $ObjectName)
         } elseif ($Success) {
             Write-Host "        [SUCCESS]" -ForegroundColor Green
         } elseif ($Failed) {
@@ -205,14 +207,32 @@ function Write-ObjectProgress {
         $prevMilestone = if ($Current -gt 1) { [math]::Floor((($Current - 1) / $Total) * 100 / 10) * 10 } else { -1 }
         
         if ($Failed) {
-            # Always show failures
-            Write-Host ("  [{0,3}%]{1}..." -f $percentComplete, $ObjectName)
-            Write-Host "        [FAILED]" -ForegroundColor Red
+            # Always show failures with object context
+            Write-Host ("  [{0,3}%] FAILED {1}{2}" -f $percentComplete, $labelPrefix, $ObjectName) -ForegroundColor Red
         } elseif ($milestone -gt $prevMilestone -or $Current -eq $Total) {
             # Show at milestones (10%, 20%, etc.) and at completion
-            Write-Host ("  [{0,3}%] {1} of {2} completed..." -f $percentComplete, $Current, $Total)
+            Write-Host ("  [{0,3}%]" -f $percentComplete)
         }
     }
+}
+
+function Write-ProgressHeader {
+    <#
+    .SYNOPSIS
+        Writes a one-time progress header for a section and sets the progress label.
+    #>
+    param(
+        [string]$Label
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Label)) { return }
+
+    if ($script:LastProgressLabel -ne $Label) {
+        Write-Host "== $Label ==" -ForegroundColor Gray
+        $script:LastProgressLabel = $Label
+    }
+
+    $script:CurrentProgressLabel = $Label
 }
 
 function Save-PerformanceMetrics {
@@ -1185,6 +1205,7 @@ function Export-DatabaseObjects {
         $currentItem = 0
         $opts = New-ScriptingOptions -TargetVersion $TargetVersion
         $Scripter.Options = $opts
+        Write-ProgressHeader 'Schemas'
         
         foreach ($schema in $schemas) {
             $currentItem++
@@ -1211,6 +1232,7 @@ function Export-DatabaseObjects {
                 $failCount++
             }
         }
+        $script:CurrentProgressLabel = $null
             Write-Output "  [SUMMARY] Exported $successCount/$($schemas.Count) schema(s) successfully" + $(if ($failCount -gt 0) { " ($failCount failed)" } else { "" })
     }
     }
@@ -1229,12 +1251,12 @@ function Export-DatabaseObjects {
         $currentItem = 0
         $opts = New-ScriptingOptions -TargetVersion $TargetVersion
         $Scripter.Options = $opts
+        Write-ProgressHeader 'Sequences'
         
         foreach ($sequence in $sequences) {
             $currentItem++
-            $percentComplete = [math]::Round(($currentItem / $sequences.Count) * 100)
             try {
-                Write-Host ("  [{0,3}%]{1}.{2}..." -f $percentComplete, $sequence.Schema, $sequence.Name)
+                Write-ObjectProgress -ObjectName "$($sequence.Schema).$($sequence.Name)" -Current $currentItem -Total $sequences.Count
                 $safeSchema = Get-SafeFileName $sequence.Schema
                 $safeName = Get-SafeFileName $sequence.Name
                 $fileName = Join-Path $OutputDir '03_Sequences' "$safeSchema.$safeName.sql"
@@ -1248,14 +1270,15 @@ function Export-DatabaseObjects {
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
                 $sequence.Script($opts) | Out-Null
-                Write-Host "        [SUCCESS]" -ForegroundColor Green
+                Write-ObjectProgress -ObjectName "$($sequence.Schema).$($sequence.Name)" -Current $currentItem -Total $sequences.Count -Success
                 $successCount++
             } catch {
-                Write-Host "        [FAILED]" -ForegroundColor Red
+                Write-ObjectProgress -ObjectName "$($sequence.Schema).$($sequence.Name)" -Current $currentItem -Total $sequences.Count -Failed
                 Write-ExportError -ObjectType 'Sequence' -ObjectName "$($sequence.Schema).$($sequence.Name)" -ErrorRecord $_ -FilePath $fileName
                 $failCount++
             }
         }
+        $script:CurrentProgressLabel = $null
         Write-Output "  [SUMMARY] Exported $successCount/$($sequences.Count) sequence(s) successfully" + $(if ($failCount -gt 0) { " ($failCount failed)" } else { "" })
     }
     }
@@ -1274,25 +1297,26 @@ function Export-DatabaseObjects {
         $currentItem = 0
         $opts = New-ScriptingOptions -TargetVersion $TargetVersion
         $Scripter.Options = $opts
+        Write-ProgressHeader 'PartitionFunctions'
         
         foreach ($pf in $partitionFunctions) {
             $currentItem++
-            $percentComplete = [math]::Round(($currentItem / $partitionFunctions.Count) * 100)
             try {
-                Write-Host ("  [{0,3}%]{1}..." -f $percentComplete, $pf.Name)
+                Write-ObjectProgress -ObjectName $pf.Name -Current $currentItem -Total $partitionFunctions.Count
                 $fileName = Join-Path $OutputDir '04_PartitionFunctions' "$(Get-SafeFileName $($pf.Name)).sql"
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
                 $pf.Script($opts) | Out-Null
-                Write-Host "        [SUCCESS]" -ForegroundColor Green
+                Write-ObjectProgress -ObjectName $pf.Name -Current $currentItem -Total $partitionFunctions.Count -Success
                 $successCount++
             } catch {
-                Write-Host "        [FAILED]" -ForegroundColor Red
+                Write-ObjectProgress -ObjectName $pf.Name -Current $currentItem -Total $partitionFunctions.Count -Failed
                 Write-ExportError -ObjectType 'PartitionFunction' -ObjectName $pf.Name -ErrorRecord $_ -FilePath $fileName
                 $failCount++
             }
         }
+        $script:CurrentProgressLabel = $null
         Write-Output "  [SUMMARY] Exported $successCount/$($partitionFunctions.Count) partition function(s) successfully" + $(if ($failCount -gt 0) { " ($failCount failed)" } else { "" })
     }
     }
@@ -1311,25 +1335,26 @@ function Export-DatabaseObjects {
         $currentItem = 0
         $opts = New-ScriptingOptions -TargetVersion $TargetVersion
         $Scripter.Options = $opts
+        Write-ProgressHeader 'PartitionSchemes'
         
         foreach ($ps in $partitionSchemes) {
             $currentItem++
-            $percentComplete = [math]::Round(($currentItem / $partitionSchemes.Count) * 100)
             try {
-                Write-Host ("  [{0,3}%]{1}..." -f $percentComplete, $ps.Name)
+                Write-ObjectProgress -ObjectName $ps.Name -Current $currentItem -Total $partitionSchemes.Count
                 $fileName = Join-Path $OutputDir '05_PartitionSchemes' "$(Get-SafeFileName $($ps.Name)).sql"
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
                 $ps.Script($opts) | Out-Null
-                Write-Host "        [SUCCESS]" -ForegroundColor Green
+                Write-ObjectProgress -ObjectName $ps.Name -Current $currentItem -Total $partitionSchemes.Count -Success
                 $successCount++
             } catch {
-                Write-Host "        [FAILED]" -ForegroundColor Red
+                Write-ObjectProgress -ObjectName $ps.Name -Current $currentItem -Total $partitionSchemes.Count -Failed
                 Write-ExportError -ObjectType 'PartitionScheme' -ObjectName $ps.Name -ErrorRecord $_ -FilePath $fileName
                 $failCount++
             }
         }
+        $script:CurrentProgressLabel = $null
         Write-Output "  [SUMMARY] Exported $successCount/$($partitionSchemes.Count) partition scheme(s) successfully" + $(if ($failCount -gt 0) { " ($failCount failed)" } else { "" })
     }
     }
@@ -1341,9 +1366,21 @@ function Export-DatabaseObjects {
         Write-Host '  [SKIPPED] UserDefinedTypes excluded by configuration' -ForegroundColor Yellow
     } else {
     $allTypes = @()
-    $allTypes += @($Database.UserDefinedDataTypes | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) })
-    $allTypes += @($Database.UserDefinedTableTypes | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) })
-    $allTypes += @($Database.UserDefinedTypes | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) })
+    try {
+        $allTypes += @($Database.UserDefinedDataTypes | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) })
+    } catch {
+        Write-Output "  [INFO] Unable to enumerate UserDefinedDataTypes: $_"
+    }
+    try {
+        $allTypes += @($Database.UserDefinedTableTypes | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) })
+    } catch {
+        Write-Output "  [INFO] Unable to enumerate UserDefinedTableTypes: $_"
+    }
+    try {
+        $allTypes += @($Database.UserDefinedTypes | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) })
+    } catch {
+        Write-Output "  [INFO] Unable to enumerate UserDefinedTypes: $_"
+    }
     
     if ($allTypes.Count -gt 0) {
         Write-Output "  Found $($allTypes.Count) type(s) to export"
@@ -1352,28 +1389,29 @@ function Export-DatabaseObjects {
         $currentItem = 0
         $opts = New-ScriptingOptions -TargetVersion $TargetVersion
         $Scripter.Options = $opts
+        Write-ProgressHeader 'Types'
         
         foreach ($type in $allTypes) {
             $currentItem++
-            $percentComplete = [math]::Round(($currentItem / $allTypes.Count) * 100)
             try {
                 $typeName = if ($type.Schema) { "$($type.Schema).$($type.Name)" } else { $type.Name }
-                Write-Host ("  [{0,3}%]{1}..." -f $percentComplete, $typeName)
+                Write-ObjectProgress -ObjectName $typeName -Current $currentItem -Total $allTypes.Count
                 $safeTypeName = Get-SafeFileName $typeName
                 $fileName = Join-Path $OutputDir '06_Types' "$safeTypeName.sql"
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
                 $type.Script($opts) | Out-Null
-                Write-Host "        [SUCCESS]" -ForegroundColor Green
+                Write-ObjectProgress -ObjectName $typeName -Current $currentItem -Total $allTypes.Count -Success
                 $successCount++
             } catch {
-                Write-Host "        [FAILED]" -ForegroundColor Red
                 $typeName = if ($type.Schema) { "$($type.Schema).$($type.Name)" } else { $type.Name }
+                Write-ObjectProgress -ObjectName $typeName -Current $currentItem -Total $allTypes.Count -Failed
                 Write-ExportError -ObjectType 'UserDefinedType' -ObjectName $typeName -ErrorRecord $_ -FilePath $fileName
                 $failCount++
             }
         }
+        $script:CurrentProgressLabel = $null
         Write-Output "  [SUMMARY] Exported $successCount/$($allTypes.Count) type(s) successfully" + $(if ($failCount -gt 0) { " ($failCount failed)" } else { "" })
     }
     }
@@ -1384,7 +1422,12 @@ function Export-DatabaseObjects {
     if (Test-ObjectTypeExcluded -ObjectType 'XmlSchemaCollections') {
         Write-Host '  [SKIPPED] XmlSchemaCollections excluded by configuration' -ForegroundColor Yellow
     } else {
-    $xmlSchemaCollections = @($Database.XmlSchemaCollections | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) })
+    $xmlSchemaCollections = @()
+    try {
+        $xmlSchemaCollections = @($Database.XmlSchemaCollections | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) })
+    } catch {
+        Write-Output "  [INFO] Unable to enumerate XML schema collections: $_"
+    }
     if ($xmlSchemaCollections.Count -gt 0) {
         Write-Output "  Found $($xmlSchemaCollections.Count) XML schema collection(s) to export"
         $successCount = 0
@@ -1392,12 +1435,12 @@ function Export-DatabaseObjects {
         $currentItem = 0
         $opts = New-ScriptingOptions -TargetVersion $TargetVersion
         $Scripter.Options = $opts
+        Write-ProgressHeader 'XmlSchemaCollections'
         
         foreach ($xsc in $xmlSchemaCollections) {
             $currentItem++
-            $percentComplete = [math]::Round(($currentItem / $xmlSchemaCollections.Count) * 100)
             try {
-                Write-Host ("  [{0,3}%]{1}.{2}..." -f $percentComplete, $xsc.Schema, $xsc.Name)
+                Write-ObjectProgress -ObjectName "$($xsc.Schema).$($xsc.Name)" -Current $currentItem -Total $xmlSchemaCollections.Count
                 $safeSchema = Get-SafeFileName $xsc.Schema
                 $safeName = Get-SafeFileName $xsc.Name
                 $fileName = Join-Path $OutputDir '07_XmlSchemaCollections' "$safeSchema.$safeName.sql"
@@ -1405,14 +1448,15 @@ function Export-DatabaseObjects {
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
                 $xsc.Script($opts) | Out-Null
-                Write-Host "        [SUCCESS]" -ForegroundColor Green
+                Write-ObjectProgress -ObjectName "$($xsc.Schema).$($xsc.Name)" -Current $currentItem -Total $xmlSchemaCollections.Count -Success
                 $successCount++
             } catch {
-                Write-Host "        [FAILED]" -ForegroundColor Red
+                Write-ObjectProgress -ObjectName "$($xsc.Schema).$($xsc.Name)" -Current $currentItem -Total $xmlSchemaCollections.Count -Failed
                 Write-ExportError -ObjectType 'XmlSchemaCollection' -ObjectName "$($xsc.Schema).$($xsc.Name)" -ErrorRecord $_ -FilePath $fileName
                 $failCount++
             }
         }
+        $script:CurrentProgressLabel = $null
         Write-Output "  [SUMMARY] Exported $successCount/$($xmlSchemaCollections.Count) XML schema collection(s) successfully" + $(if ($failCount -gt 0) { " ($failCount failed)" } else { "" })
     }
     }
@@ -1443,6 +1487,7 @@ function Export-DatabaseObjects {
                 Triggers            = $false
             }
             $Scripter.Options = $opts
+            Write-ProgressHeader 'Tables'
             
             foreach ($table in $tables) {
                 $currentItem++
@@ -1462,6 +1507,7 @@ function Export-DatabaseObjects {
                     $failCount++
                 }
             }
+            $script:CurrentProgressLabel = $null
             Write-Output "  [SUMMARY] Exported $successCount/$($tables.Count) table(s) successfully" + $(if ($failCount -gt 0) { " ($failCount failed)" } else { "" })
             $functionMetrics.TotalObjects += $tables.Count
             $functionMetrics.SuccessCount += $successCount
@@ -1503,6 +1549,7 @@ function Export-DatabaseObjects {
                 DriForeignKeys    = $true
             }
             $Scripter.Options = $opts
+            Write-ProgressHeader 'ForeignKeys'
             
             foreach ($fk in $foreignKeys) {
                 $currentItem++
@@ -1522,6 +1569,7 @@ function Export-DatabaseObjects {
                     $failCount++
                 }
             }
+            $script:CurrentProgressLabel = $null
             Write-Output "  [SUMMARY] Exported $successCount/$($foreignKeys.Count) foreign key constraint(s) successfully" + $(if ($failCount -gt 0) { " ($failCount failed)" } else { "" })
             $functionMetrics.TotalObjects += $foreignKeys.Count
             $functionMetrics.SuccessCount += $successCount
@@ -1569,6 +1617,7 @@ function Export-DatabaseObjects {
                 DriUniqueKey    = $false
             }
             $Scripter.Options = $opts
+            Write-ProgressHeader 'Indexes'
             
             foreach ($index in $indexes) {
                 $currentItem++
@@ -1588,6 +1637,7 @@ function Export-DatabaseObjects {
                     $failCount++
                 }
             }
+            $script:CurrentProgressLabel = $null
             Write-Output "  [SUMMARY] Exported $successCount/$($indexes.Count) index(es) successfully" + $(if ($failCount -gt 0) { " ($failCount failed)" } else { "" })
             $functionMetrics.TotalObjects += $indexes.Count
             $functionMetrics.SuccessCount += $successCount
@@ -1611,25 +1661,26 @@ function Export-DatabaseObjects {
         $currentItem = 0
         $opts = New-ScriptingOptions -TargetVersion $TargetVersion
         $Scripter.Options = $opts
+        Write-ProgressHeader 'Defaults'
         
         foreach ($default in $defaults) {
             $currentItem++
-            $percentComplete = [math]::Round(($currentItem / $defaults.Count) * 100)
             try {
-                Write-Host ("  [{0,3}%]{1}.{2}..." -f $percentComplete, $default.Schema, $default.Name)
+                Write-ObjectProgress -ObjectName "$($default.Schema).$($default.Name)" -Current $currentItem -Total $defaults.Count
                 $fileName = Join-Path $OutputDir '11_Defaults' "$(Get-SafeFileName $($default.Schema)).$(Get-SafeFileName $($default.Name)).sql"
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
                 $default.Script($opts) | Out-Null
-                Write-Host "        [SUCCESS]" -ForegroundColor Green
+                Write-ObjectProgress -ObjectName "$($default.Schema).$($default.Name)" -Current $currentItem -Total $defaults.Count -Success
                 $successCount++
             } catch {
-                Write-Host "        [FAILED]" -ForegroundColor Red
+                Write-ObjectProgress -ObjectName "$($default.Schema).$($default.Name)" -Current $currentItem -Total $defaults.Count -Failed
                 Write-ExportError -ObjectType 'Default' -ObjectName "$($default.Schema).$($default.Name)" -ErrorRecord $_ -FilePath $fileName
                 $failCount++
             }
         }
+        $script:CurrentProgressLabel = $null
         Write-Output "  [SUMMARY] Exported $successCount/$($defaults.Count) default constraint(s) successfully" + $(if ($failCount -gt 0) { " ($failCount failed)" } else { "" })
     }
     }
@@ -1648,25 +1699,26 @@ function Export-DatabaseObjects {
         $currentItem = 0
         $opts = New-ScriptingOptions -TargetVersion $TargetVersion
         $Scripter.Options = $opts
+        Write-ProgressHeader 'Rules'
         
         foreach ($rule in $rules) {
             $currentItem++
-            $percentComplete = [math]::Round(($currentItem / $rules.Count) * 100)
             try {
-                Write-Host ("  [{0,3}%]{1}.{2}..." -f $percentComplete, $rule.Schema, $rule.Name)
+                Write-ObjectProgress -ObjectName "$($rule.Schema).$($rule.Name)" -Current $currentItem -Total $rules.Count
                 $fileName = Join-Path $OutputDir '12_Rules' "$(Get-SafeFileName $($rule.Schema)).$(Get-SafeFileName $($rule.Name)).sql"
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
                 $rule.Script($opts) | Out-Null
-                Write-Host "        [SUCCESS]" -ForegroundColor Green
+                Write-ObjectProgress -ObjectName "$($rule.Schema).$($rule.Name)" -Current $currentItem -Total $rules.Count -Success
                 $successCount++
             } catch {
-                Write-Host "        [FAILED]" -ForegroundColor Red
+                Write-ObjectProgress -ObjectName "$($rule.Schema).$($rule.Name)" -Current $currentItem -Total $rules.Count -Failed
                 Write-ExportError -ObjectType 'Rule' -ObjectName "$($rule.Schema).$($rule.Name)" -ErrorRecord $_ -FilePath $fileName
                 $failCount++
             }
         }
+        $script:CurrentProgressLabel = $null
         Write-Output "  [SUMMARY] Exported $successCount/$($rules.Count) rule(s) successfully" + $(if ($failCount -gt 0) { " ($failCount failed)" } else { "" })
     }
     }
@@ -1685,25 +1737,26 @@ function Export-DatabaseObjects {
         $currentItem = 0
         $opts = New-ScriptingOptions -TargetVersion $TargetVersion
         $Scripter.Options = $opts
+        Write-ProgressHeader 'Assemblies'
         
         foreach ($assembly in $assemblies) {
             $currentItem++
-            $percentComplete = [math]::Round(($currentItem / $assemblies.Count) * 100)
             try {
-                Write-Host ("  [{0,3}%]{1}..." -f $percentComplete, $assembly.Name)
+                Write-ObjectProgress -ObjectName $assembly.Name -Current $currentItem -Total $assemblies.Count
                 $fileName = Join-Path $OutputDir '13_Programmability/01_Assemblies' "$(Get-SafeFileName $($assembly.Name)).sql"
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
                 $assembly.Script($opts) | Out-Null
-                Write-Host "        [SUCCESS]" -ForegroundColor Green
+                Write-ObjectProgress -ObjectName $assembly.Name -Current $currentItem -Total $assemblies.Count -Success
                 $successCount++
             } catch {
-                Write-Host "        [FAILED]" -ForegroundColor Red
+                Write-ObjectProgress -ObjectName $assembly.Name -Current $currentItem -Total $assemblies.Count -Failed
                 Write-ExportError -ObjectType 'Assembly' -ObjectName $assembly.Name -ErrorRecord $_ -FilePath $fileName
                 $failCount++
             }
         }
+        $script:CurrentProgressLabel = $null
         Write-Output "  [SUMMARY] Exported $successCount/$($assemblies.Count) assembly(ies) successfully" + $(if ($failCount -gt 0) { " ($failCount failed)" } else { "" })
     }
     }
@@ -1725,6 +1778,7 @@ function Export-DatabaseObjects {
             Triggers    = $false
         }
         $Scripter.Options = $opts
+        Write-ProgressHeader 'Functions'
         
         foreach ($function in $functions) {
             $currentItem++
@@ -1744,6 +1798,7 @@ function Export-DatabaseObjects {
                 $failCount++
             }
         }
+        $script:CurrentProgressLabel = $null
         Write-Output "  [SUMMARY] Exported $successCount/$($functions.Count) function(s) successfully" + $(if ($failCount -gt 0) { " ($failCount failed)" } else { "" })
     }
     }
@@ -1762,25 +1817,26 @@ function Export-DatabaseObjects {
         $currentItem = 0
         $opts = New-ScriptingOptions -TargetVersion $TargetVersion
         $Scripter.Options = $opts
+        Write-ProgressHeader 'Aggregates'
         
         foreach ($aggregate in $aggregates) {
             $currentItem++
-            $percentComplete = [math]::Round(($currentItem / $aggregates.Count) * 100)
             try {
-                Write-Host ("  [{0,3}%]{1}.{2}..." -f $percentComplete, $aggregate.Schema, $aggregate.Name)
+                Write-ObjectProgress -ObjectName "$($aggregate.Schema).$($aggregate.Name)" -Current $currentItem -Total $aggregates.Count
                 $fileName = Join-Path $OutputDir '13_Programmability/02_Functions' "$($aggregate.Schema).$($aggregate.Name).aggregate.sql"
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
                 $aggregate.Script($opts) | Out-Null
-                Write-Host "        [SUCCESS]" -ForegroundColor Green
+                Write-ObjectProgress -ObjectName "$($aggregate.Schema).$($aggregate.Name)" -Current $currentItem -Total $aggregates.Count -Success
                 $successCount++
             } catch {
-                Write-Host "        [FAILED]" -ForegroundColor Red
+                Write-ObjectProgress -ObjectName "$($aggregate.Schema).$($aggregate.Name)" -Current $currentItem -Total $aggregates.Count -Failed
                 Write-ExportError -ObjectType 'Aggregate' -ObjectName "$($aggregate.Schema).$($aggregate.Name)" -ErrorRecord $_ -FilePath $fileName
                 $failCount++
             }
         }
+        $script:CurrentProgressLabel = $null
         Write-Output "  [SUMMARY] Exported $successCount/$($aggregates.Count) aggregate(s) successfully" + $(if ($failCount -gt 0) { " ($failCount failed)" } else { "" })
     }
     }
@@ -1805,6 +1861,7 @@ function Export-DatabaseObjects {
             Triggers = $false
         }
         $Scripter.Options = $opts
+        Write-ProgressHeader 'StoredProcedures'
         
         foreach ($proc in $storedProcs) {
             $currentItem++
@@ -1843,6 +1900,7 @@ function Export-DatabaseObjects {
                 $failCount++
             }
         }
+        $script:CurrentProgressLabel = $null
         Write-Output "  [SUMMARY] Exported $successCount/$totalProcs stored procedure(s) successfully" + $(if ($failCount -gt 0) { " ($failCount failed)" } else { "" })
         $functionMetrics.TotalObjects += $totalProcs
         $functionMetrics.SuccessCount += $successCount
@@ -1868,26 +1926,27 @@ function Export-DatabaseObjects {
             Triggers = $true
         }
         $Scripter.Options = $opts
+        Write-ProgressHeader 'DatabaseTriggers'
         
         foreach ($trigger in $dbTriggers) {
             $currentItem++
-            $percentComplete = [math]::Round(($currentItem / $dbTriggers.Count) * 100)
             try {
-                Write-Host ("  [{0,3}%]{1}..." -f $percentComplete, $trigger.Name)
+                Write-ObjectProgress -ObjectName $trigger.Name -Current $currentItem -Total $dbTriggers.Count
                 $safeName = Get-SafeFileName $trigger.Name
                 $fileName = Join-Path $OutputDir '13_Programmability/04_Triggers' "Database.$safeName.sql"
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
                 $trigger.Script($opts) | Out-Null
-                Write-Host "        [SUCCESS]" -ForegroundColor Green
+                Write-ObjectProgress -ObjectName $trigger.Name -Current $currentItem -Total $dbTriggers.Count -Success
                 $successCount++
             } catch {
-                Write-Host "        [FAILED]" -ForegroundColor Red
+                Write-ObjectProgress -ObjectName $trigger.Name -Current $currentItem -Total $dbTriggers.Count -Failed
                 Write-ExportError -ObjectType 'DatabaseTrigger' -ObjectName $trigger.Name -ErrorRecord $_ -FilePath $fileName
                 $failCount++
             }
         }
+        $script:CurrentProgressLabel = $null
         Write-Output "  [SUMMARY] Exported $successCount/$($dbTriggers.Count) database trigger(s) successfully" + $(if ($failCount -gt 0) { " ($failCount failed)" } else { "" })
     }
     }
@@ -1929,26 +1988,27 @@ function Export-DatabaseObjects {
             ScriptData       = $false
         }
         $Scripter.Options = $opts
+        Write-ProgressHeader 'TableTriggers'
         
         $currentItem = 0
         foreach ($trigger in $tableTriggers) {
             $currentItem++
-            $percentComplete = [math]::Round(($currentItem / $tableTriggers.Count) * 100)
             try {
-                Write-Host ("  [{0,3}%]{1}.{2}.{3}..." -f $percentComplete, $trigger.Parent.Schema, $trigger.Parent.Name, $trigger.Name)
+                Write-ObjectProgress -ObjectName "$($trigger.Parent.Schema).$($trigger.Parent.Name).$($trigger.Name)" -Current $currentItem -Total $tableTriggers.Count
                 $fileName = Join-Path $OutputDir '13_Programmability/04_Triggers' "$(Get-SafeFileName $($trigger.Parent.Schema)).$(Get-SafeFileName $($trigger.Parent.Name)).$(Get-SafeFileName $($trigger.Name)).sql"
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
                 $trigger.Script($opts) | Out-Null
-                Write-Host "        [SUCCESS]" -ForegroundColor Green
+                Write-ObjectProgress -ObjectName "$($trigger.Parent.Schema).$($trigger.Parent.Name).$($trigger.Name)" -Current $currentItem -Total $tableTriggers.Count -Success
                 $successCount++
             } catch {
-                Write-Host "        [FAILED]" -ForegroundColor Red
+                Write-ObjectProgress -ObjectName "$($trigger.Parent.Schema).$($trigger.Parent.Name).$($trigger.Name)" -Current $currentItem -Total $tableTriggers.Count -Failed
                 Write-ExportError -ObjectType 'TableTrigger' -ObjectName "$($trigger.Parent.Schema).$($trigger.Parent.Name).$($trigger.Name)" -ErrorRecord $_ -FilePath $fileName
                 $failCount++
             }
         }
+        $script:CurrentProgressLabel = $null
         Write-Output "  [SUMMARY] Exported $successCount/$($tableTriggers.Count) table trigger(s) successfully" + $(if ($failCount -gt 0) { " ($failCount failed)" } else { "" })
     }
     }
@@ -1966,6 +2026,7 @@ function Export-DatabaseObjects {
         $failCount = 0
         $opts = New-ScriptingOptions -TargetVersion $TargetVersion
         $Scripter.Options = $opts
+        Write-ProgressHeader 'Views'
         
         $currentItem = 0
         foreach ($view in $views) {
@@ -1986,6 +2047,7 @@ function Export-DatabaseObjects {
                 $failCount++
             }
         }
+        $script:CurrentProgressLabel = $null
         Write-Output "  [SUMMARY] Exported $successCount/$($views.Count) view(s) successfully" + $(if ($failCount -gt 0) { " ($failCount failed)" } else { "" })
     }
     }
@@ -2004,25 +2066,26 @@ function Export-DatabaseObjects {
         $currentItem = 0
         $opts = New-ScriptingOptions -TargetVersion $TargetVersion
         $Scripter.Options = $opts
+        Write-ProgressHeader 'Synonyms'
         
         foreach ($synonym in $synonyms) {
             $currentItem++
-            $percentComplete = [math]::Round(($currentItem / $synonyms.Count) * 100)
             try {
-                Write-Host ("  [{0,3}%]{1}.{2}..." -f $percentComplete, $synonym.Schema, $synonym.Name)
+                Write-ObjectProgress -ObjectName "$($synonym.Schema).$($synonym.Name)" -Current $currentItem -Total $synonyms.Count
                 $fileName = Join-Path $OutputDir '14_Synonyms' "$(Get-SafeFileName $($synonym.Schema)).$(Get-SafeFileName $($synonym.Name)).sql"
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
                 $synonym.Script($opts) | Out-Null
-                Write-Host "        [SUCCESS]" -ForegroundColor Green
+                Write-ObjectProgress -ObjectName "$($synonym.Schema).$($synonym.Name)" -Current $currentItem -Total $synonyms.Count -Success
                 $successCount++
             } catch {
-                Write-Host "        [FAILED]" -ForegroundColor Red
+                Write-ObjectProgress -ObjectName "$($synonym.Schema).$($synonym.Name)" -Current $currentItem -Total $synonyms.Count -Failed
                 Write-ExportError -ObjectType 'Synonym' -ObjectName "$($synonym.Schema).$($synonym.Name)" -ErrorRecord $_ -FilePath $fileName
                 $failCount++
             }
         }
+        $script:CurrentProgressLabel = $null
         Write-Output "  [SUMMARY] Exported $successCount/$($synonyms.Count) synonym(s) successfully" + $(if ($failCount -gt 0) { " ($failCount failed)" } else { "" })
     }
     }
@@ -2043,25 +2106,26 @@ function Export-DatabaseObjects {
         $currentItem = 0
         $opts = New-ScriptingOptions -TargetVersion $TargetVersion
         $Scripter.Options = $opts
+        Write-ProgressHeader 'FullTextCatalogs'
         
         foreach ($ftc in $ftCatalogs) {
             $currentItem++
-            $percentComplete = [math]::Round(($currentItem / $ftCatalogs.Count) * 100)
             try {
-                Write-Host ("  [{0,3}%]{1}..." -f $percentComplete, $ftc.Name)
+                Write-ObjectProgress -ObjectName $ftc.Name -Current $currentItem -Total $ftCatalogs.Count
                 $fileName = Join-Path $OutputDir '15_FullTextSearch' "$($ftc.Name).catalog.sql"
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
                 $ftc.Script($opts) | Out-Null
-                Write-Host "        [SUCCESS]" -ForegroundColor Green
+                Write-ObjectProgress -ObjectName $ftc.Name -Current $currentItem -Total $ftCatalogs.Count -Success
                 $successCount++
             } catch {
-                Write-Host "        [FAILED]" -ForegroundColor Red
+                Write-ObjectProgress -ObjectName $ftc.Name -Current $currentItem -Total $ftCatalogs.Count -Failed
                 Write-ExportError -ObjectType 'FullTextCatalog' -ObjectName $ftc.Name -ErrorRecord $_ -FilePath $fileName
                 $failCount++
             }
         }
+        $script:CurrentProgressLabel = $null
         Write-Output "  [SUMMARY] Exported $successCount/$($ftCatalogs.Count) full-text catalog(s) successfully" + $(if ($failCount -gt 0) { " ($failCount failed)" } else { "" })
     }
     
@@ -2072,25 +2136,26 @@ function Export-DatabaseObjects {
         $currentItem = 0
         $opts = New-ScriptingOptions -TargetVersion $TargetVersion
         $Scripter.Options = $opts
+        Write-ProgressHeader 'FullTextStopLists'
         
         foreach ($ftsl in $ftStopLists) {
             $currentItem++
-            $percentComplete = [math]::Round(($currentItem / $ftStopLists.Count) * 100)
             try {
-                Write-Host ("  [{0,3}%]{1}..." -f $percentComplete, $ftsl.Name)
+                Write-ObjectProgress -ObjectName $ftsl.Name -Current $currentItem -Total $ftStopLists.Count
                 $fileName = Join-Path $OutputDir '15_FullTextSearch' "$($ftsl.Name).stoplist.sql"
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
                 $ftsl.Script($opts) | Out-Null
-                Write-Host "        [SUCCESS]" -ForegroundColor Green
+                Write-ObjectProgress -ObjectName $ftsl.Name -Current $currentItem -Total $ftStopLists.Count -Success
                 $successCount++
             } catch {
-                Write-Host "        [FAILED]" -ForegroundColor Red
+                Write-ObjectProgress -ObjectName $ftsl.Name -Current $currentItem -Total $ftStopLists.Count -Failed
                 Write-ExportError -ObjectType 'FullTextStopList' -ObjectName $ftsl.Name -ErrorRecord $_ -FilePath $fileName
                 $failCount++
             }
         }
+        $script:CurrentProgressLabel = $null
         Write-Output "  [SUMMARY] Exported $successCount/$($ftStopLists.Count) full-text stop list(s) successfully" + $(if ($failCount -gt 0) { " ($failCount failed)" } else { "" })
     }
     }
@@ -2118,25 +2183,26 @@ function Export-DatabaseObjects {
             $currentItem = 0
             $opts = New-ScriptingOptions -TargetVersion $TargetVersion
             $Scripter.Options = $opts
+            Write-ProgressHeader 'ExternalDataSources'
             
             foreach ($eds in $externalDataSources) {
                 $currentItem++
-                $percentComplete = [math]::Round(($currentItem / $externalDataSources.Count) * 100)
                 try {
-                    Write-Host ("  [{0,3}%]{1}..." -f $percentComplete, $eds.Name)
+                    Write-ObjectProgress -ObjectName $eds.Name -Current $currentItem -Total $externalDataSources.Count
                     $fileName = Join-Path $OutputDir '16_ExternalData' "$($eds.Name).datasource.sql"
                 Ensure-DirectoryExists $fileName
                     $opts.FileName = $fileName
                     $Scripter.Options = $opts
                     $eds.Script($opts) | Out-Null
-                    Write-Host "        [SUCCESS]" -ForegroundColor Green
+                    Write-ObjectProgress -ObjectName $eds.Name -Current $currentItem -Total $externalDataSources.Count -Success
                     $successCount++
                 } catch {
-                    Write-Host "        [FAILED]" -ForegroundColor Red
+                    Write-ObjectProgress -ObjectName $eds.Name -Current $currentItem -Total $externalDataSources.Count -Failed
                     Write-ExportError -ObjectType 'ExternalDataSource' -ObjectName $eds.Name -ErrorRecord $_ -FilePath $fileName
                     $failCount++
                 }
             }
+            $script:CurrentProgressLabel = $null
             Write-Output "  [SUMMARY] Exported $successCount/$($externalDataSources.Count) external data source(s) successfully" + $(if ($failCount -gt 0) { " ($failCount failed)" } else { "" })
             Write-Output "  [INFO] External data sources contain environment-specific connection strings"
         }
@@ -2148,25 +2214,26 @@ function Export-DatabaseObjects {
             $currentItem = 0
             $opts = New-ScriptingOptions -TargetVersion $TargetVersion
             $Scripter.Options = $opts
+            Write-ProgressHeader 'ExternalFileFormats'
             
             foreach ($eff in $externalFileFormats) {
                 $currentItem++
-                $percentComplete = [math]::Round(($currentItem / $externalFileFormats.Count) * 100)
                 try {
-                    Write-Host ("  [{0,3}%]{1}..." -f $percentComplete, $eff.Name)
+                    Write-ObjectProgress -ObjectName $eff.Name -Current $currentItem -Total $externalFileFormats.Count
                     $fileName = Join-Path $OutputDir '16_ExternalData' "$($eff.Name).fileformat.sql"
                 Ensure-DirectoryExists $fileName
                     $opts.FileName = $fileName
                     $Scripter.Options = $opts
                     $eff.Script($opts) | Out-Null
-                    Write-Host "        [SUCCESS]" -ForegroundColor Green
+                    Write-ObjectProgress -ObjectName $eff.Name -Current $currentItem -Total $externalFileFormats.Count -Success
                     $successCount++
                 } catch {
-                    Write-Host "        [FAILED]" -ForegroundColor Red
+                    Write-ObjectProgress -ObjectName $eff.Name -Current $currentItem -Total $externalFileFormats.Count -Failed
                     Write-ExportError -ObjectType 'ExternalFileFormat' -ObjectName $eff.Name -ErrorRecord $_ -FilePath $fileName
                     $failCount++
                 }
             }
+            $script:CurrentProgressLabel = $null
             Write-Output "  [SUMMARY] Exported $successCount/$($externalFileFormats.Count) external file format(s) successfully" + $(if ($failCount -gt 0) { " ($failCount failed)" } else { "" })
         }
         
@@ -2196,25 +2263,26 @@ function Export-DatabaseObjects {
             $currentItem = 0
             $opts = New-ScriptingOptions -TargetVersion $TargetVersion
             $Scripter.Options = $opts
+            Write-ProgressHeader 'SearchPropertyLists'
             
             foreach ($spl in $searchPropertyLists) {
                 $currentItem++
-                $percentComplete = [math]::Round(($currentItem / $searchPropertyLists.Count) * 100)
                 try {
-                    Write-Host ("  [{0,3}%]{1}..." -f $percentComplete, $spl.Name)
+                    Write-ObjectProgress -ObjectName $spl.Name -Current $currentItem -Total $searchPropertyLists.Count
                     $fileName = Join-Path $OutputDir '17_SearchPropertyLists' "$(Get-SafeFileName $($spl.Name)).sql"
                 Ensure-DirectoryExists $fileName
                     $opts.FileName = $fileName
                     $Scripter.Options = $opts
                     $spl.Script($opts) | Out-Null
-                    Write-Host "        [SUCCESS]" -ForegroundColor Green
+                    Write-ObjectProgress -ObjectName $spl.Name -Current $currentItem -Total $searchPropertyLists.Count -Success
                     $successCount++
                 } catch {
-                    Write-Host "        [FAILED]" -ForegroundColor Red
+                    Write-ObjectProgress -ObjectName $spl.Name -Current $currentItem -Total $searchPropertyLists.Count -Failed
                     Write-ExportError -ObjectType 'SearchPropertyList' -ObjectName $spl.Name -ErrorRecord $_ -FilePath $fileName
                     $failCount++
                 }
             }
+            $script:CurrentProgressLabel = $null
             Write-Output "  [SUMMARY] Exported $successCount/$($searchPropertyLists.Count) search property list(s) successfully" + $(if ($failCount -gt 0) { " ($failCount failed)" } else { "" })
         } else {
             Write-Output "  [INFO] No search property lists found"
@@ -2239,25 +2307,26 @@ function Export-DatabaseObjects {
             $currentItem = 0
             $opts = New-ScriptingOptions -TargetVersion $TargetVersion
             $Scripter.Options = $opts
+            Write-ProgressHeader 'PlanGuides'
             
             foreach ($pg in $planGuides) {
                 $currentItem++
-                $percentComplete = [math]::Round(($currentItem / $planGuides.Count) * 100)
                 try {
-                    Write-Host ("  [{0,3}%]{1}..." -f $percentComplete, $pg.Name)
+                    Write-ObjectProgress -ObjectName $pg.Name -Current $currentItem -Total $planGuides.Count
                     $fileName = Join-Path $OutputDir '18_PlanGuides' "$(Get-SafeFileName $($pg.Name)).sql"
                 Ensure-DirectoryExists $fileName
                     $opts.FileName = $fileName
                     $Scripter.Options = $opts
                     $pg.Script($opts) | Out-Null
-                    Write-Host "        [SUCCESS]" -ForegroundColor Green
+                    Write-ObjectProgress -ObjectName $pg.Name -Current $currentItem -Total $planGuides.Count -Success
                     $successCount++
                 } catch {
-                    Write-Host "        [FAILED]" -ForegroundColor Red
+                    Write-ObjectProgress -ObjectName $pg.Name -Current $currentItem -Total $planGuides.Count -Failed
                     Write-ExportError -ObjectType 'PlanGuide' -ObjectName $pg.Name -ErrorRecord $_ -FilePath $fileName
                     $failCount++
                 }
             }
+            $script:CurrentProgressLabel = $null
             Write-Output "  [SUMMARY] Exported $successCount/$($planGuides.Count) plan guide(s) successfully" + $(if ($failCount -gt 0) { " ($failCount failed)" } else { "" })
             Write-Output "  [INFO] Plan guides may need adjustment for target environment query patterns"
         } else {
@@ -2289,25 +2358,26 @@ function Export-DatabaseObjects {
         $currentItem = 0
         $opts = New-ScriptingOptions -TargetVersion $TargetVersion
         $Scripter.Options = $opts
+        Write-ProgressHeader 'AsymmetricKeys'
         
         foreach ($key in $asymmetricKeys) {
             $currentItem++
-            $percentComplete = [math]::Round(($currentItem / $asymmetricKeys.Count) * 100)
             try {
-                Write-Host ("  [{0,3}%]{1}..." -f $percentComplete, $key.Name)
+                Write-ObjectProgress -ObjectName $key.Name -Current $currentItem -Total $asymmetricKeys.Count
                 $fileName = Join-Path $OutputDir '19_Security' "$($key.Name).asymmetrickey.sql"
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
                 $key.Script($opts) | Out-Null
-                Write-Host "        [SUCCESS]" -ForegroundColor Green
+                Write-ObjectProgress -ObjectName $key.Name -Current $currentItem -Total $asymmetricKeys.Count -Success
                 $successCount++
             } catch {
-                Write-Host "        [FAILED]" -ForegroundColor Red
+                Write-ObjectProgress -ObjectName $key.Name -Current $currentItem -Total $asymmetricKeys.Count -Failed
                 Write-ExportError -ObjectType 'AsymmetricKey' -ObjectName $key.Name -ErrorRecord $_ -FilePath $fileName
                 $failCount++
             }
         }
+        $script:CurrentProgressLabel = $null
         Write-Output "  [SUMMARY] Exported $successCount/$($asymmetricKeys.Count) asymmetric key(s) successfully" + $(if ($failCount -gt 0) { " ($failCount failed)" } else { "" })
     }
     
@@ -2318,25 +2388,26 @@ function Export-DatabaseObjects {
         $currentItem = 0
         $opts = New-ScriptingOptions -TargetVersion $TargetVersion
         $Scripter.Options = $opts
+        Write-ProgressHeader 'Certificates'
         
         foreach ($cert in $certs) {
             $currentItem++
-            $percentComplete = [math]::Round(($currentItem / $certs.Count) * 100)
             try {
-                Write-Host ("  [{0,3}%]{1}..." -f $percentComplete, $cert.Name)
+                Write-ObjectProgress -ObjectName $cert.Name -Current $currentItem -Total $certs.Count
                 $fileName = Join-Path $OutputDir '19_Security' "$($cert.Name).certificate.sql"
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
                 $cert.Script($opts) | Out-Null
-                Write-Host "        [SUCCESS]" -ForegroundColor Green
+                Write-ObjectProgress -ObjectName $cert.Name -Current $currentItem -Total $certs.Count -Success
                 $successCount++
             } catch {
-                Write-Host "        [FAILED]" -ForegroundColor Red
+                Write-ObjectProgress -ObjectName $cert.Name -Current $currentItem -Total $certs.Count -Failed
                 Write-ExportError -ObjectType 'Certificate' -ObjectName $cert.Name -ErrorRecord $_ -FilePath $fileName
                 $failCount++
             }
         }
+        $script:CurrentProgressLabel = $null
         Write-Output "  [SUMMARY] Exported $successCount/$($certs.Count) certificate(s) successfully" + $(if ($failCount -gt 0) { " ($failCount failed)" } else { "" })
     }
     
@@ -2347,25 +2418,26 @@ function Export-DatabaseObjects {
         $currentItem = 0
         $opts = New-ScriptingOptions -TargetVersion $TargetVersion
         $Scripter.Options = $opts
+        Write-ProgressHeader 'SymmetricKeys'
         
         foreach ($key in $symKeys) {
             $currentItem++
-            $percentComplete = [math]::Round(($currentItem / $symKeys.Count) * 100)
             try {
-                Write-Host ("  [{0,3}%]{1}..." -f $percentComplete, $key.Name)
+                Write-ObjectProgress -ObjectName $key.Name -Current $currentItem -Total $symKeys.Count
                 $fileName = Join-Path $OutputDir '19_Security' "$($key.Name).symmetrickey.sql"
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
                 $key.Script($opts) | Out-Null
-                Write-Host "        [SUCCESS]" -ForegroundColor Green
+                Write-ObjectProgress -ObjectName $key.Name -Current $currentItem -Total $symKeys.Count -Success
                 $successCount++
             } catch {
-                Write-Host "        [FAILED]" -ForegroundColor Red
+                Write-ObjectProgress -ObjectName $key.Name -Current $currentItem -Total $symKeys.Count -Failed
                 Write-ExportError -ObjectType 'SymmetricKey' -ObjectName $key.Name -ErrorRecord $_ -FilePath $fileName
                 $failCount++
             }
         }
+        $script:CurrentProgressLabel = $null
         Write-Output "  [SUMMARY] Exported $successCount/$($symKeys.Count) symmetric key(s) successfully" + $(if ($failCount -gt 0) { " ($failCount failed)" } else { "" })
     }
     
@@ -2376,25 +2448,26 @@ function Export-DatabaseObjects {
         $currentItem = 0
         $opts = New-ScriptingOptions -TargetVersion $TargetVersion
         $Scripter.Options = $opts
+        Write-ProgressHeader 'ApplicationRoles'
         
         foreach ($role in $appRoles) {
             $currentItem++
-            $percentComplete = [math]::Round(($currentItem / $appRoles.Count) * 100)
             try {
-                Write-Host ("  [{0,3}%]{1}..." -f $percentComplete, $role.Name)
+                Write-ObjectProgress -ObjectName $role.Name -Current $currentItem -Total $appRoles.Count
                 $fileName = Join-Path $OutputDir '19_Security' "$($role.Name).approle.sql"
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
                 $role.Script($opts) | Out-Null
-                Write-Host "        [SUCCESS]" -ForegroundColor Green
+                Write-ObjectProgress -ObjectName $role.Name -Current $currentItem -Total $appRoles.Count -Success
                 $successCount++
             } catch {
-                Write-Host "        [FAILED]" -ForegroundColor Red
+                Write-ObjectProgress -ObjectName $role.Name -Current $currentItem -Total $appRoles.Count -Failed
                 Write-ExportError -ObjectType 'ApplicationRole' -ObjectName $role.Name -ErrorRecord $_ -FilePath $fileName
                 $failCount++
             }
         }
+        $script:CurrentProgressLabel = $null
         Write-Output "  [SUMMARY] Exported $successCount/$($appRoles.Count) application role(s) successfully" + $(if ($failCount -gt 0) { " ($failCount failed)" } else { "" })
     }
     
@@ -2404,26 +2477,27 @@ function Export-DatabaseObjects {
         $failCount = 0
         $opts = New-ScriptingOptions -TargetVersion $TargetVersion
         $Scripter.Options = $opts
+        Write-ProgressHeader 'DatabaseRoles'
         
         $currentItem = 0
         foreach ($role in $dbRoles) {
             $currentItem++
-            $percentComplete = [math]::Round(($currentItem / $dbRoles.Count) * 100)
             try {
-                Write-Host ("  [{0,3}%]{1}..." -f $percentComplete, $role.Name)
+                Write-ObjectProgress -ObjectName $role.Name -Current $currentItem -Total $dbRoles.Count
                 $fileName = Join-Path $OutputDir '19_Security' "$($role.Name).role.sql"
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
                 $role.Script($opts) | Out-Null
-                Write-Host "        [SUCCESS]" -ForegroundColor Green
+                Write-ObjectProgress -ObjectName $role.Name -Current $currentItem -Total $dbRoles.Count -Success
                 $successCount++
             } catch {
-                Write-Host "        [FAILED]" -ForegroundColor Red
+                Write-ObjectProgress -ObjectName $role.Name -Current $currentItem -Total $dbRoles.Count -Failed
                 Write-ExportError -ObjectType 'DatabaseRole' -ObjectName $role.Name -ErrorRecord $_ -FilePath $fileName
                 $failCount++
             }
         }
+        $script:CurrentProgressLabel = $null
         Write-Output "  [SUMMARY] Exported $successCount/$($dbRoles.Count) database role(s) successfully" + $(if ($failCount -gt 0) { " ($failCount failed)" } else { "" })
     }
     
@@ -2434,25 +2508,26 @@ function Export-DatabaseObjects {
         $currentItem = 0
         $opts = New-ScriptingOptions -TargetVersion $TargetVersion
         $Scripter.Options = $opts
+        Write-ProgressHeader 'DatabaseUsers'
         
         foreach ($user in $dbUsers) {
             $currentItem++
-            $percentComplete = [math]::Round(($currentItem / $dbUsers.Count) * 100)
             try {
-                Write-Host ("  [{0,3}%]{1}..." -f $percentComplete, $user.Name)
+                Write-ObjectProgress -ObjectName $user.Name -Current $currentItem -Total $dbUsers.Count
                 $fileName = Join-Path $OutputDir '19_Security' "$($user.Name).user.sql"
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
                 $user.Script($opts) | Out-Null
-                Write-Host "        [SUCCESS]" -ForegroundColor Green
+                Write-ObjectProgress -ObjectName $user.Name -Current $currentItem -Total $dbUsers.Count -Success
                 $successCount++
             } catch {
-                Write-Host "        [FAILED]" -ForegroundColor Red
+                Write-ObjectProgress -ObjectName $user.Name -Current $currentItem -Total $dbUsers.Count -Failed
                 Write-ExportError -ObjectType 'DatabaseUser' -ObjectName $user.Name -ErrorRecord $_ -FilePath $fileName
                 $failCount++
             }
         }
+        $script:CurrentProgressLabel = $null
         Write-Output "  [SUMMARY] Exported $successCount/$($dbUsers.Count) database user(s) successfully" + $(if ($failCount -gt 0) { " ($failCount failed)" } else { "" })
     }
     
@@ -2462,26 +2537,27 @@ function Export-DatabaseObjects {
         $failCount = 0
         $opts = New-ScriptingOptions -TargetVersion $TargetVersion
         $Scripter.Options = $opts
+        Write-ProgressHeader 'AuditSpecifications'
         
         $currentItem = 0
         foreach ($spec in $auditSpecs) {
             $currentItem++
-            $percentComplete = [math]::Round(($currentItem / $auditSpecs.Count) * 100)
             try {
-                Write-Host ("  [{0,3}%]{1}..." -f $percentComplete, $spec.Name)
+                Write-ObjectProgress -ObjectName $spec.Name -Current $currentItem -Total $auditSpecs.Count
                 $fileName = Join-Path $OutputDir '19_Security' "$($spec.Name).auditspec.sql"
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
                 $spec.Script($opts) | Out-Null
-                Write-Host "        [SUCCESS]" -ForegroundColor Green
+                Write-ObjectProgress -ObjectName $spec.Name -Current $currentItem -Total $auditSpecs.Count -Success
                 $successCount++
             } catch {
-                Write-Host "        [FAILED]" -ForegroundColor Red
+                Write-ObjectProgress -ObjectName $spec.Name -Current $currentItem -Total $auditSpecs.Count -Failed
                 Write-ExportError -ObjectType 'DatabaseAuditSpecification' -ObjectName $spec.Name -ErrorRecord $_ -FilePath $fileName
                 $failCount++
             }
         }
+        $script:CurrentProgressLabel = $null
         Write-Output "  [SUMMARY] Exported $successCount/$($auditSpecs.Count) database audit specification(s) successfully" + $(if ($failCount -gt 0) { " ($failCount failed)" } else { "" })
     }
     }
@@ -2500,13 +2576,13 @@ function Export-DatabaseObjects {
             $failCount = 0
             $opts = New-ScriptingOptions -TargetVersion $TargetVersion
             $Scripter.Options = $opts
+            Write-ProgressHeader 'SecurityPolicies'
             
             $currentItem = 0
             foreach ($policy in $securityPolicies) {
                 $currentItem++
-                $percentComplete = [math]::Round(($currentItem / $securityPolicies.Count) * 100)
                 try {
-                    Write-Host ("  [{0,3}%]{1}.{2}..." -f $percentComplete, $policy.Schema, $policy.Name)
+                    Write-ObjectProgress -ObjectName "$($policy.Schema).$($policy.Name)" -Current $currentItem -Total $securityPolicies.Count
                     $fileName = Join-Path $OutputDir '19_Security' "$($policy.Schema).$($policy.Name).securitypolicy.sql"
                 Ensure-DirectoryExists $fileName
                     
@@ -2521,14 +2597,15 @@ function Export-DatabaseObjects {
                     [void]$policyScript.AppendLine("GO")
                     
                     $policyScript.ToString() | Out-File -FilePath $fileName -Encoding UTF8
-                    Write-Host "        [SUCCESS]" -ForegroundColor Green
+                    Write-ObjectProgress -ObjectName "$($policy.Schema).$($policy.Name)" -Current $currentItem -Total $securityPolicies.Count -Success
                     $successCount++
                 } catch {
-                    Write-Host "        [FAILED]" -ForegroundColor Red
+                    Write-ObjectProgress -ObjectName "$($policy.Schema).$($policy.Name)" -Current $currentItem -Total $securityPolicies.Count -Failed
                     Write-ExportError -ObjectType 'SecurityPolicy' -ObjectName "$($policy.Schema).$($policy.Name)" -ErrorRecord $_ -FilePath $fileName
                     $failCount++
                 }
             }
+            $script:CurrentProgressLabel = $null
             Write-Output "  [SUMMARY] Exported $successCount/$($securityPolicies.Count) security policy(ies) successfully" + $(if ($failCount -gt 0) { " ($failCount failed)" } else { "" })
             Write-Output "  [INFO] Row-Level Security policies require predicate functions to exist first"
         } else {
@@ -2614,6 +2691,7 @@ GROUP BY s.name, t.name
     $emptyCount = 0
     
     $currentItem = 0
+    Write-ProgressHeader 'TableData'
     foreach ($table in $tables) {
         $currentItem++
         $percentComplete = [math]::Round(($currentItem / $tables.Count) * 100)
@@ -2640,6 +2718,7 @@ GROUP BY s.name, t.name
             $failCount++
         }
     }
+    $script:CurrentProgressLabel = $null
     
     Write-Output "  [SUMMARY] Exported data from $successCount/$($tables.Count) table(s) successfully"
     if ($emptyCount -gt 0) {
