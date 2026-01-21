@@ -989,40 +989,40 @@ function Get-ScriptFiles {
     
     # Database Configuration - skip in Dev mode unless explicitly enabled
     if ($modeSettings.includeConfigurations) {
-        $orderedDirs += '01_DatabaseConfiguration'
+        $orderedDirs += '02_DatabaseConfiguration'
     }
     
     # Core schema objects - always included
     $orderedDirs += @(
-        '02_Schemas',
-        '03_Sequences',
-        '04_PartitionFunctions',
-        '05_PartitionSchemes',
-        '06_Types',
-        '07_XmlSchemaCollections',
-        '08_Tables_PrimaryKey',
-        '09_Tables_ForeignKeys',
-        '10_Indexes',
-        '11_Defaults',
-        '12_Rules',
-        '13_Programmability',
-        '14_Synonyms',
-        '15_FullTextSearch'
+        '03_Schemas',
+        '04_Sequences',
+        '05_PartitionFunctions',
+        '06_PartitionSchemes',
+        '07_Types',
+        '08_XmlSchemaCollections',
+        '09_Tables_PrimaryKey',
+        '10_Tables_ForeignKeys',
+        '11_Indexes',
+        '12_Defaults',
+        '13_Rules',
+        '14_Programmability',
+        '15_Synonyms',
+        '16_FullTextSearch'
     )
     
     # External Data - skip in Dev mode unless explicitly enabled
     if ($modeSettings.includeExternalData) {
-        $orderedDirs += '16_ExternalData'
+        $orderedDirs += '17_ExternalData'
     }
     
     # Search Property Lists and Plan Guides - always included (harmless)
     $orderedDirs += @(
-        '17_SearchPropertyLists',
-        '18_PlanGuides'
+        '18_SearchPropertyLists',
+        '19_PlanGuides'
     )
     
     # Security - always include keys/certs/roles/users
-    $orderedDirs += '19_Security'
+    $orderedDirs += '01_Security'
     
     # Data - only if requested
     Write-Verbose "Get-ScriptFiles: IncludeData parameter = $IncludeData"
@@ -1040,7 +1040,7 @@ function Get-ScriptFiles {
         $fullPath = Join-Path $Path $dir
         if (Test-Path $fullPath) {
             # Special handling for Security folder - may need to skip RLS policies
-            if ($dir -eq '19_Security' -and -not $modeSettings.enableSecurityPolicies) {
+            if ($dir -eq '01_Security' -and -not $modeSettings.enableSecurityPolicies) {
                 # Get all security scripts except SecurityPolicies
                 $securityScripts = Get-ChildItem -Path $fullPath -Filter '*.sql' -Recurse | 
                     Where-Object { $_.Name -notmatch 'SecurityPolicies' } |
@@ -1058,7 +1058,7 @@ function Get-ScriptFiles {
     }
     
     # Track skipped folders for reporting
-    $allPossibleDirs = @('00_FileGroups', '01_DatabaseConfiguration', '16_ExternalData', '20_Data')
+    $allPossibleDirs = @('00_FileGroups', '02_DatabaseConfiguration', '17_ExternalData', '20_Data')
     foreach ($dir in $allPossibleDirs) {
         if ($dir -notin $orderedDirs) {
             $fullPath = Join-Path $Path $dir
@@ -1680,8 +1680,8 @@ try {
         foreach ($folder in $skippedFolders) {
             $reason = switch ($folder) {
                 '00_FileGroups' { 'FileGroups (environment-specific)' }
-                '01_DatabaseConfiguration' { 'Database Scoped Configurations (environment-specific)' }
-                '16_ExternalData' { 'External Data Sources (environment-specific)' }
+                '02_DatabaseConfiguration' { 'Database Scoped Configurations (environment-specific)' }
+                '17_ExternalData' { 'External Data Sources (environment-specific)' }
                 '20_Data' { 'Data not requested' }
                 default { $folder }
             }
@@ -1934,8 +1934,8 @@ try {
         foreach ($folder in $skippedFolders) {
             $reason = switch ($folder) {
                 '00_FileGroups' { 'FileGroups (environment-specific, skipped in Dev mode)' }
-                '01_DatabaseConfiguration' { 'Database Configurations (hardware-specific, skipped in Dev mode)' }
-                '16_ExternalData' { 'External Data Sources (environment-specific, skipped in Dev mode)' }
+                '02_DatabaseConfiguration' { 'Database Configurations (hardware-specific, skipped in Dev mode)' }
+                '17_ExternalData' { 'External Data Sources (environment-specific, skipped in Dev mode)' }
                 '20_Data' { 'Data not requested via -IncludeData flag' }
                 default { $folder }
             }
@@ -1955,33 +1955,33 @@ try {
     }
     
     # Check if DB Configurations were in source but skipped
-    $sourceDbConfigPath = Join-Path $SourcePath '01_DatabaseConfiguration'
-    if ((Test-Path $sourceDbConfigPath) -and ('01_DatabaseConfiguration' -in $skippedFolders)) {
+    $sourceDbConfigPath = Join-Path $SourcePath '02_DatabaseConfiguration'
+    if ((Test-Path $sourceDbConfigPath) -and ('02_DatabaseConfiguration' -in $skippedFolders)) {
         $manualActions += "[INFO] Database Scoped Configurations were exported but not imported (Dev mode)"
         $manualActions += "  Use -ImportMode Prod to import configurations (review settings first)"
     }
     
     # Check if External Data was in source but skipped
-    $sourceExtDataPath = Join-Path $SourcePath '16_ExternalData'
-    if ((Test-Path $sourceExtDataPath) -and ('16_ExternalData' -in $skippedFolders)) {
+    $sourceExtDataPath = Join-Path $SourcePath '17_ExternalData'
+    if ((Test-Path $sourceExtDataPath) -and ('17_ExternalData' -in $skippedFolders)) {
         $manualActions += "[INFO] External Data Sources were exported but not imported (Dev mode)"
         $manualActions += "  Use -ImportMode Prod to import external data (review connection strings first)"
     }
     
     # Check for Database Scoped Credentials (never imported, always manual)
-    $sourceCredsPath = Join-Path $SourcePath '01_DatabaseConfiguration' '002_DatabaseScopedCredentials.sql'
+    $sourceCredsPath = Join-Path $SourcePath '02_DatabaseConfiguration' '002_DatabaseScopedCredentials.sql'
     if (Test-Path $sourceCredsPath) {
         $credsContent = Get-Content $sourceCredsPath -Raw
         if ($credsContent -match 'CREATE DATABASE SCOPED CREDENTIAL') {
             $manualActions += "[ACTION REQUIRED] Database Scoped Credentials"
-            $manualActions += "  Location: Source\01_DatabaseConfiguration\002_DatabaseScopedCredentials.sql"
+            $manualActions += "  Location: Source\\02_DatabaseConfiguration\002_DatabaseScopedCredentials.sql"
             $manualActions += "  Action: Manually create credentials with appropriate secrets on target server"
             $manualActions += "  Note: Credentials cannot be scripted with secrets - must be manually configured"
         }
     }
     
     # Check for RLS policies
-    $sourceRlsPath = Join-Path $SourcePath '19_Security' '008_SecurityPolicies.sql'
+    $sourceRlsPath = Join-Path $SourcePath '01_Security' '008_SecurityPolicies.sql'
     if (Test-Path $sourceRlsPath) {
         $rlsContent = Get-Content $sourceRlsPath -Raw
         if ($rlsContent -match 'CREATE SECURITY POLICY') {
