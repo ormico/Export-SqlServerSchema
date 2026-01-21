@@ -138,7 +138,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.5.0] - 2026-01-21
 
-Re-ordered Security roles for dependency ordering.
+Re-ordered the Security export folder to run first in dependency order: moved `19_Security` to `01_Security` so security objects (roles, users, certificates) are created before schemas and other objects that require permissions; all remaining export folders were renumbered accordingly.
 
 Expanded performance test database.
 
