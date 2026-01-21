@@ -1224,7 +1224,7 @@ function Export-DatabaseObjects {
                 
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
-                $schema.Script($opts) | Out-Null
+                $Scripter.EnumScript($schema) | Out-Null
                 Write-ObjectProgress -ObjectName $schema.Name -Current $currentItem -Total $schemas.Count -Success
                 $successCount++
             } catch {
@@ -1270,7 +1270,7 @@ function Export-DatabaseObjects {
                 
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
-                $sequence.Script($opts) | Out-Null
+                $Scripter.EnumScript($sequence) | Out-Null
                 Write-ObjectProgress -ObjectName "$($sequence.Schema).$($sequence.Name)" -Current $currentItem -Total $sequences.Count -Success
                 $successCount++
             } catch {
@@ -1308,7 +1308,7 @@ function Export-DatabaseObjects {
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
-                $pf.Script($opts) | Out-Null
+                $Scripter.EnumScript($pf) | Out-Null
                 Write-ObjectProgress -ObjectName $pf.Name -Current $currentItem -Total $partitionFunctions.Count -Success
                 $successCount++
             } catch {
@@ -1346,7 +1346,7 @@ function Export-DatabaseObjects {
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
-                $ps.Script($opts) | Out-Null
+                $Scripter.EnumScript($ps) | Out-Null
                 Write-ObjectProgress -ObjectName $ps.Name -Current $currentItem -Total $partitionSchemes.Count -Success
                 $successCount++
             } catch {
@@ -1402,7 +1402,7 @@ function Export-DatabaseObjects {
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
-                $type.Script($opts) | Out-Null
+                $Scripter.EnumScript($type) | Out-Null
                 Write-ObjectProgress -ObjectName $typeName -Current $currentItem -Total $allTypes.Count -Success
                 $successCount++
             } catch {
@@ -1448,7 +1448,7 @@ function Export-DatabaseObjects {
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
-                $xsc.Script($opts) | Out-Null
+                $Scripter.EnumScript($xsc) | Out-Null
                 Write-ObjectProgress -ObjectName "$($xsc.Schema).$($xsc.Name)" -Current $currentItem -Total $xmlSchemaCollections.Count -Success
                 $successCount++
             } catch {
@@ -1499,7 +1499,7 @@ function Export-DatabaseObjects {
                     Ensure-DirectoryExists $fileName
                     $opts.FileName = $fileName
                     $Scripter.Options = $opts
-                    $table.Script($opts) | Out-Null
+                    $Scripter.EnumScript($table) | Out-Null
                     Write-ObjectProgress -ObjectName "$($table.Schema).$($table.Name)" -Current $currentItem -Total $tables.Count -Success
                     $successCount++
                 } catch {
@@ -1561,7 +1561,7 @@ function Export-DatabaseObjects {
                     Ensure-DirectoryExists $fileName
                     $opts.FileName = $fileName
                     $Scripter.Options = $opts
-                    $fk.Script($opts) | Out-Null
+                    $Scripter.EnumScript($fk) | Out-Null
                     Write-ObjectProgress -ObjectName "$($fk.Parent.Schema).$($fk.Parent.Name).$($fk.Name)" -Current $currentItem -Total $foreignKeys.Count -Success
                     $successCount++
                 } catch {
@@ -1629,7 +1629,7 @@ function Export-DatabaseObjects {
                     Ensure-DirectoryExists $fileName
                     $opts.FileName = $fileName
                     $Scripter.Options = $opts
-                    $index.Script($opts) | Out-Null
+                    $Scripter.EnumScript($index) | Out-Null
                     Write-ObjectProgress -ObjectName "$($index.Parent.Schema).$($index.Parent.Name).$($index.Name)" -Current $currentItem -Total $indexes.Count -Success
                     $successCount++
                 } catch {
@@ -1672,7 +1672,7 @@ function Export-DatabaseObjects {
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
-                $default.Script($opts) | Out-Null
+                $Scripter.EnumScript($default) | Out-Null
                 Write-ObjectProgress -ObjectName "$($default.Schema).$($default.Name)" -Current $currentItem -Total $defaults.Count -Success
                 $successCount++
             } catch {
@@ -1710,7 +1710,7 @@ function Export-DatabaseObjects {
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
-                $rule.Script($opts) | Out-Null
+                $Scripter.EnumScript($rule) | Out-Null
                 Write-ObjectProgress -ObjectName "$($rule.Schema).$($rule.Name)" -Current $currentItem -Total $rules.Count -Success
                 $successCount++
             } catch {
@@ -1748,7 +1748,7 @@ function Export-DatabaseObjects {
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
-                $assembly.Script($opts) | Out-Null
+                $Scripter.EnumScript($assembly) | Out-Null
                 Write-ObjectProgress -ObjectName $assembly.Name -Current $currentItem -Total $assemblies.Count -Success
                 $successCount++
             } catch {
@@ -1790,7 +1790,7 @@ function Export-DatabaseObjects {
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
-                $function.Script($opts) | Out-Null
+                $Scripter.EnumScript($function) | Out-Null
                 Write-ObjectProgress -ObjectName "$($function.Schema).$($function.Name)" -Current $currentItem -Total $functions.Count -Success
                 $successCount++
             } catch {
@@ -1828,7 +1828,7 @@ function Export-DatabaseObjects {
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
-                $aggregate.Script($opts) | Out-Null
+                $Scripter.EnumScript($aggregate) | Out-Null
                 Write-ObjectProgress -ObjectName "$($aggregate.Schema).$($aggregate.Name)" -Current $currentItem -Total $aggregates.Count -Success
                 $successCount++
             } catch {
@@ -1873,7 +1873,7 @@ function Export-DatabaseObjects {
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
-                $proc.Script($opts) | Out-Null
+                $Scripter.EnumScript($proc) | Out-Null
                 Write-ObjectProgress -ObjectName "$($proc.Schema).$($proc.Name)" -Current $currentItem -Total $totalProcs -Success
                 $successCount++
             } catch {
@@ -1892,7 +1892,7 @@ function Export-DatabaseObjects {
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
-                $extProc.Script($opts) | Out-Null
+                $Scripter.EnumScript($extProc) | Out-Null
                 Write-ObjectProgress -ObjectName "$($extProc.Schema).$($extProc.Name)" -Current $currentItem -Total $totalProcs -Success
                 $successCount++
             } catch {
@@ -1938,7 +1938,7 @@ function Export-DatabaseObjects {
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
-                $trigger.Script($opts) | Out-Null
+                $Scripter.EnumScript($trigger) | Out-Null
                 Write-ObjectProgress -ObjectName $trigger.Name -Current $currentItem -Total $dbTriggers.Count -Success
                 $successCount++
             } catch {
@@ -2000,7 +2000,7 @@ function Export-DatabaseObjects {
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
-                $trigger.Script($opts) | Out-Null
+                $Scripter.EnumScript($trigger) | Out-Null
                 Write-ObjectProgress -ObjectName "$($trigger.Parent.Schema).$($trigger.Parent.Name).$($trigger.Name)" -Current $currentItem -Total $tableTriggers.Count -Success
                 $successCount++
             } catch {
@@ -2039,7 +2039,7 @@ function Export-DatabaseObjects {
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
-                $view.Script($opts) | Out-Null
+                $Scripter.EnumScript($view) | Out-Null
                 Write-ObjectProgress -ObjectName "$($view.Schema).$($view.Name)" -Current $currentItem -Total $views.Count -Success
                 $successCount++
             } catch {
@@ -2077,7 +2077,7 @@ function Export-DatabaseObjects {
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
-                $synonym.Script($opts) | Out-Null
+                $Scripter.EnumScript($synonym) | Out-Null
                 Write-ObjectProgress -ObjectName "$($synonym.Schema).$($synonym.Name)" -Current $currentItem -Total $synonyms.Count -Success
                 $successCount++
             } catch {
@@ -2117,7 +2117,7 @@ function Export-DatabaseObjects {
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
-                $ftc.Script($opts) | Out-Null
+                $Scripter.EnumScript($ftc) | Out-Null
                 Write-ObjectProgress -ObjectName $ftc.Name -Current $currentItem -Total $ftCatalogs.Count -Success
                 $successCount++
             } catch {
@@ -2147,7 +2147,7 @@ function Export-DatabaseObjects {
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
-                $ftsl.Script($opts) | Out-Null
+                $Scripter.EnumScript($ftsl) | Out-Null
                 Write-ObjectProgress -ObjectName $ftsl.Name -Current $currentItem -Total $ftStopLists.Count -Success
                 $successCount++
             } catch {
@@ -2194,7 +2194,7 @@ function Export-DatabaseObjects {
                 Ensure-DirectoryExists $fileName
                     $opts.FileName = $fileName
                     $Scripter.Options = $opts
-                    $eds.Script($opts) | Out-Null
+                    $Scripter.EnumScript($eds) | Out-Null
                     Write-ObjectProgress -ObjectName $eds.Name -Current $currentItem -Total $externalDataSources.Count -Success
                     $successCount++
                 } catch {
@@ -2225,7 +2225,7 @@ function Export-DatabaseObjects {
                 Ensure-DirectoryExists $fileName
                     $opts.FileName = $fileName
                     $Scripter.Options = $opts
-                    $eff.Script($opts) | Out-Null
+                    $Scripter.EnumScript($eff) | Out-Null
                     Write-ObjectProgress -ObjectName $eff.Name -Current $currentItem -Total $externalFileFormats.Count -Success
                     $successCount++
                 } catch {
@@ -2274,7 +2274,7 @@ function Export-DatabaseObjects {
                 Ensure-DirectoryExists $fileName
                     $opts.FileName = $fileName
                     $Scripter.Options = $opts
-                    $spl.Script($opts) | Out-Null
+                    $Scripter.EnumScript($spl) | Out-Null
                     Write-ObjectProgress -ObjectName $spl.Name -Current $currentItem -Total $searchPropertyLists.Count -Success
                     $successCount++
                 } catch {
@@ -2318,7 +2318,7 @@ function Export-DatabaseObjects {
                 Ensure-DirectoryExists $fileName
                     $opts.FileName = $fileName
                     $Scripter.Options = $opts
-                    $pg.Script($opts) | Out-Null
+                    $Scripter.EnumScript($pg) | Out-Null
                     Write-ObjectProgress -ObjectName $pg.Name -Current $currentItem -Total $planGuides.Count -Success
                     $successCount++
                 } catch {
@@ -2369,7 +2369,7 @@ function Export-DatabaseObjects {
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
-                $key.Script($opts) | Out-Null
+                $Scripter.EnumScript($key) | Out-Null
                 Write-ObjectProgress -ObjectName $key.Name -Current $currentItem -Total $asymmetricKeys.Count -Success
                 $successCount++
             } catch {
@@ -2399,7 +2399,7 @@ function Export-DatabaseObjects {
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
-                $cert.Script($opts) | Out-Null
+                $Scripter.EnumScript($cert) | Out-Null
                 Write-ObjectProgress -ObjectName $cert.Name -Current $currentItem -Total $certs.Count -Success
                 $successCount++
             } catch {
@@ -2429,7 +2429,7 @@ function Export-DatabaseObjects {
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
-                $key.Script($opts) | Out-Null
+                $Scripter.EnumScript($key) | Out-Null
                 Write-ObjectProgress -ObjectName $key.Name -Current $currentItem -Total $symKeys.Count -Success
                 $successCount++
             } catch {
@@ -2459,7 +2459,7 @@ function Export-DatabaseObjects {
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
-                $role.Script($opts) | Out-Null
+                $Scripter.EnumScript($role) | Out-Null
                 Write-ObjectProgress -ObjectName $role.Name -Current $currentItem -Total $appRoles.Count -Success
                 $successCount++
             } catch {
@@ -2489,7 +2489,7 @@ function Export-DatabaseObjects {
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
-                $role.Script($opts) | Out-Null
+                $Scripter.EnumScript($role) | Out-Null
                 Write-ObjectProgress -ObjectName $role.Name -Current $currentItem -Total $dbRoles.Count -Success
                 $successCount++
             } catch {
@@ -2519,7 +2519,7 @@ function Export-DatabaseObjects {
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
-                $user.Script($opts) | Out-Null
+                $Scripter.EnumScript($user) | Out-Null
                 Write-ObjectProgress -ObjectName $user.Name -Current $currentItem -Total $dbUsers.Count -Success
                 $successCount++
             } catch {
@@ -2549,7 +2549,7 @@ function Export-DatabaseObjects {
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
-                $spec.Script($opts) | Out-Null
+                $Scripter.EnumScript($spec) | Out-Null
                 Write-ObjectProgress -ObjectName $spec.Name -Current $currentItem -Total $auditSpecs.Count -Success
                 $successCount++
             } catch {
