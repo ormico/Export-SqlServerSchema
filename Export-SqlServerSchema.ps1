@@ -697,7 +697,8 @@ function Initialize-OutputDirectory {
         '17_ExternalData',
         '18_SearchPropertyLists',
         '19_PlanGuides',
-        '20_Data'
+        '20_SecurityPolicies',
+        '21_Data'
     )
     
     if (-not (Test-Path $exportDir)) {
@@ -2583,7 +2584,7 @@ function Export-DatabaseObjects {
                 $currentItem++
                 try {
                     Write-ObjectProgress -ObjectName "$($policy.Schema).$($policy.Name)" -Current $currentItem -Total $securityPolicies.Count
-                    $fileName = Join-Path $OutputDir '01_Security' "$($policy.Schema).$($policy.Name).securitypolicy.sql"
+                    $fileName = Join-Path $OutputDir '20_SecurityPolicies' "$($policy.Schema).$($policy.Name).securitypolicy.sql"
                 Ensure-DirectoryExists $fileName
                     
                     # Create file with header
@@ -2762,7 +2763,7 @@ function New-DeploymentManifest {
     [void]$sb.AppendLine("Scripts must be applied in the following order to ensure all dependencies are satisfied:")
     [void]$sb.AppendLine("")
     [void]$sb.AppendLine("0. 00_FileGroups - Create filegroups (review paths for target environment)")
-    [void]$sb.AppendLine("1. 01_Security - Create security objects (keys, certificates, roles, users, audit, Row-Level Security)")
+    [void]$sb.AppendLine("1. 01_Security - Create security objects (keys, certificates, roles, users, audit)")
     [void]$sb.AppendLine("2. 02_DatabaseConfiguration - Apply database scoped configurations (review hardware-specific settings)")
     [void]$sb.AppendLine("3. 03_Schemas - Create database schemas")
     [void]$sb.AppendLine("4. 04_Sequences - Create sequences")
@@ -2781,7 +2782,8 @@ function New-DeploymentManifest {
     [void]$sb.AppendLine("17. 17_ExternalData - Create external data sources and file formats (review connection strings)")
     [void]$sb.AppendLine("18. 18_SearchPropertyLists - Create search property lists")
     [void]$sb.AppendLine("19. 19_PlanGuides - Create plan guides")
-    [void]$sb.AppendLine("20. 20_Data - Load data")
+    [void]$sb.AppendLine("20. 20_SecurityPolicies - Create Row-Level Security policies (requires schemas and predicate functions)")
+    [void]$sb.AppendLine("21. 21_Data - Load data")
     [void]$sb.AppendLine("")
     [void]$sb.AppendLine("## Important Notes")
     [void]$sb.AppendLine("")
@@ -2923,12 +2925,12 @@ function Show-ExportSummary {
     }
     
     # Check for Security Policies (RLS)
-    $rlsPath = Join-Path $OutputDir '01_Security' '008_SecurityPolicies.sql'
+    $rlsPath = Join-Path $OutputDir '20_SecurityPolicies' '001_SecurityPolicies.sql'
     if (Test-Path $rlsPath) {
         $rlsContent = Get-Content $rlsPath -Raw
         if ($rlsContent -match 'CREATE SECURITY POLICY') {
             $manualActions += "[INFO] Row-Level Security Policies"
-            $manualActions += "  Location: 01_Security\008_SecurityPolicies.sql"
+            $manualActions += "  Location: 20_SecurityPolicies\001_SecurityPolicies.sql"
             $manualActions += "  Note: Ensure predicate functions are deployed before applying RLS policies"
         }
     }

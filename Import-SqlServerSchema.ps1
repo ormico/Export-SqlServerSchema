@@ -1024,13 +1024,18 @@ function Get-ScriptFiles {
         '19_PlanGuides'
     )
     
+    # Security Policies - only in Prod mode
+    if ($modeSettings.enableSecurityPolicies) {
+        $orderedDirs += '20_SecurityPolicies'
+    }
+    
     # Data - only if requested
     Write-Verbose "Get-ScriptFiles: IncludeData parameter = $IncludeData"
     if ($IncludeData) {
-        $orderedDirs += '20_Data'
-        Write-Verbose "Added 20_Data to ordered directories"
+        $orderedDirs += '21_Data'
+        Write-Verbose "Added 21_Data to ordered directories"
     } else {
-        Write-Verbose "Skipping 20_Data (IncludeData=$IncludeData)"
+        Write-Verbose "Skipping 21_Data (IncludeData=$IncludeData)"
     }
     
     $scripts = @()
@@ -1039,26 +1044,19 @@ function Get-ScriptFiles {
     foreach ($dir in $orderedDirs) {
         $fullPath = Join-Path $Path $dir
         if (Test-Path $fullPath) {
-            # Special handling for Security folder - may need to skip RLS policies
-            if ($dir -eq '01_Security' -and -not $modeSettings.enableSecurityPolicies) {
-                # Get all security scripts except SecurityPolicies
-                $securityScripts = Get-ChildItem -Path $fullPath -Filter '*.sql' -Recurse | 
-                    Where-Object { $_.Name -notmatch 'SecurityPolicies' } |
-                    Sort-Object FullName
-                $scripts += @($securityScripts)
-                
-                if ((Get-ChildItem -Path $fullPath -Filter '*SecurityPolicies.sql' -ErrorAction SilentlyContinue).Count -gt 0) {
-                    Write-Output "  [INFO] Skipping Row-Level Security policies (disabled in $Mode mode)"
-                }
-            } else {
-                $scripts += @(Get-ChildItem -Path $fullPath -Filter '*.sql' -Recurse | 
-                    Sort-Object FullName)
+            # Special handling for SecurityPolicies folder - may need to skip in Dev mode
+            if ($dir -eq '20_SecurityPolicies' -and -not $modeSettings.enableSecurityPolicies) {
+                Write-Output "  [INFO] Skipping Row-Level Security policies (disabled in $Mode mode)"
+                continue
             }
+            
+            $scripts += @(Get-ChildItem -Path $fullPath -Filter '*.sql' -Recurse | 
+                Sort-Object FullName)
         }
     }
     
     # Track skipped folders for reporting
-    $allPossibleDirs = @('00_FileGroups', '02_DatabaseConfiguration', '17_ExternalData', '20_Data')
+    $allPossibleDirs = @('00_FileGroups', '02_DatabaseConfiguration', '17_ExternalData', '20_SecurityPolicies', '21_Data')
     foreach ($dir in $allPossibleDirs) {
         if ($dir -notin $orderedDirs) {
             $fullPath = Join-Path $Path $dir
@@ -1682,7 +1680,7 @@ try {
                 '00_FileGroups' { 'FileGroups (environment-specific)' }
                 '02_DatabaseConfiguration' { 'Database Scoped Configurations (environment-specific)' }
                 '17_ExternalData' { 'External Data Sources (environment-specific)' }
-                '20_Data' { 'Data not requested' }
+                '21_Data' { 'Data not requested' }
                 default { $folder }
             }
             Write-Output "  - $reason"
@@ -1936,7 +1934,7 @@ try {
                 '00_FileGroups' { 'FileGroups (environment-specific, skipped in Dev mode)' }
                 '02_DatabaseConfiguration' { 'Database Configurations (hardware-specific, skipped in Dev mode)' }
                 '17_ExternalData' { 'External Data Sources (environment-specific, skipped in Dev mode)' }
-                '20_Data' { 'Data not requested via -IncludeData flag' }
+                '21_Data' { 'Data not requested via -IncludeData flag' }
                 default { $folder }
             }
             Write-Output "  - $reason"
@@ -1980,26 +1978,31 @@ try {
         }
     }
     
-    # Check for RLS policies
-    $sourceRlsPath = Join-Path $SourcePath '01_Security' '008_SecurityPolicies.sql'
+    # Check for RLS policies in the new location
+    $sourceRlsPath = Join-Path $SourcePath '20_SecurityPolicies'
+    $hasRlsPolicies = $false
     if (Test-Path $sourceRlsPath) {
-        $rlsContent = Get-Content $sourceRlsPath -Raw
-        if ($rlsContent -match 'CREATE SECURITY POLICY') {
-            $modeSettings = if ($ImportMode -eq 'Dev') {
-                if ($config.import -and $config.import.developerMode) {
-                    $config.import.developerMode
-                } else {
-                    @{ enableSecurityPolicies = $false }
-                }
+        $rlsFiles = Get-ChildItem -Path $sourceRlsPath -Filter '*.sql' -ErrorAction SilentlyContinue
+        if ($rlsFiles.Count -gt 0) {
+            $hasRlsPolicies = $true
+        }
+    }
+    
+    if ($hasRlsPolicies) {
+        $modeSettings = if ($ImportMode -eq 'Dev') {
+            if ($config.import -and $config.import.developerMode) {
+                $config.import.developerMode
             } else {
-                @{ enableSecurityPolicies = $true }
+                @{ enableSecurityPolicies = $false }
             }
+        } else {
+            @{ enableSecurityPolicies = $true }
+        }
             
-            if (-not $modeSettings.enableSecurityPolicies) {
-                $manualActions += "[INFO] Row-Level Security Policies were exported but not imported ($ImportMode mode)"
-                $manualActions += "  RLS policies are disabled in Dev mode by default to simplify testing"
-                $manualActions += "  Use -ImportMode Prod or configure enableSecurityPolicies = true in config file"
-            }
+        if (-not $modeSettings.enableSecurityPolicies) {
+            $manualActions += "[INFO] Row-Level Security Policies were exported but not imported ($ImportMode mode)"
+            $manualActions += "  RLS policies are disabled in Dev mode by default to simplify testing"
+            $manualActions += "  Use -ImportMode Prod or configure enableSecurityPolicies = true in config file"
         }
     }
     
