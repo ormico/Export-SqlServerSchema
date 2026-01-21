@@ -12,7 +12,7 @@ Write-Host "========================================" -ForegroundColor Cyan
 Write-Host ""
 
 # Check if SQL file exists
-$sqlFile = "create-perf-test-db.sql"
+$sqlFile = "create-perf-test-db-simplified.sql"
 if (-not (Test-Path $sqlFile)) {
     Write-Host "[ERROR] File not found: $sqlFile" -ForegroundColor Red
     exit 1
@@ -30,7 +30,7 @@ $content = Get-Content $sqlFile -Raw
 
 # Count different object creations
 $counts = @{
-    'Schemas (WHILE .* <= 100)' = ([regex]::Matches($content, 'WHILE @\w+ <= 100', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)).Count
+    'Schemas (WHILE .* <= 10)' = ([regex]::Matches($content, 'WHILE @\w+ <= 10', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)).Count
     'Tables (WHILE .* <= 50)' = ([regex]::Matches($content, 'WHILE @tableNum <= 50', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)).Count
     'CREATE OR ALTER PROCEDURE' = ([regex]::Matches($content, 'CREATE OR ALTER PROCEDURE', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)).Count
     'CREATE OR ALTER VIEW' = ([regex]::Matches($content, 'CREATE OR ALTER VIEW', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)).Count
@@ -58,13 +58,12 @@ Write-Host ""
 Write-Host "Documentation Checks:" -ForegroundColor Cyan
 
 $docChecks = @{
-    '100 schemas' = $content -match '100 schemas'
-    '5000 tables' = $content -match '5000 tables'
-    '5000 stored procedures' = $content -match '5000 stored procedures'
-    '2000 views' = $content -match '2000 views'
-    '1000 triggers' = $content -match '1000 triggers'
-    '500 synonyms' = $content -match '500 synonyms'
-    '5,000,000 rows' = $content -match '5,000,000'
+    '10 schemas' = $content -match '10 schemas'
+    '500 tables' = $content -match '500 tables'
+    '500 stored procedures' = $content -match '500 stored procedures'
+    '100 views' = $content -match '100 views'
+    '100 functions' = $content -match '100 scalar functions'
+    '50,000 rows' = $content -match '50,000'
 }
 
 foreach ($check in $docChecks.Keys | Sort-Object) {
@@ -102,7 +101,7 @@ Write-Host ""
 Write-Host "To test with SQL Server:" -ForegroundColor Cyan
 Write-Host "  1. Start SQL Server: docker-compose up -d" -ForegroundColor Gray
 Write-Host "  2. Create database: CREATE DATABASE PerfTestDb" -ForegroundColor Gray
-Write-Host "  3. Run script: sqlcmd -i create-perf-test-db.sql" -ForegroundColor Gray
+Write-Host "  3. Run script: sqlcmd -i create-perf-test-db-simplified.sql" -ForegroundColor Gray
 Write-Host ""
 Write-Host "Expected runtime: typically under 2 minutes on a developer machine" -ForegroundColor Yellow
 Write-Host "Expected objects: ~1,300 database objects (schemas, tables, procedures, views, functions, indexes)" -ForegroundColor Yellow

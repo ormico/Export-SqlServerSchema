@@ -1,86 +1,63 @@
 # Performance Test Database Enhancement - Summary
 
-## Issue Resolution
+## Overview
 
-This PR addresses the issue "Increase size of performance test database" by scaling up the performance test database by **100x** to enable meaningful performance measurements.
+This document describes the simplified performance test database used for testing Export-SqlServerSchema and Import-SqlServerSchema scripts.
 
 ## Changes Summary
 
-### Files Modified
-1. **tests/create-perf-test-db.sql** - Enhanced from 288 lines to 819 lines (+617 lines, -82 lines)
-2. **tests/PERFORMANCE_TEST_DATABASE.md** - New comprehensive documentation (267 lines)
-3. **tests/validate-perf-test-syntax.ps1** - New validation script (114 lines)
-4. **tests/quick-check-perf-test.ps1** - New quick check script (112 lines)
+### Files
+1. **tests/create-perf-test-db-simplified.sql** - Simplified performance test database (500 tables, 50K rows)
+2. **tests/PERFORMANCE_TEST_DATABASE.md** - Comprehensive documentation
+3. **tests/validate-perf-test-syntax.ps1** - SQL syntax validation script
+4. **tests/quick-check-perf-test.ps1** - Structure validation script
+5. **tests/run-perf-test.ps1** - Automated performance test runner
 
-**Total changes**: +1,110 lines, -82 lines
+## Database Scale
 
-## Database Scale Increase
+| Object Type | Count | Notes |
+|------------|-------|-------|
+| **Schemas** | 10 | Schema1 through Schema10 |
+| **Tables** | 500 | 50 per schema with 100 rows each |
+| **Indexes** | 2,000 | 4 per table (PK, unique, non-clustered, filtered) |
+| **Stored Procedures** | 500 | SELECT with filtering and aggregation |
+| **Views** | 100 | Aggregation views with GROUP BY |
+| **Scalar Functions** | 100 | Simple calculation functions |
+| **Data Rows** | 50,000 | 100 rows per table |
 
-| Object Type | Original | Enhanced | Multiplier |
-|------------|----------|----------|------------|
-| **Schemas** | 10 | 100 | 10x |
-| **Tables** | 50 | 5,000 | 100x |
-| **Indexes** | 100 | 15,000 | 150x |
-| **Stored Procedures** | 50 | 5,000 | 100x |
-| **Views** | 20 | 2,000 | 100x |
-| **Scalar Functions** | 20 | 2,000 | 100x |
-| **Table-Valued Functions** | 10 | 1,000 | 100x |
-| **Triggers** | 0 | 1,000 | NEW |
-| **Synonyms** | 0 | 500 | NEW |
-| **User-Defined Types** | 0 | 200 | NEW |
-| **Database Roles** | 0 | 10 | NEW |
-| **Database Users** | 0 | 20 | NEW |
-| **Data Rows** | 50,000 | 5,000,000 | 100x |
-
-**Total Objects**: ~16,000+ database objects (was ~200)
-**Total Data Volume**: 5 million rows (was 50,000)
+**Total Objects**: ~3,200 database objects
+**Total Data Volume**: 50,000 rows
+**Creation Time**: 20-30 seconds
 
 ## Key Features
 
-### 1. Enhanced Table Structure
-Each of the 5,000 tables includes:
+### 1. Table Structure
+Each of the 500 tables includes:
 - Primary key with identity column
 - Unique index on Code column
 - Non-clustered index on Status with included columns
-- Filtered index for active records
-- 16 columns including realistic business data
+- Filtered index for active records (WHERE IsActive = 1)
+- 11 columns including realistic business data
 
-### 2. Diverse Object Types
-**Stored Procedures** (5 patterns):
-- SELECT with filtering
-- Aggregation with GROUP BY
-- UPDATE with auditing
-- INSERT with identity return
-- Complex queries with CTEs and window functions
+### 2. Object Types
+**Stored Procedures**:
+- SELECT with optional status/category filtering
+- Simple aggregation with GROUP BY
 
-**Views** (4 patterns):
-- Aggregation views
-- Filtered views
-- Calculated column views
-- TOP N ordered views
+**Views**:
+- Aggregation views (COUNT, SUM, AVG)
+- GROUP BY Category and Status
 
 **Functions**:
-- Scalar: calculations, conversions, categorizations
-- Table-valued: filtering, aggregation, TOP N
+- Scalar functions with simple calculations (multiply by 1.1)
 
-**Triggers** (3 types):
-- AFTER UPDATE (set ModifiedDate)
-- AFTER INSERT (validation)
-- INSTEAD OF DELETE (soft delete)
-
-### 3. Security Implementation
-- 10 application roles (AppRole1-AppRole10)
-- 20 test users (TestUser1-TestUser20)
-- Schema-level SELECT and EXECUTE permissions
-- User-to-role assignments
-
-### 4. Realistic Test Data
+### 3. Test Data
 Each row includes:
 - Unique codes (schema-table-number format)
 - Descriptive names and descriptions
-- Numeric values (amounts, quantities, ratings)
+- Numeric values (amounts, quantities)
 - Categories (A-E) and statuses (Active/Pending/Inactive)
-- Dates, priorities, and assignments
+- Dates and notes
 - Random distribution across values
 
 ## Validation & Testing
@@ -98,40 +75,39 @@ Each row includes:
    - SQL best practices validation
    - Summary statistics
 
-### Manual Testing
-All SQL has been validated for:
+3. **run-perf-test.ps1**: Full performance test runner
+   - Database creation and population
+   - Export with metrics collection
+   - Import with metrics collection
+   - Object count verification
+   - Performance metrics reporting
+
+### Validation Results
+All SQL validated for:
 - Correct T-SQL syntax
 - Proper use of dynamic SQL
 - SQL injection safety (QUOTENAME usage)
-- Modern error handling (THROW instead of RAISERROR)
-- Clear comments explaining complex logic
+- Clear comments explaining logic
 
 ## Performance Characteristics
 
-**Expected Creation Time**: 5-15 minutes
-- Table creation: 1-3 minutes
-- Data population: 3-10 minutes
-- Programmability objects: 1-2 minutes
+**Expected Creation Time**: 20-30 seconds
+- Table creation: ~5 seconds
+- Data population: ~15 seconds
+- Programmability objects: ~10 seconds
 
-**Export/Import Testing**:
-- Provides measurable baseline for performance optimization
-- Tests memory usage with large object counts
+**Export/Import Performance**:
+- Export (with data): 6-8 minutes (~126 rows/sec)
+- Import (with data): 3-4 minutes (~263 rows/sec)
+- Total round-trip: ~10 minutes
+- Provides measurable baseline for optimization
+- Tests memory usage with moderate object counts
 - Validates timeout handling
-- Enables regression testing
 
 ## Usage
 
-### Create Database
-```powershell
-# Start SQL Server
-docker-compose up -d
-
-# Create database
-sqlcmd -S localhost -U sa -P 'Test@1234' -Q "CREATE DATABASE PerfTestDb"
-
-# Run creation script (5-15 minutes)
-Invoke-Sqlcmd -ServerInstance localhost -Username sa -Password 'Test@1234' `
-  -InputFile "create-perf-test-db.sql" -QueryTimeout 3600
+### Create Database20-30 seconds)
+sqlcmd -S localhost -U sa -P 'Test@1234' -d PerfTestDb -i "create-perf-test-db-simplified.sql"
 ```
 
 ### Validate Script
@@ -139,6 +115,15 @@ Invoke-Sqlcmd -ServerInstance localhost -Username sa -Password 'Test@1234' `
 # Basic syntax validation
 pwsh ./validate-perf-test-syntax.ps1
 
+# Quick structure check
+pwsh ./quick-check-perf-test.ps1
+```
+
+### Run Performance Test
+```powershell
+# Complete automated test with metrics
+pwsh ./run-perf-test.ps1
+```
 # Quick structure check
 pwsh ./quick-check-perf-test.ps1
 ```
