@@ -138,19 +138,7 @@ Each table includes:
 - **Non-clustered Index**: On Status with included columns (Name, Amount)
 - **Filtered Index**: On CreatedDate where IsActive = 1
 
-Columns:
-- `Id` - Identity primary key
-- `Code` - Unique identifier (schema-table-number format)
-- `Name` - Item description
-- `Description` - Text field
-- `Amount` - Decimal value for calculations
-- `Quantity` - Integer value
-- `IsActive` - Boolean flag (default 1)
-- `CreatedDate`, `ModifiedDate` - Temporal data
-- `Category` - A through E classification
-- `Status` - Active/Pending/Inactive (default 'Active')
-- `Notes` - Additional text
-
+The table column schema is documented in the main table schema section above to avoid duplication.
 ## Performance Characteristics
 
 ### Expected Performance Metrics
