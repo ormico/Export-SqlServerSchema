@@ -2380,7 +2380,7 @@ function Export-DatabaseObjects {
                 $currentItem++
                 try {
                     Write-ObjectProgress -ObjectName "$($aggregate.Schema).$($aggregate.Name)" -Current $currentItem -Total $aggregates.Count
-                    $fileName = Join-Path $OutputDir '14_Programmability/02_Functions' "$($aggregate.Schema).$($aggregate.Name).aggregate.sql"
+                    $fileName = Join-Path $OutputDir '14_Programmability/02_Functions' "$(Get-SafeFileName $($aggregate.Schema)).$(Get-SafeFileName $($aggregate.Name)).aggregate.sql"
                     Ensure-DirectoryExists $fileName
                     $opts.FileName = $fileName
                     $Scripter.Options = $opts
@@ -2488,7 +2488,7 @@ function Export-DatabaseObjects {
                 $currentItem++
                 try {
                     Write-ObjectProgress -ObjectName "$($extProc.Schema).$($extProc.Name)" -Current $currentItem -Total $totalProcs
-                    $fileName = Join-Path $OutputDir '14_Programmability/03_StoredProcedures' "$($extProc.Schema).$($extProc.Name).extended.sql"
+                    $fileName = Join-Path $OutputDir '14_Programmability/03_StoredProcedures' "$(Get-SafeFileName $($extProc.Schema)).$(Get-SafeFileName $($extProc.Name)).extended.sql"
                     Ensure-DirectoryExists $fileName
                     $opts.FileName = $fileName
                     $Scripter.Options = $opts
