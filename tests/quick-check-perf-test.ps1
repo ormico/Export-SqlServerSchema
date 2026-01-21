@@ -104,9 +104,9 @@ Write-Host "  1. Start SQL Server: docker-compose up -d" -ForegroundColor Gray
 Write-Host "  2. Create database: CREATE DATABASE PerfTestDb" -ForegroundColor Gray
 Write-Host "  3. Run script: sqlcmd -i create-perf-test-db.sql" -ForegroundColor Gray
 Write-Host ""
-Write-Host "Expected runtime: 5-15 minutes" -ForegroundColor Yellow
-Write-Host "Expected objects: ~16,000 database objects" -ForegroundColor Yellow
-Write-Host "Expected data: 5,000,000 rows" -ForegroundColor Yellow
+Write-Host "Expected runtime: typically under 2 minutes on a developer machine" -ForegroundColor Yellow
+Write-Host "Expected objects: ~1,300 database objects (schemas, tables, procedures, views, functions, indexes)" -ForegroundColor Yellow
+Write-Host "Expected data: ~50,000 rows" -ForegroundColor Yellow
 Write-Host ""
 
 exit 0
