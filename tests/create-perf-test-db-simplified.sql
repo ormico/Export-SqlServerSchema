@@ -1,5 +1,5 @@
 -- Simplified Performance Test Database
--- Creates 500 tables with 1000 rows each (500,000 rows), plus related objects
+-- Creates 500 tables with 100 rows each (50,000 rows), plus related objects
 -- Focuses on reasonable scale for testing export/import performance
 --
 
