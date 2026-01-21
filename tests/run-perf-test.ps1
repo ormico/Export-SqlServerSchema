@@ -203,7 +203,7 @@ try {
     
     # Step 4: Populate database
     Write-TestStep "Step 4: Populating database with test objects and data..." -Type Info
-    Write-Host "  This will take 5-10 minutes for simplified test database..." -ForegroundColor Yellow
+    Write-Host "  This will typically take 1-3 minutes for the simplified test database..." -ForegroundColor Yellow
     
     $scriptStart = Get-Date
     $scriptPath = $PerftestScript
