@@ -10,7 +10,58 @@ GO
 USE PerfTestDb;
 GO
 
--- Create 10 schemas  
+-- Create database roles FIRST (before schemas)
+DECLARE @roleNum INT = 1;
+WHILE @roleNum <= 5
+BEGIN
+    DECLARE @roleName NVARCHAR(50) = 'AppRole' + CAST(@roleNum AS NVARCHAR(10));
+    DECLARE @sql NVARCHAR(MAX);
+    
+    SET @sql = '
+    IF NOT EXISTS (SELECT 1 FROM sys.database_principals WHERE name = ''' + @roleName + ''' AND type = ''R'')
+        CREATE ROLE ' + QUOTENAME(@roleName) + ';';
+    
+    EXEC sp_executesql @sql;
+    SET @roleNum = @roleNum + 1;
+END
+PRINT 'Created 5 database roles';
+GO
+
+-- Create database users SECOND (before schemas)
+DECLARE @userNum INT = 1;
+WHILE @userNum <= 10
+BEGIN
+    DECLARE @userName NVARCHAR(50) = 'TestUser' + CAST(@userNum AS NVARCHAR(10));
+    DECLARE @sql NVARCHAR(MAX);
+    
+    SET @sql = '
+    IF NOT EXISTS (SELECT 1 FROM sys.database_principals WHERE name = ''' + @userName + ''' AND type = ''S'')
+        CREATE USER ' + QUOTENAME(@userName) + ' WITHOUT LOGIN;';
+    
+    EXEC sp_executesql @sql;
+    SET @userNum = @userNum + 1;
+END
+PRINT 'Created 10 database users';
+GO
+
+-- Add users to roles
+DECLARE @userNum INT = 1;
+WHILE @userNum <= 10
+BEGIN
+    DECLARE @userName NVARCHAR(50) = 'TestUser' + CAST(@userNum AS NVARCHAR(10));
+    DECLARE @roleNum INT = ((@userNum - 1) % 5) + 1;
+    DECLARE @roleName NVARCHAR(50) = 'AppRole' + CAST(@roleNum AS NVARCHAR(10));
+    DECLARE @sql NVARCHAR(MAX);
+    
+    SET @sql = 'ALTER ROLE ' + QUOTENAME(@roleName) + ' ADD MEMBER ' + QUOTENAME(@userName) + ';';
+    EXEC sp_executesql @sql;
+    
+    SET @userNum = @userNum + 1;
+END
+PRINT 'Added users to roles';
+GO
+
+-- Create 10 schemas first (before granting permissions)
 DECLARE @i INT = 1;
 WHILE @i <= 10
 BEGIN
@@ -21,6 +72,26 @@ BEGIN
     SET @i = @i + 1;
 END
 PRINT 'Created 10 schemas';
+GO
+
+-- Grant permissions on schemas to roles (AFTER schemas are created)
+DECLARE @schemaNum INT = 1;
+WHILE @schemaNum <= 10
+BEGIN
+    DECLARE @schemaName NVARCHAR(50) = 'Schema' + CAST(@schemaNum AS NVARCHAR(10));
+    DECLARE @roleNum INT = ((@schemaNum - 1) % 5) + 1;
+    DECLARE @roleName NVARCHAR(50) = 'AppRole' + CAST(@roleNum AS NVARCHAR(10));
+    DECLARE @sql NVARCHAR(MAX);
+    
+    SET @sql = 'GRANT SELECT ON SCHEMA::' + QUOTENAME(@schemaName) + ' TO ' + QUOTENAME(@roleName) + ';';
+    EXEC sp_executesql @sql;
+    
+    SET @sql = 'GRANT EXECUTE ON SCHEMA::' + QUOTENAME(@schemaName) + ' TO ' + QUOTENAME(@roleName) + ';';
+    EXEC sp_executesql @sql;
+    
+    SET @schemaNum = @schemaNum + 1;
+END
+PRINT 'Granted permissions on schemas to roles';
 GO
 
 -- Create 500 tables (50 per schema)
@@ -225,6 +296,128 @@ END
 PRINT 'Created 100 scalar functions';
 GO
 
+-- Create user-defined types (20 types - 2 per schema)
+DECLARE @schemaNum INT = 1;
+DECLARE @typeCount INT = 0;
+
+WHILE @schemaNum <= 10
+BEGIN
+    DECLARE @schemaName NVARCHAR(50) = 'Schema' + CAST(@schemaNum AS NVARCHAR(10));
+    DECLARE @sql NVARCHAR(MAX);
+    
+    -- Create first type (NVARCHAR)
+    SET @sql = '
+    IF NOT EXISTS (SELECT 1 FROM sys.types t JOIN sys.schemas s ON t.schema_id = s.schema_id 
+                  WHERE s.name = ''' + @schemaName + ''' AND t.name = ''CodeType'')
+    BEGIN
+        CREATE TYPE ' + QUOTENAME(@schemaName) + '.CodeType FROM NVARCHAR(50) NOT NULL;
+    END';
+    EXEC sp_executesql @sql;
+    
+    -- Create second type (DECIMAL)
+    SET @sql = '
+    IF NOT EXISTS (SELECT 1 FROM sys.types t JOIN sys.schemas s ON t.schema_id = s.schema_id 
+                  WHERE s.name = ''' + @schemaName + ''' AND t.name = ''AmountType'')
+    BEGIN
+        CREATE TYPE ' + QUOTENAME(@schemaName) + '.AmountType FROM DECIMAL(18,2) NULL;
+    END';
+    EXEC sp_executesql @sql;
+    
+    SET @typeCount = @typeCount + 2;
+    SET @schemaNum = @schemaNum + 1;
+END
+PRINT 'Created 20 user-defined types';
+GO
+
+-- Create 100 triggers (10 per schema, 2 per table for first 5 tables)
+DECLARE @schemaNum INT = 1;
+DECLARE @triggerCount INT = 0;
+
+WHILE @schemaNum <= 10
+BEGIN
+    DECLARE @schemaName NVARCHAR(50) = 'Schema' + CAST(@schemaNum AS NVARCHAR(10));
+    DECLARE @tableNum INT = 1;
+    
+    WHILE @tableNum <= 5
+    BEGIN
+        DECLARE @tableName NVARCHAR(100) = QUOTENAME(@schemaName) + '.' + QUOTENAME('Table' + CAST(@tableNum AS NVARCHAR(10)));
+        DECLARE @sql NVARCHAR(MAX);
+        
+        -- Create UPDATE trigger
+        DECLARE @triggerName1 NVARCHAR(100) = QUOTENAME(@schemaName) + '.' + QUOTENAME('trg_Update_Table' + CAST(@tableNum AS NVARCHAR(10)));
+        SET @sql = '
+        CREATE OR ALTER TRIGGER ' + @triggerName1 + '
+        ON ' + @tableName + '
+        AFTER UPDATE
+        AS
+        BEGIN
+            SET NOCOUNT ON;
+            UPDATE t
+            SET ModifiedDate = SYSDATETIME()
+            FROM ' + @tableName + ' t
+            INNER JOIN inserted i ON t.Id = i.Id;
+        END';
+        EXEC sp_executesql @sql;
+        SET @triggerCount = @triggerCount + 1;
+        
+        -- Create INSERT trigger
+        DECLARE @triggerName2 NVARCHAR(100) = QUOTENAME(@schemaName) + '.' + QUOTENAME('trg_Insert_Table' + CAST(@tableNum AS NVARCHAR(10)));
+        SET @sql = '
+        CREATE OR ALTER TRIGGER ' + @triggerName2 + '
+        ON ' + @tableName + '
+        AFTER INSERT
+        AS
+        BEGIN
+            SET NOCOUNT ON;
+            IF EXISTS (SELECT 1 FROM inserted WHERE Amount < 0)
+            BEGIN
+                THROW 50001, ''Amount cannot be negative'', 1;
+            END
+        END';
+        EXEC sp_executesql @sql;
+        SET @triggerCount = @triggerCount + 1;
+        
+        SET @tableNum = @tableNum + 1;
+    END
+    
+    SET @schemaNum = @schemaNum + 1;
+END
+PRINT 'Created 100 triggers';
+GO
+
+-- Create 50 synonyms (5 per schema)
+DECLARE @schemaNum INT = 1;
+DECLARE @synonymCount INT = 0;
+
+WHILE @schemaNum <= 10
+BEGIN
+    DECLARE @schemaName NVARCHAR(50) = 'Schema' + CAST(@schemaNum AS NVARCHAR(10));
+    DECLARE @synNum INT = 1;
+    
+    WHILE @synNum <= 5
+    BEGIN
+        DECLARE @synonymName NVARCHAR(100) = QUOTENAME(@schemaName) + '.' + QUOTENAME('syn_Table' + CAST(@synNum AS NVARCHAR(10)));
+        DECLARE @tableName NVARCHAR(100) = QUOTENAME(@schemaName) + '.' + QUOTENAME('Table' + CAST(@synNum AS NVARCHAR(10)));
+        DECLARE @sql NVARCHAR(MAX);
+        
+        SET @sql = '
+        IF EXISTS (SELECT 1 FROM sys.synonyms s JOIN sys.schemas sch ON s.schema_id = sch.schema_id 
+                  WHERE sch.name = ''' + @schemaName + ''' AND s.name = ''syn_Table' + CAST(@synNum AS NVARCHAR(10)) + ''')
+            DROP SYNONYM ' + @synonymName + ';
+        
+        CREATE SYNONYM ' + @synonymName + ' FOR ' + @tableName + ';';
+        
+        EXEC sp_executesql @sql;
+        SET @synonymCount = @synonymCount + 1;
+        
+        SET @synNum = @synNum + 1;
+    END
+    
+    SET @schemaNum = @schemaNum + 1;
+END
+PRINT 'Created 50 synonyms';
+GO
+
 -- Summary
 SELECT 'Schemas' AS ObjectType, COUNT(*) AS Count FROM sys.schemas WHERE name LIKE 'Schema%'
 UNION ALL
@@ -237,6 +430,16 @@ UNION ALL
 SELECT 'Views', COUNT(*) FROM sys.views WHERE schema_id IN (SELECT schema_id FROM sys.schemas WHERE name LIKE 'Schema%')
 UNION ALL
 SELECT 'Functions', COUNT(*) FROM sys.objects WHERE type IN ('FN') AND schema_id IN (SELECT schema_id FROM sys.schemas WHERE name LIKE 'Schema%')
+UNION ALL
+SELECT 'Triggers', COUNT(*) FROM sys.triggers WHERE parent_id IN (SELECT object_id FROM sys.tables WHERE schema_id IN (SELECT schema_id FROM sys.schemas WHERE name LIKE 'Schema%'))
+UNION ALL
+SELECT 'Synonyms', COUNT(*) FROM sys.synonyms WHERE schema_id IN (SELECT schema_id FROM sys.schemas WHERE name LIKE 'Schema%')
+UNION ALL
+SELECT 'User-Defined Types', COUNT(*) FROM sys.types WHERE is_user_defined = 1 AND schema_id IN (SELECT schema_id FROM sys.schemas WHERE name LIKE 'Schema%')
+UNION ALL
+SELECT 'Database Roles', COUNT(*) FROM sys.database_principals WHERE name LIKE 'AppRole%' AND type = 'R'
+UNION ALL
+SELECT 'Database Users', COUNT(*) FROM sys.database_principals WHERE name LIKE 'TestUser%' AND type = 'S'
 UNION ALL
 SELECT 'Total Data Rows', SUM(p.rows) FROM sys.partitions p WHERE object_id IN (SELECT object_id FROM sys.tables WHERE schema_id IN (SELECT schema_id FROM sys.schemas WHERE name LIKE 'Schema%')) AND p.index_id < 2;
 GO
@@ -252,5 +455,10 @@ PRINT '  - 2,000 indexes';
 PRINT '  - 500 stored procedures';
 PRINT '  - 100 views';
 PRINT '  - 100 scalar functions';
+PRINT '  - 100 triggers';
+PRINT '  - 50 synonyms';
+PRINT '  - 20 user-defined types';
+PRINT '  - 5 database roles';
+PRINT '  - 10 database users';
 PRINT '  - 50,000 total data rows';
 PRINT '========================================';

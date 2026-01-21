@@ -674,29 +674,29 @@ function Initialize-OutputDirectory {
     
     $subdirs = @(
         '00_FileGroups',
-        '01_DatabaseConfiguration',
-        '02_Schemas',
-        '03_Sequences',
-        '04_PartitionFunctions',
-        '05_PartitionSchemes',
-        '06_Types',
-        '07_XmlSchemaCollections',
-        '08_Tables_PrimaryKey',
-        '09_Tables_ForeignKeys',
-        '10_Indexes',
-        '11_Defaults',
-        '12_Rules',
-        '13_Programmability/01_Assemblies',
-        '13_Programmability/02_Functions',
-        '13_Programmability/03_StoredProcedures',
-        '13_Programmability/04_Triggers',
-        '13_Programmability/05_Views',
-        '14_Synonyms',
-        '15_FullTextSearch',
-        '16_ExternalData',
-        '17_SearchPropertyLists',
-        '18_PlanGuides',
-        '19_Security',
+        '01_Security',
+        '02_DatabaseConfiguration',
+        '03_Schemas',
+        '04_Sequences',
+        '05_PartitionFunctions',
+        '06_PartitionSchemes',
+        '07_Types',
+        '08_XmlSchemaCollections',
+        '09_Tables_PrimaryKey',
+        '10_Tables_ForeignKeys',
+        '11_Indexes',
+        '12_Defaults',
+        '13_Rules',
+        '14_Programmability/01_Assemblies',
+        '14_Programmability/02_Functions',
+        '14_Programmability/03_StoredProcedures',
+        '14_Programmability/04_Triggers',
+        '14_Programmability/05_Views',
+        '15_Synonyms',
+        '16_FullTextSearch',
+        '17_ExternalData',
+        '18_SearchPropertyLists',
+        '19_PlanGuides',
         '20_Data'
     )
     
@@ -1123,7 +1123,7 @@ function Export-DatabaseObjects {
     try {
         $dbConfigs = @($Database.DatabaseScopedConfigurations)
         if ($dbConfigs.Count -gt 0) {
-            $configFilePath = Join-Path $OutputDir '01_DatabaseConfiguration' '001_DatabaseScopedConfigurations.sql'
+            $configFilePath = Join-Path $OutputDir '02_DatabaseConfiguration' '001_DatabaseScopedConfigurations.sql'
             $configScript = New-Object System.Text.StringBuilder
             [void]$configScript.AppendLine("-- Database Scoped Configurations")
             [void]$configScript.AppendLine("-- WARNING: These settings are hardware-specific (e.g., MAXDOP)")
@@ -1159,7 +1159,7 @@ function Export-DatabaseObjects {
         # Filter to actual credentials (collection may contain null/empty elements)
         $dbCredentials = @($Database.Credentials | Where-Object { $null -ne $_.Name -and $_.Name -ne '' })
         if ($dbCredentials.Count -gt 0) {
-            $credFilePath = Join-Path $OutputDir '01_DatabaseConfiguration' '002_DatabaseScopedCredentials.sql'
+            $credFilePath = Join-Path $OutputDir '02_DatabaseConfiguration' '002_DatabaseScopedCredentials.sql'
             $credScript = New-Object System.Text.StringBuilder
             [void]$credScript.AppendLine("-- Database Scoped Credentials (Structure Only)")
             [void]$credScript.AppendLine("-- WARNING: Secrets cannot be exported and must be provided during import")
@@ -1213,7 +1213,7 @@ function Export-DatabaseObjects {
             try {
                 Write-ObjectProgress -ObjectName $schema.Name -Current $currentItem -Total $schemas.Count
                 $safeName = Get-SafeFileName $schema.Name
-                $fileName = Join-Path $OutputDir '02_Schemas' "$safeName.sql"
+                $fileName = Join-Path $OutputDir '03_Schemas' "$safeName.sql"
                 
                 # Ensure directory exists and validate path
                 Ensure-DirectoryExists $fileName
@@ -1259,7 +1259,7 @@ function Export-DatabaseObjects {
                 Write-ObjectProgress -ObjectName "$($sequence.Schema).$($sequence.Name)" -Current $currentItem -Total $sequences.Count
                 $safeSchema = Get-SafeFileName $sequence.Schema
                 $safeName = Get-SafeFileName $sequence.Name
-                $fileName = Join-Path $OutputDir '03_Sequences' "$safeSchema.$safeName.sql"
+                $fileName = Join-Path $OutputDir '04_Sequences' "$safeSchema.$safeName.sql"
                 
                 # Ensure directory exists and validate path
                 Ensure-DirectoryExists $fileName
@@ -1303,7 +1303,7 @@ function Export-DatabaseObjects {
             $currentItem++
             try {
                 Write-ObjectProgress -ObjectName $pf.Name -Current $currentItem -Total $partitionFunctions.Count
-                $fileName = Join-Path $OutputDir '04_PartitionFunctions' "$(Get-SafeFileName $($pf.Name)).sql"
+                $fileName = Join-Path $OutputDir '05_PartitionFunctions' "$(Get-SafeFileName $($pf.Name)).sql"
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
@@ -1341,7 +1341,7 @@ function Export-DatabaseObjects {
             $currentItem++
             try {
                 Write-ObjectProgress -ObjectName $ps.Name -Current $currentItem -Total $partitionSchemes.Count
-                $fileName = Join-Path $OutputDir '05_PartitionSchemes' "$(Get-SafeFileName $($ps.Name)).sql"
+                $fileName = Join-Path $OutputDir '06_PartitionSchemes' "$(Get-SafeFileName $($ps.Name)).sql"
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
@@ -1397,7 +1397,7 @@ function Export-DatabaseObjects {
                 $typeName = if ($type.Schema) { "$($type.Schema).$($type.Name)" } else { $type.Name }
                 Write-ObjectProgress -ObjectName $typeName -Current $currentItem -Total $allTypes.Count
                 $safeTypeName = Get-SafeFileName $typeName
-                $fileName = Join-Path $OutputDir '06_Types' "$safeTypeName.sql"
+                $fileName = Join-Path $OutputDir '07_Types' "$safeTypeName.sql"
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
@@ -1443,7 +1443,7 @@ function Export-DatabaseObjects {
                 Write-ObjectProgress -ObjectName "$($xsc.Schema).$($xsc.Name)" -Current $currentItem -Total $xmlSchemaCollections.Count
                 $safeSchema = Get-SafeFileName $xsc.Schema
                 $safeName = Get-SafeFileName $xsc.Name
-                $fileName = Join-Path $OutputDir '07_XmlSchemaCollections' "$safeSchema.$safeName.sql"
+                $fileName = Join-Path $OutputDir '08_XmlSchemaCollections' "$safeSchema.$safeName.sql"
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
@@ -1494,7 +1494,7 @@ function Export-DatabaseObjects {
                 $percentComplete = [math]::Round(($currentItem / $tables.Count) * 100)
                 try {
                     Write-ObjectProgress -ObjectName "$($table.Schema).$($table.Name)" -Current $currentItem -Total $tables.Count
-                    $fileName = Join-Path $OutputDir '08_Tables_PrimaryKey' "$(Get-SafeFileName $($table.Schema)).$(Get-SafeFileName $($table.Name)).sql"
+                    $fileName = Join-Path $OutputDir '09_Tables_PrimaryKey' "$(Get-SafeFileName $($table.Schema)).$(Get-SafeFileName $($table.Name)).sql"
                     Ensure-DirectoryExists $fileName
                     $opts.FileName = $fileName
                     $Scripter.Options = $opts
@@ -1556,7 +1556,7 @@ function Export-DatabaseObjects {
                 $percentComplete = [math]::Round(($currentItem / $foreignKeys.Count) * 100)
                 try {
                     Write-ObjectProgress -ObjectName "$($fk.Parent.Schema).$($fk.Parent.Name).$($fk.Name)" -Current $currentItem -Total $foreignKeys.Count
-                    $fileName = Join-Path $OutputDir '09_Tables_ForeignKeys' "$(Get-SafeFileName $($fk.Parent.Schema)).$(Get-SafeFileName $($fk.Parent.Name)).$(Get-SafeFileName $($fk.Name)).sql"
+                    $fileName = Join-Path $OutputDir '10_Tables_ForeignKeys' "$(Get-SafeFileName $($fk.Parent.Schema)).$(Get-SafeFileName $($fk.Parent.Name)).$(Get-SafeFileName $($fk.Name)).sql"
                     Ensure-DirectoryExists $fileName
                     $opts.FileName = $fileName
                     $Scripter.Options = $opts
@@ -1624,7 +1624,7 @@ function Export-DatabaseObjects {
                 $percentComplete = [math]::Round(($currentItem / $indexes.Count) * 100)
                 try {
                     Write-ObjectProgress -ObjectName "$($index.Parent.Schema).$($index.Parent.Name).$($index.Name)" -Current $currentItem -Total $indexes.Count
-                    $fileName = Join-Path $OutputDir '10_Indexes' "$(Get-SafeFileName $($index.Parent.Schema)).$(Get-SafeFileName $($index.Parent.Name)).$(Get-SafeFileName $($index.Name)).sql"
+                    $fileName = Join-Path $OutputDir '11_Indexes' "$(Get-SafeFileName $($index.Parent.Schema)).$(Get-SafeFileName $($index.Parent.Name)).$(Get-SafeFileName $($index.Name)).sql"
                     Ensure-DirectoryExists $fileName
                     $opts.FileName = $fileName
                     $Scripter.Options = $opts
@@ -1667,7 +1667,7 @@ function Export-DatabaseObjects {
             $currentItem++
             try {
                 Write-ObjectProgress -ObjectName "$($default.Schema).$($default.Name)" -Current $currentItem -Total $defaults.Count
-                $fileName = Join-Path $OutputDir '11_Defaults' "$(Get-SafeFileName $($default.Schema)).$(Get-SafeFileName $($default.Name)).sql"
+                $fileName = Join-Path $OutputDir '12_Defaults' "$(Get-SafeFileName $($default.Schema)).$(Get-SafeFileName $($default.Name)).sql"
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
@@ -1705,7 +1705,7 @@ function Export-DatabaseObjects {
             $currentItem++
             try {
                 Write-ObjectProgress -ObjectName "$($rule.Schema).$($rule.Name)" -Current $currentItem -Total $rules.Count
-                $fileName = Join-Path $OutputDir '12_Rules' "$(Get-SafeFileName $($rule.Schema)).$(Get-SafeFileName $($rule.Name)).sql"
+                $fileName = Join-Path $OutputDir '13_Rules' "$(Get-SafeFileName $($rule.Schema)).$(Get-SafeFileName $($rule.Name)).sql"
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
@@ -1743,7 +1743,7 @@ function Export-DatabaseObjects {
             $currentItem++
             try {
                 Write-ObjectProgress -ObjectName $assembly.Name -Current $currentItem -Total $assemblies.Count
-                $fileName = Join-Path $OutputDir '13_Programmability/01_Assemblies' "$(Get-SafeFileName $($assembly.Name)).sql"
+                $fileName = Join-Path $OutputDir '14_Programmability/01_Assemblies' "$(Get-SafeFileName $($assembly.Name)).sql"
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
@@ -1785,7 +1785,7 @@ function Export-DatabaseObjects {
             $percentComplete = [math]::Round(($currentItem / $functions.Count) * 100)
             try {
                 Write-ObjectProgress -ObjectName "$($function.Schema).$($function.Name)" -Current $currentItem -Total $functions.Count
-                $fileName = Join-Path $OutputDir '13_Programmability/02_Functions' "$(Get-SafeFileName $($function.Schema)).$(Get-SafeFileName $($function.Name)).sql"
+                $fileName = Join-Path $OutputDir '14_Programmability/02_Functions' "$(Get-SafeFileName $($function.Schema)).$(Get-SafeFileName $($function.Name)).sql"
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
@@ -1823,7 +1823,7 @@ function Export-DatabaseObjects {
             $currentItem++
             try {
                 Write-ObjectProgress -ObjectName "$($aggregate.Schema).$($aggregate.Name)" -Current $currentItem -Total $aggregates.Count
-                $fileName = Join-Path $OutputDir '13_Programmability/02_Functions' "$($aggregate.Schema).$($aggregate.Name).aggregate.sql"
+                $fileName = Join-Path $OutputDir '14_Programmability/02_Functions' "$($aggregate.Schema).$($aggregate.Name).aggregate.sql"
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
@@ -1868,7 +1868,7 @@ function Export-DatabaseObjects {
             $percentComplete = [math]::Round(($currentItem / $totalProcs) * 100)
             try {
                 Write-ObjectProgress -ObjectName "$($proc.Schema).$($proc.Name)" -Current $currentItem -Total $totalProcs
-                $fileName = Join-Path $OutputDir '13_Programmability/03_StoredProcedures' "$(Get-SafeFileName $($proc.Schema)).$(Get-SafeFileName $($proc.Name)).sql"
+                $fileName = Join-Path $OutputDir '14_Programmability/03_StoredProcedures' "$(Get-SafeFileName $($proc.Schema)).$(Get-SafeFileName $($proc.Name)).sql"
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
@@ -1887,7 +1887,7 @@ function Export-DatabaseObjects {
             $percentComplete = [math]::Round(($currentItem / $totalProcs) * 100)
             try {
                 Write-ObjectProgress -ObjectName "$($extProc.Schema).$($extProc.Name)" -Current $currentItem -Total $totalProcs
-                $fileName = Join-Path $OutputDir '13_Programmability/03_StoredProcedures' "$($extProc.Schema).$($extProc.Name).extended.sql"
+                $fileName = Join-Path $OutputDir '14_Programmability/03_StoredProcedures' "$($extProc.Schema).$($extProc.Name).extended.sql"
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
@@ -1933,7 +1933,7 @@ function Export-DatabaseObjects {
             try {
                 Write-ObjectProgress -ObjectName $trigger.Name -Current $currentItem -Total $dbTriggers.Count
                 $safeName = Get-SafeFileName $trigger.Name
-                $fileName = Join-Path $OutputDir '13_Programmability/04_Triggers' "Database.$safeName.sql"
+                $fileName = Join-Path $OutputDir '14_Programmability/04_Triggers' "Database.$safeName.sql"
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
@@ -1995,7 +1995,7 @@ function Export-DatabaseObjects {
             $currentItem++
             try {
                 Write-ObjectProgress -ObjectName "$($trigger.Parent.Schema).$($trigger.Parent.Name).$($trigger.Name)" -Current $currentItem -Total $tableTriggers.Count
-                $fileName = Join-Path $OutputDir '13_Programmability/04_Triggers' "$(Get-SafeFileName $($trigger.Parent.Schema)).$(Get-SafeFileName $($trigger.Parent.Name)).$(Get-SafeFileName $($trigger.Name)).sql"
+                $fileName = Join-Path $OutputDir '14_Programmability/04_Triggers' "$(Get-SafeFileName $($trigger.Parent.Schema)).$(Get-SafeFileName $($trigger.Parent.Name)).$(Get-SafeFileName $($trigger.Name)).sql"
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
@@ -2034,7 +2034,7 @@ function Export-DatabaseObjects {
             $percentComplete = [math]::Round(($currentItem / $views.Count) * 100)
             try {
                 Write-ObjectProgress -ObjectName "$($view.Schema).$($view.Name)" -Current $currentItem -Total $views.Count
-                $fileName = Join-Path $OutputDir '13_Programmability/05_Views' "$(Get-SafeFileName $($view.Schema)).$(Get-SafeFileName $($view.Name)).sql"
+                $fileName = Join-Path $OutputDir '14_Programmability/05_Views' "$(Get-SafeFileName $($view.Schema)).$(Get-SafeFileName $($view.Name)).sql"
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
@@ -2072,7 +2072,7 @@ function Export-DatabaseObjects {
             $currentItem++
             try {
                 Write-ObjectProgress -ObjectName "$($synonym.Schema).$($synonym.Name)" -Current $currentItem -Total $synonyms.Count
-                $fileName = Join-Path $OutputDir '14_Synonyms' "$(Get-SafeFileName $($synonym.Schema)).$(Get-SafeFileName $($synonym.Name)).sql"
+                $fileName = Join-Path $OutputDir '15_Synonyms' "$(Get-SafeFileName $($synonym.Schema)).$(Get-SafeFileName $($synonym.Name)).sql"
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
@@ -2112,7 +2112,7 @@ function Export-DatabaseObjects {
             $currentItem++
             try {
                 Write-ObjectProgress -ObjectName $ftc.Name -Current $currentItem -Total $ftCatalogs.Count
-                $fileName = Join-Path $OutputDir '15_FullTextSearch' "$($ftc.Name).catalog.sql"
+                $fileName = Join-Path $OutputDir '16_FullTextSearch' "$($ftc.Name).catalog.sql"
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
@@ -2142,7 +2142,7 @@ function Export-DatabaseObjects {
             $currentItem++
             try {
                 Write-ObjectProgress -ObjectName $ftsl.Name -Current $currentItem -Total $ftStopLists.Count
-                $fileName = Join-Path $OutputDir '15_FullTextSearch' "$($ftsl.Name).stoplist.sql"
+                $fileName = Join-Path $OutputDir '16_FullTextSearch' "$($ftsl.Name).stoplist.sql"
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
@@ -2189,7 +2189,7 @@ function Export-DatabaseObjects {
                 $currentItem++
                 try {
                     Write-ObjectProgress -ObjectName $eds.Name -Current $currentItem -Total $externalDataSources.Count
-                    $fileName = Join-Path $OutputDir '16_ExternalData' "$($eds.Name).datasource.sql"
+                    $fileName = Join-Path $OutputDir '17_ExternalData' "$($eds.Name).datasource.sql"
                 Ensure-DirectoryExists $fileName
                     $opts.FileName = $fileName
                     $Scripter.Options = $opts
@@ -2220,7 +2220,7 @@ function Export-DatabaseObjects {
                 $currentItem++
                 try {
                     Write-ObjectProgress -ObjectName $eff.Name -Current $currentItem -Total $externalFileFormats.Count
-                    $fileName = Join-Path $OutputDir '16_ExternalData' "$($eff.Name).fileformat.sql"
+                    $fileName = Join-Path $OutputDir '17_ExternalData' "$($eff.Name).fileformat.sql"
                 Ensure-DirectoryExists $fileName
                     $opts.FileName = $fileName
                     $Scripter.Options = $opts
@@ -2269,7 +2269,7 @@ function Export-DatabaseObjects {
                 $currentItem++
                 try {
                     Write-ObjectProgress -ObjectName $spl.Name -Current $currentItem -Total $searchPropertyLists.Count
-                    $fileName = Join-Path $OutputDir '17_SearchPropertyLists' "$(Get-SafeFileName $($spl.Name)).sql"
+                    $fileName = Join-Path $OutputDir '18_SearchPropertyLists' "$(Get-SafeFileName $($spl.Name)).sql"
                 Ensure-DirectoryExists $fileName
                     $opts.FileName = $fileName
                     $Scripter.Options = $opts
@@ -2313,7 +2313,7 @@ function Export-DatabaseObjects {
                 $currentItem++
                 try {
                     Write-ObjectProgress -ObjectName $pg.Name -Current $currentItem -Total $planGuides.Count
-                    $fileName = Join-Path $OutputDir '18_PlanGuides' "$(Get-SafeFileName $($pg.Name)).sql"
+                    $fileName = Join-Path $OutputDir '19_PlanGuides' "$(Get-SafeFileName $($pg.Name)).sql"
                 Ensure-DirectoryExists $fileName
                     $opts.FileName = $fileName
                     $Scripter.Options = $opts
@@ -2364,7 +2364,7 @@ function Export-DatabaseObjects {
             $currentItem++
             try {
                 Write-ObjectProgress -ObjectName $key.Name -Current $currentItem -Total $asymmetricKeys.Count
-                $fileName = Join-Path $OutputDir '19_Security' "$($key.Name).asymmetrickey.sql"
+                $fileName = Join-Path $OutputDir '01_Security' "$($key.Name).asymmetrickey.sql"
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
@@ -2394,7 +2394,7 @@ function Export-DatabaseObjects {
             $currentItem++
             try {
                 Write-ObjectProgress -ObjectName $cert.Name -Current $currentItem -Total $certs.Count
-                $fileName = Join-Path $OutputDir '19_Security' "$($cert.Name).certificate.sql"
+                $fileName = Join-Path $OutputDir '01_Security' "$($cert.Name).certificate.sql"
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
@@ -2424,7 +2424,7 @@ function Export-DatabaseObjects {
             $currentItem++
             try {
                 Write-ObjectProgress -ObjectName $key.Name -Current $currentItem -Total $symKeys.Count
-                $fileName = Join-Path $OutputDir '19_Security' "$($key.Name).symmetrickey.sql"
+                $fileName = Join-Path $OutputDir '01_Security' "$($key.Name).symmetrickey.sql"
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
@@ -2454,7 +2454,7 @@ function Export-DatabaseObjects {
             $currentItem++
             try {
                 Write-ObjectProgress -ObjectName $role.Name -Current $currentItem -Total $appRoles.Count
-                $fileName = Join-Path $OutputDir '19_Security' "$($role.Name).approle.sql"
+                $fileName = Join-Path $OutputDir '01_Security' "$($role.Name).approle.sql"
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
@@ -2484,7 +2484,7 @@ function Export-DatabaseObjects {
             $currentItem++
             try {
                 Write-ObjectProgress -ObjectName $role.Name -Current $currentItem -Total $dbRoles.Count
-                $fileName = Join-Path $OutputDir '19_Security' "$($role.Name).role.sql"
+                $fileName = Join-Path $OutputDir '01_Security' "$($role.Name).role.sql"
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
@@ -2514,7 +2514,7 @@ function Export-DatabaseObjects {
             $currentItem++
             try {
                 Write-ObjectProgress -ObjectName $user.Name -Current $currentItem -Total $dbUsers.Count
-                $fileName = Join-Path $OutputDir '19_Security' "$($user.Name).user.sql"
+                $fileName = Join-Path $OutputDir '01_Security' "$($user.Name).user.sql"
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
@@ -2544,7 +2544,7 @@ function Export-DatabaseObjects {
             $currentItem++
             try {
                 Write-ObjectProgress -ObjectName $spec.Name -Current $currentItem -Total $auditSpecs.Count
-                $fileName = Join-Path $OutputDir '19_Security' "$($spec.Name).auditspec.sql"
+                $fileName = Join-Path $OutputDir '01_Security' "$($spec.Name).auditspec.sql"
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
@@ -2583,7 +2583,7 @@ function Export-DatabaseObjects {
                 $currentItem++
                 try {
                     Write-ObjectProgress -ObjectName "$($policy.Schema).$($policy.Name)" -Current $currentItem -Total $securityPolicies.Count
-                    $fileName = Join-Path $OutputDir '19_Security' "$($policy.Schema).$($policy.Name).securitypolicy.sql"
+                    $fileName = Join-Path $OutputDir '01_Security' "$($policy.Schema).$($policy.Name).securitypolicy.sql"
                 Ensure-DirectoryExists $fileName
                     
                     # Create file with header
@@ -2762,25 +2762,25 @@ function New-DeploymentManifest {
     [void]$sb.AppendLine("Scripts must be applied in the following order to ensure all dependencies are satisfied:")
     [void]$sb.AppendLine("")
     [void]$sb.AppendLine("0. 00_FileGroups - Create filegroups (review paths for target environment)")
-    [void]$sb.AppendLine("1. 01_DatabaseConfiguration - Apply database scoped configurations (review hardware-specific settings)")
-    [void]$sb.AppendLine("2. 02_Schemas - Create database schemas")
-    [void]$sb.AppendLine("3. 03_Sequences - Create sequences")
-    [void]$sb.AppendLine("4. 04_PartitionFunctions - Create partition functions")
-    [void]$sb.AppendLine("5. 05_PartitionSchemes - Create partition schemes")
-    [void]$sb.AppendLine("6. 06_Types - Create user-defined types")
-    [void]$sb.AppendLine("7. 07_XmlSchemaCollections - Create XML schema collections")
-    [void]$sb.AppendLine("8. 08_Tables_PrimaryKey - Create tables with primary keys (no foreign keys)")
-    [void]$sb.AppendLine("9. 09_Tables_ForeignKeys - Add foreign key constraints")
-    [void]$sb.AppendLine("10. 10_Indexes - Create indexes")
-    [void]$sb.AppendLine("11. 11_Defaults - Create default constraints")
-    [void]$sb.AppendLine("12. 12_Rules - Create rules")
-    [void]$sb.AppendLine("13. 13_Programmability - Create assemblies, functions, procedures, triggers, views (in subfolder order)")
-    [void]$sb.AppendLine("14. 14_Synonyms - Create synonyms")
-    [void]$sb.AppendLine("15. 15_FullTextSearch - Create full-text search objects")
-    [void]$sb.AppendLine("16. 16_ExternalData - Create external data sources and file formats (review connection strings)")
-    [void]$sb.AppendLine("17. 17_SearchPropertyLists - Create search property lists")
-    [void]$sb.AppendLine("18. 18_PlanGuides - Create plan guides")
-    [void]$sb.AppendLine("19. 19_Security - Create security objects (keys, certificates, roles, users, audit, Row-Level Security)")
+    [void]$sb.AppendLine("1. 01_Security - Create security objects (keys, certificates, roles, users, audit, Row-Level Security)")
+    [void]$sb.AppendLine("2. 02_DatabaseConfiguration - Apply database scoped configurations (review hardware-specific settings)")
+    [void]$sb.AppendLine("3. 03_Schemas - Create database schemas")
+    [void]$sb.AppendLine("4. 04_Sequences - Create sequences")
+    [void]$sb.AppendLine("5. 05_PartitionFunctions - Create partition functions")
+    [void]$sb.AppendLine("6. 06_PartitionSchemes - Create partition schemes")
+    [void]$sb.AppendLine("7. 07_Types - Create user-defined types")
+    [void]$sb.AppendLine("8. 08_XmlSchemaCollections - Create XML schema collections")
+    [void]$sb.AppendLine("9. 09_Tables_PrimaryKey - Create tables with primary keys (no foreign keys)")
+    [void]$sb.AppendLine("10. 10_Tables_ForeignKeys - Add foreign key constraints")
+    [void]$sb.AppendLine("11. 11_Indexes - Create indexes")
+    [void]$sb.AppendLine("12. 12_Defaults - Create default constraints")
+    [void]$sb.AppendLine("13. 13_Rules - Create rules")
+    [void]$sb.AppendLine("14. 14_Programmability - Create assemblies, functions, procedures, triggers, views (in subfolder order)")
+    [void]$sb.AppendLine("15. 15_Synonyms - Create synonyms")
+    [void]$sb.AppendLine("16. 16_FullTextSearch - Create full-text search objects")
+    [void]$sb.AppendLine("17. 17_ExternalData - Create external data sources and file formats (review connection strings)")
+    [void]$sb.AppendLine("18. 18_SearchPropertyLists - Create search property lists")
+    [void]$sb.AppendLine("19. 19_PlanGuides - Create plan guides")
     [void]$sb.AppendLine("20. 20_Data - Load data")
     [void]$sb.AppendLine("")
     [void]$sb.AppendLine("## Important Notes")
@@ -2879,7 +2879,7 @@ function Show-ExportSummary {
     $manualActions = @()
     
     # Check for Database Scoped Credentials
-    $credsPath = Join-Path $OutputDir '01_DatabaseConfiguration' '002_DatabaseScopedCredentials.sql'
+    $credsPath = Join-Path $OutputDir '02_DatabaseConfiguration' '002_DatabaseScopedCredentials.sql'
     if (Test-Path $credsPath) {
         $credsContent = Get-Content $credsPath -Raw
         if ($credsContent -match 'CREATE DATABASE SCOPED CREDENTIAL') {
@@ -2903,7 +2903,7 @@ function Show-ExportSummary {
     }
     
     # Check for Database Configurations
-    $dbConfigPath = Join-Path $OutputDir '01_DatabaseConfiguration' '001_DatabaseScopedConfigurations.sql'
+    $dbConfigPath = Join-Path $OutputDir '02_DatabaseConfiguration' '001_DatabaseScopedConfigurations.sql'
     if (Test-Path $dbConfigPath) {
         $manualActions += "[REVIEW RECOMMENDED] Database Scoped Configurations"
         $manualActions += "  Location: 01_DatabaseConfiguration\001_DatabaseScopedConfigurations.sql"
@@ -2911,7 +2911,7 @@ function Show-ExportSummary {
     }
     
     # Check for External Data
-    $extDataPath = Join-Path $OutputDir '16_ExternalData'
+    $extDataPath = Join-Path $OutputDir '17_ExternalData'
     if (Test-Path $extDataPath) {
         $extFiles = @(Get-ChildItem -Path $extDataPath -Filter '*.sql' -Recurse)
         if ($extFiles.Count -gt 0) {
@@ -2923,12 +2923,12 @@ function Show-ExportSummary {
     }
     
     # Check for Security Policies (RLS)
-    $rlsPath = Join-Path $OutputDir '19_Security' '008_SecurityPolicies.sql'
+    $rlsPath = Join-Path $OutputDir '01_Security' '008_SecurityPolicies.sql'
     if (Test-Path $rlsPath) {
         $rlsContent = Get-Content $rlsPath -Raw
         if ($rlsContent -match 'CREATE SECURITY POLICY') {
             $manualActions += "[INFO] Row-Level Security Policies"
-            $manualActions += "  Location: 19_Security\008_SecurityPolicies.sql"
+            $manualActions += "  Location: 01_Security\008_SecurityPolicies.sql"
             $manualActions += "  Note: Ensure predicate functions are deployed before applying RLS policies"
         }
     }
