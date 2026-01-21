@@ -517,13 +517,13 @@ import:
 **Example Scenario**:
 ```sql
 -- Attempt 1 (alphabetical order):
--- ✅ fn_HelperCalculateTax      (no dependencies)
--- ✅ fn_CalculateTotalWithTax    (calls fn_HelperCalculateTax - succeeds)
--- ❌ fn_GetOrdersWithTax         (queries vw_OrderTotals - FAILS, view not created yet)
--- ✅ vw_OrderTotals              (calls fn_CalculateTotalWithTax - succeeds)
+-- [OK] fn_HelperCalculateTax      (no dependencies)
+-- [OK] fn_CalculateTotalWithTax    (calls fn_HelperCalculateTax - succeeds)
+-- [FAIL] fn_GetOrdersWithTax      (queries vw_OrderTotals - FAILS, view not created yet)
+-- [OK] vw_OrderTotals              (calls fn_CalculateTotalWithTax - succeeds)
 
 -- Attempt 2 (retry failed scripts):
--- ✅ fn_GetOrdersWithTax         (queries vw_OrderTotals - NOW SUCCEEDS)
+-- [OK] fn_GetOrdersWithTax         (queries vw_OrderTotals - NOW SUCCEEDS)
 
 -- Result: All objects imported successfully!
 ```

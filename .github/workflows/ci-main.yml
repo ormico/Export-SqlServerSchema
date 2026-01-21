@@ -32,9 +32,9 @@ jobs:
           
           # Check if this commit is reachable from main branch
           if git merge-base --is-ancestor $TAG_COMMIT origin/main; then
-            echo "✓ Tag is on main branch"
+            echo "[OK] Tag is on main branch"
           else
-            echo "✗ ERROR: Tag $GITHUB_REF_NAME is not on main branch"
+            echo "[ERROR] Tag $GITHUB_REF_NAME is not on main branch"
             echo "Please only create release tags from the main branch"
             exit 1
           fi

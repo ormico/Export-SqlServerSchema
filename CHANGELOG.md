@@ -6,6 +6,64 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [1.5.1] - 2026-01-21
+
+### Added
+
+- `.editorconfig` file to enforce repository formatting: UTF-8, final newline, trim trailing whitespace (except Markdown), and sensible indentation for PowerShell, SQL, YAML, JSON and Markdown.
+- Performance test report `tests/PERFORMANCE_GROUPBY_REPORT.md` with version comparison tables
+
+### Fixed
+
+**PrefetchObjects Implementation**
+- Fixed `Database.PrefetchObjects()` call - was using non-existent array overload `PrefetchObjects(Type[])`, now correctly calls single-Type overload per object type
+- Added `Scripter.PrefetchObjects = $true` to enable scripter-level dependency prefetch
+- Bulk prefetch now completes successfully in ~5 seconds for Tables, Views, StoredProcedures, UserDefinedFunctions, Schemas, Synonyms
+- Export time reduced ~33% vs v1.5.0 (from ~145s to ~96s on test database)
+- Total round-trip time reduced **57-65%** vs v1.4.x baseline
+
+### Changed
+
+**Export Performance Optimization**
+- Tables collection is now cached once at the beginning of `Export-DatabaseObjects` function and reused across all sections (Tables, ForeignKeys, Indexes, TableTriggers, Data export)
+- Eliminates 4 duplicate database calls to enumerate non-system tables
+- Reduces SMO overhead and speeds up exports for databases with large table counts
+- `Database.PrefetchObjects()` bulk-loads object metadata upfront (SSMS-style optimization)
+  - Does NOT require `VIEW DATABASE STATE` privilege — loads same metadata, just in bulk
+  - Falls back gracefully to lazy loading if prefetch fails for specific types (e.g., Synonyms on empty database)
+
+**Code Cleanup**
+- Removed verbose "PHASE" banners from optimization comments in Export-SqlServerSchema.ps1
+- Simplified inline documentation while retaining essential technical details
+
+### Performance Results
+
+Test database: 500 tables, 100 views, 500 procedures, 100 functions, 100 triggers, 2000 indexes, 50K rows
+
+**Single Mode** (one file per object)
+
+| Metric | v1.4.x Baseline | v1.5.0 | v1.5.1 (Current) | Improvement |
+|--------|-----------------|--------|------------------|-------------|
+| Export | 229s | 144s | **99s** | **57% faster** |
+| Import | 82s | 23s | **23s** | **72% faster** |
+| **Total** | **311s** | **167s** | **122s** | **61% faster** |
+
+**Schema Mode** (objects grouped by schema)
+
+| Metric | v1.4.x Baseline | v1.5.0 | v1.5.1 (Current) | Improvement |
+|--------|-----------------|--------|------------------|-------------|
+| Export | 229s | 146s | **96s** | **58% faster** |
+| Import | 82s | 15s | **14s** | **83% faster** |
+| **Total** | **311s** | **161s** | **110s** | **65% faster** |
+
+**All Mode** (all objects in single files)
+
+| Metric | v1.4.x Baseline | v1.5.0 | v1.5.1 (Current) | Improvement |
+|--------|-----------------|--------|------------------|-------------|
+| Export | 229s | 148s | **96s** | **58% faster** |
+| Import | 82s | 14s | **14s** | **83% faster** |
+| **Total** | **311s** | **163s** | **110s** | **65% faster** |
+
 ## [1.5.0] - 2026-01-21
 
 ### Added

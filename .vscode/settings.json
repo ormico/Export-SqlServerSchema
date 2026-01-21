@@ -52,6 +52,15 @@
             "approve": true,
             "matchCommandLine": true
         },
-        ".\\test-selective-object-types.ps1": true
+        ".\\test-selective-object-types.ps1": true,
+        ".\\run-perf-test.ps1": true,
+        "/^pwsh -File d:\\\\Export-SqlServerSchema\\\\tests\\\\run-perf-test\\.ps1 -ConfigFile d:\\\\Export-SqlServerSchema\\\\tests\\\\test-groupby-single\\.yml$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^pwsh -File d:\\\\Export-SqlServerSchema\\\\tests\\\\run-perf-test\\.ps1 -ExportConfigYaml d:\\\\Export-SqlServerSchema\\\\tests\\\\test-groupby-schema\\.yml -SkipDatabaseSetup$/": {
+            "approve": true,
+            "matchCommandLine": true
+        }
     }
 }
