@@ -1,0 +1,20 @@
+export:
+  includeData: false
+  excludeObjectTypes: []
+  excludeObjects: []
+  excludeSchemas: []
+  groupByObjectTypes:
+    Tables: schema
+    Functions: schema
+    StoredProcedures: schema
+
+import:
+  defaultMode: Dev
+  developerMode:
+    fileGroupStrategy: autoRemap
+    includeFileGroups: false
+    includeConfigurations: false
+    includeDatabaseScopedCredentials: false
+    includeExternalData: false
+    enableSecurityPolicies: false
+    includeData: false

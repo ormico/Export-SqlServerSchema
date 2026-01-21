@@ -107,6 +107,42 @@
             "type": "string"
           },
           "examples": ["staging", "temp", "archive"]
+        },
+        "groupByObjectTypes": {
+          "type": "object",
+          "description": "File grouping strategy per object type: 'single' = one file per object (default), 'schema' = group by schema, 'all' = all in one file",
+          "properties": {
+            "FileGroups": {"type": "string", "enum": ["single", "schema", "all"], "default": "single"},
+            "DatabaseScopedConfigurations": {"type": "string", "enum": ["single", "schema", "all"], "default": "single"},
+            "DatabaseScopedCredentials": {"type": "string", "enum": ["single", "schema", "all"], "default": "single"},
+            "Schemas": {"type": "string", "enum": ["single", "schema", "all"], "default": "single"},
+            "Sequences": {"type": "string", "enum": ["single", "schema", "all"], "default": "single"},
+            "PartitionFunctions": {"type": "string", "enum": ["single", "schema", "all"], "default": "single"},
+            "PartitionSchemes": {"type": "string", "enum": ["single", "schema", "all"], "default": "single"},
+            "UserDefinedTypes": {"type": "string", "enum": ["single", "schema", "all"], "default": "single"},
+            "XmlSchemaCollections": {"type": "string", "enum": ["single", "schema", "all"], "default": "single"},
+            "Tables": {"type": "string", "enum": ["single", "schema", "all"], "default": "single"},
+            "ForeignKeys": {"type": "string", "enum": ["single", "schema", "all"], "default": "single"},
+            "Indexes": {"type": "string", "enum": ["single", "schema", "all"], "default": "single"},
+            "Defaults": {"type": "string", "enum": ["single", "schema", "all"], "default": "single"},
+            "Rules": {"type": "string", "enum": ["single", "schema", "all"], "default": "single"},
+            "Assemblies": {"type": "string", "enum": ["single", "schema", "all"], "default": "single"},
+            "Functions": {"type": "string", "enum": ["single", "schema", "all"], "default": "single"},
+            "UserDefinedAggregates": {"type": "string", "enum": ["single", "schema", "all"], "default": "single"},
+            "StoredProcedures": {"type": "string", "enum": ["single", "schema", "all"], "default": "single"},
+            "DatabaseTriggers": {"type": "string", "enum": ["single", "schema", "all"], "default": "single"},
+            "TableTriggers": {"type": "string", "enum": ["single", "schema", "all"], "default": "single"},
+            "Views": {"type": "string", "enum": ["single", "schema", "all"], "default": "single"},
+            "Synonyms": {"type": "string", "enum": ["single", "schema", "all"], "default": "single"},
+            "FullTextCatalogs": {"type": "string", "enum": ["single", "schema", "all"], "default": "single"},
+            "ExternalDataSources": {"type": "string", "enum": ["single", "schema", "all"], "default": "single"},
+            "ExternalFileFormats": {"type": "string", "enum": ["single", "schema", "all"], "default": "single"},
+            "SearchPropertyLists": {"type": "string", "enum": ["single", "schema", "all"], "default": "single"},
+            "PlanGuides": {"type": "string", "enum": ["single", "schema", "all"], "default": "single"},
+            "SecurityObjects": {"type": "string", "enum": ["single", "schema", "all"], "default": "single"},
+            "SecurityPolicies": {"type": "string", "enum": ["single", "schema", "all"], "default": "single"}
+          },
+          "additionalProperties": false
         }
       },
       "additionalProperties": false

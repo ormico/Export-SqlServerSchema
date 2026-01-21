@@ -91,6 +91,24 @@ export:
     # - "staging"                      # Temporary staging area
     # - "temp"                         # Temporary objects
     # - "archive"                      # Old/archived objects
+  
+  # File grouping strategy per object type
+  # Options: single (default), schema, all
+  # - single: One file per object (best for Git tracking)
+  # - schema: Group by schema into numbered files (reduces file count)
+  # - all: All objects of type in one file (minimal files)
+  groupByObjectTypes: {}
+    # FileGroups: single               # One file per filegroup
+    # DatabaseScopedConfigurations: all # All configs in one file
+    # Schemas: single                  # One file per schema
+    # Sequences: schema                # Group sequences by schema
+    # Tables: single                   # One file per table (default, best for Git)
+    # ForeignKeys: schema              # Group FKs by schema
+    # Indexes: schema                  # Group indexes by schema
+    # Functions: schema                # Group functions by schema
+    # StoredProcedures: schema         # Group stored procs by schema
+    # Views: schema                    # Group views by schema
+    # SecurityObjects: all             # All security objects in one file
 
 # ═══════════════════════════════════════════════════════════════
 # IMPORT CONFIGURATION
