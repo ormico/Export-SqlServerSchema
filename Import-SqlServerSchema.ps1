@@ -129,11 +129,21 @@ param(
     [int]$RetryDelaySeconds = 0,
     
     [Parameter(HelpMessage = 'Collect performance metrics and save to JSON file')]
-    [switch]$CollectMetrics
+    [switch]$CollectMetrics,
+    
+    [Parameter(HelpMessage = 'Include only specific object types (overrides config file). Example: Tables,Views,StoredProcedures')]
+    [ValidateSet('FileGroups', 'DatabaseConfiguration', 'Schemas', 'Sequences', 'PartitionFunctions', 'PartitionSchemes', 
+                 'Types', 'XmlSchemaCollections', 'Tables', 'ForeignKeys', 'Indexes', 'Defaults', 'Rules', 
+                 'Programmability', 'Views', 'Functions', 'StoredProcedures', 'Synonyms', 'SearchPropertyLists', 
+                 'PlanGuides', 'DatabaseRoles', 'DatabaseUsers', 'SecurityPolicies', 'Data')]
+    [string[]]$IncludeObjectTypes
 )
 
 $ErrorActionPreference = if ($ContinueOnError) { 'Continue' } else { 'Stop' }
 $script:LogFile = $null  # Will be set during import
+
+# Store IncludeObjectTypes parameter at script level for use in Get-ScriptFiles
+$script:IncludeObjectTypesFilter = $IncludeObjectTypes
 
 # Performance metrics tracking (when -CollectMetrics is used)
 $script:Metrics = @{
@@ -910,8 +920,189 @@ For more details, see: https://go.microsoft.com/fwlink/?linkid=2226722
             $level++
         }
         
-        Write-Error "  [ERROR] Failed: $scriptName`n$errorMessage"
+        # Use Write-Verbose for retry attempts (failure may be temporary due to dependencies)
+        # The calling code will use Write-Error if all retries fail
+        Write-Verbose "  [FAILED] $scriptName - will retry if dependency retry enabled`n$errorMessage"
         return -1
+    }
+}
+
+function Invoke-ScriptsWithDependencyRetries {
+    <#
+    .SYNOPSIS
+        Executes scripts with retry logic to handle cross-object dependencies.
+    
+    .DESCRIPTION
+        Processes programmability objects (Functions, StoredProcedures, Views) that may have
+        cross-type dependencies. Retries failed scripts multiple times, as successful scripts
+        may enable previously failing scripts to succeed.
+    
+    .PARAMETER Scripts
+        Array of script file objects to execute.
+    
+    .PARAMETER MaxRetries
+        Maximum number of retry attempts (default 3).
+    
+    .PARAMETER Server
+        SQL Server instance name.
+    
+    .PARAMETER Database
+        Database name.
+    
+    .PARAMETER Credential
+        SQL Server credentials.
+    
+    .PARAMETER Timeout
+        Command timeout in seconds.
+    
+    .PARAMETER ShowSQL
+        Display SQL statements being executed.
+    
+    .PARAMETER SqlCmdVariables
+        SQLCMD variables for script substitution.
+    
+    .PARAMETER Config
+        Configuration object.
+    
+    .PARAMETER Connection
+        Shared SMO connection object.
+    
+    .PARAMETER ContinueOnError
+        Continue processing even if scripts fail.
+    
+    .PARAMETER MaxAttempts
+        Maximum retry attempts for transient failures.
+    
+    .PARAMETER InitialDelaySeconds
+        Initial retry delay for transient failures.
+    
+    .OUTPUTS
+        Hashtable with success, failure, and skip counts.
+    #>
+    param(
+        [Parameter(Mandatory=$true)]
+        [array]$Scripts,
+        
+        [int]$MaxRetries = 3,
+        
+        [Parameter(Mandatory=$true)]
+        [string]$Server,
+        
+        [Parameter(Mandatory=$true)]
+        [string]$Database,
+        
+        $Credential,
+        [int]$Timeout,
+        [switch]$ShowSQL,
+        [hashtable]$SqlCmdVariables,
+        $Config,
+        $Connection,
+        [switch]$ContinueOnError,
+        [int]$MaxAttempts,
+        [int]$InitialDelaySeconds
+    )
+    
+    if ($Scripts.Count -eq 0) {
+        return @{ Success = 0; Failure = 0; Skip = 0 }
+    }
+    
+    Write-Output ''
+    Write-Output "[INFO] Processing $($Scripts.Count) programmability object(s) with dependency retry logic (max $MaxRetries retries)..."
+    Write-Verbose "[RETRY] Dependency retry enabled for $($Scripts.Count) scripts"
+    
+    $successCount = 0
+    $failureCount = 0
+    $skipCount = 0
+    
+    # Start with all scripts as "failed" (pending)
+    $pendingScripts = @($Scripts)
+    $attempt = 1
+    $failedScriptErrors = @{}  # Track last error for each failed script
+    
+    while ($pendingScripts.Count -gt 0 -and $attempt -le $MaxRetries) {
+        if ($attempt -gt 1) {
+            Write-Output "[INFO] Retry attempt $attempt of $MaxRetries - $($pendingScripts.Count) script(s) remaining..."
+            Write-Verbose "[RETRY] Attempt $attempt - retrying $($pendingScripts.Count) scripts"
+        }
+        
+        $stillFailing = @()
+        $attemptSuccessCount = 0
+        
+        foreach ($scriptFile in $pendingScripts) {
+            # Capture errors from script execution
+            $ErrorActionPreference = 'Continue'  # Allow retry loop to continue on error
+            $scriptError = $null
+            
+            try {
+                $result = Invoke-WithRetry -MaxAttempts $MaxAttempts -InitialDelaySeconds $InitialDelaySeconds `
+                    -OperationName "Script: $($scriptFile.Name)" -ScriptBlock {
+                    Invoke-SqlScript -FilePath $scriptFile.FullName -ServerName $Server `
+                        -DatabaseName $Database -Cred $Credential -Timeout $Timeout -Show:$ShowSQL `
+                        -SqlCmdVariables $SqlCmdVariables -Config $Config -Connection $Connection
+                } -ErrorVariable scriptError
+            } catch {
+                $result = -1
+                $scriptError = $_
+            }
+            
+            $ErrorActionPreference = 'Stop'  # Restore default
+            
+            if ($result -eq $true) {
+                $successCount++
+                $attemptSuccessCount++
+                # Remove from error tracking if it succeeded
+                if ($failedScriptErrors.ContainsKey($scriptFile.Name)) {
+                    $failedScriptErrors.Remove($scriptFile.Name)
+                }
+            } elseif ($result -eq -1) {
+                # Script failed - add to retry list and track error
+                $stillFailing += $scriptFile
+                if ($scriptError) {
+                    $failedScriptErrors[$scriptFile.Name] = $scriptError
+                }
+            } else {
+                $skipCount++
+            }
+        }
+        
+        Write-Verbose "[RETRY] Attempt $attempt results: $attemptSuccessCount succeeded, $($stillFailing.Count) failed"
+        
+        # Check if we made progress
+        if ($attemptSuccessCount -eq 0 -and $stillFailing.Count -gt 0) {
+            Write-Warning "[WARNING] No progress in retry attempt $attempt - no scripts succeeded"
+            Write-Warning "  Remaining failures likely due to syntax errors, missing references, or permissions"
+            break
+        }
+        
+        $pendingScripts = $stillFailing
+        $attempt++
+    }
+    
+    # Final results
+    if ($pendingScripts.Count -gt 0) {
+        $failureCount = $pendingScripts.Count
+        Write-Output ''
+        Write-Host "[WARNING] $failureCount script(s) failed after $MaxRetries retry attempt(s):" -ForegroundColor Yellow
+        foreach ($failedScript in $pendingScripts) {
+            Write-Host "  - $($failedScript.Name)" -ForegroundColor Yellow
+            # Show last captured error if available
+            if ($failedScriptErrors.ContainsKey($failedScript.Name)) {
+                $lastError = $failedScriptErrors[$failedScript.Name]
+                Write-Verbose "    Last error: $lastError"
+            }
+        }
+        
+        if (-not $ContinueOnError) {
+            Write-Error "[ERROR] Dependency retry limit reached with $failureCount failed script(s). Enable -Verbose for error details."
+        }
+    } else {
+        Write-Output "[SUCCESS] All programmability objects imported successfully"
+    }
+    
+    return @{
+        Success = $successCount
+        Failure = $failureCount
+        Skip = $skipCount
     }
 }
 
@@ -987,50 +1178,138 @@ function Get-ScriptFiles {
         $orderedDirs += '00_FileGroups'
     }
     
+    # Security - MUST come before schemas since schemas may have GRANT statements referencing roles/users
+    $orderedDirs += '01_Security'
+    
     # Database Configuration - skip in Dev mode unless explicitly enabled
     if ($modeSettings.includeConfigurations) {
-        $orderedDirs += '01_DatabaseConfiguration'
+        $orderedDirs += '02_DatabaseConfiguration'
     }
     
     # Core schema objects - always included
     $orderedDirs += @(
-        '02_Schemas',
-        '03_Sequences',
-        '04_PartitionFunctions',
-        '05_PartitionSchemes',
-        '06_Types',
-        '07_XmlSchemaCollections',
-        '08_Tables_PrimaryKey',
-        '09_Tables_ForeignKeys',
-        '10_Indexes',
-        '11_Defaults',
-        '12_Rules',
-        '13_Programmability',
-        '14_Synonyms',
-        '15_FullTextSearch'
+        '03_Schemas',
+        '04_Sequences',
+        '05_PartitionFunctions',
+        '06_PartitionSchemes',
+        '07_Types',
+        '08_XmlSchemaCollections',
+        '09_Tables_PrimaryKey',
+        '10_Tables_ForeignKeys',
+        '11_Indexes',
+        '12_Defaults',
+        '13_Rules',
+        '14_Programmability',
+        '15_Synonyms',
+        '16_FullTextSearch'
     )
     
     # External Data - skip in Dev mode unless explicitly enabled
     if ($modeSettings.includeExternalData) {
-        $orderedDirs += '16_ExternalData'
+        $orderedDirs += '17_ExternalData'
     }
     
     # Search Property Lists and Plan Guides - always included (harmless)
     $orderedDirs += @(
-        '17_SearchPropertyLists',
-        '18_PlanGuides'
+        '18_SearchPropertyLists',
+        '19_PlanGuides'
     )
     
-    # Security - always include keys/certs/roles/users
-    $orderedDirs += '19_Security'
+    # Security Policies - only in Prod mode
+    if ($modeSettings.enableSecurityPolicies) {
+        $orderedDirs += '20_SecurityPolicies'
+    }
     
     # Data - only if requested
     Write-Verbose "Get-ScriptFiles: IncludeData parameter = $IncludeData"
     if ($IncludeData) {
-        $orderedDirs += '20_Data'
-        Write-Verbose "Added 20_Data to ordered directories"
+        $orderedDirs += '21_Data'
+        Write-Verbose "Added 21_Data to ordered directories"
     } else {
-        Write-Verbose "Skipping 20_Data (IncludeData=$IncludeData)"
+        Write-Verbose "Skipping 21_Data (IncludeData=$IncludeData)"
+    }
+    
+    # Initialize subfolder paths array (used when filtering granular types like Views, Functions, StoredProcedures)
+    $subfolderPaths = @()
+    
+    # Apply IncludeObjectTypes filter if specified (command-line parameter)
+    if ($script:IncludeObjectTypesFilter -and $script:IncludeObjectTypesFilter.Count -gt 0) {
+        Write-Verbose "Applying IncludeObjectTypes filter: $($script:IncludeObjectTypesFilter -join ', ')"
+        
+        # Map object type names to folder names (and subfolders for granular types)
+        $folderMap = @{
+            'FileGroups' = '00_FileGroups'
+            'DatabaseConfiguration' = '02_DatabaseConfiguration'
+            'Schemas' = '03_Schemas'
+            'Sequences' = '04_Sequences'
+            'PartitionFunctions' = '05_PartitionFunctions'
+            'PartitionSchemes' = '06_PartitionSchemes'
+            'Types' = '07_Types'
+            'XmlSchemaCollections' = '08_XmlSchemaCollections'
+            'Tables' = @('09_Tables_PrimaryKey', '10_Tables_ForeignKeys')
+            'ForeignKeys' = '10_Tables_ForeignKeys'
+            'Indexes' = '11_Indexes'
+            'Defaults' = '12_Defaults'
+            'Rules' = '13_Rules'
+            'Programmability' = '14_Programmability'
+            'Views' = '14_Programmability\05_Views'  # Subfolder path
+            'Functions' = '14_Programmability\02_Functions'  # Subfolder path
+            'StoredProcedures' = '14_Programmability\03_StoredProcedures'  # Subfolder path
+            'Synonyms' = '15_Synonyms'
+            'SearchPropertyLists' = '18_SearchPropertyLists'
+            'PlanGuides' = '19_PlanGuides'
+            'DatabaseRoles' = '01_Security'
+            'DatabaseUsers' = '01_Security'
+            'SecurityPolicies' = '20_SecurityPolicies'
+            'Data' = '21_Data'
+        }
+        
+        $filteredDirs = @()
+        # Always include Security if any security-related types are included
+        $needsSecurity = ($script:IncludeObjectTypesFilter -contains 'DatabaseRoles') -or 
+                         ($script:IncludeObjectTypesFilter -contains 'DatabaseUsers')
+        
+        foreach ($objType in $script:IncludeObjectTypesFilter) {
+            if ($folderMap.ContainsKey($objType)) {
+                $folders = $folderMap[$objType]
+                if ($folders -is [array]) {
+                    $filteredDirs += $folders
+                } else {
+                    $filteredDirs += $folders
+                }
+            }
+        }
+        
+        # Remove duplicates and separate top-level folders from subfolders
+        $filteredDirs = $filteredDirs | Select-Object -Unique
+        $topLevelDirs = @()
+        $subfolderPaths = @()
+        
+        foreach ($dir in $filteredDirs) {
+            if ($dir -match '\\') {
+                # This is a subfolder path (e.g., "14_Programmability\05_Views")
+                $subfolderPaths += $dir
+                $topLevel = $dir.Split('\')[0]
+                if ($topLevel -notin $topLevelDirs) {
+                    $topLevelDirs += $topLevel
+                }
+            } else {
+                # This is a top-level folder
+                $topLevelDirs += $dir
+            }
+        }
+        
+        # Also include 01_Security if DatabaseRoles or DatabaseUsers are included
+        if ($needsSecurity -and '01_Security' -notin $topLevelDirs) {
+            $topLevelDirs += '01_Security'
+        }
+        
+        # Filter orderedDirs to only include top-level folders that are needed
+        $orderedDirs = $orderedDirs | Where-Object { $_ -in $topLevelDirs }
+        Write-Verbose "Filtered top-level folders: $($orderedDirs -join ', ')"
+        if ($subfolderPaths.Count -gt 0) {
+            Write-Verbose "Subfolder filters: $($subfolderPaths -join ', ')"
+        }
     }
     
     $scripts = @()
@@ -1039,18 +1318,26 @@ function Get-ScriptFiles {
     foreach ($dir in $orderedDirs) {
         $fullPath = Join-Path $Path $dir
         if (Test-Path $fullPath) {
-            # Special handling for Security folder - may need to skip RLS policies
-            if ($dir -eq '19_Security' -and -not $modeSettings.enableSecurityPolicies) {
-                # Get all security scripts except SecurityPolicies
-                $securityScripts = Get-ChildItem -Path $fullPath -Filter '*.sql' -Recurse | 
-                    Where-Object { $_.Name -notmatch 'SecurityPolicies' } |
-                    Sort-Object FullName
-                $scripts += @($securityScripts)
-                
-                if ((Get-ChildItem -Path $fullPath -Filter '*SecurityPolicies.sql' -ErrorAction SilentlyContinue).Count -gt 0) {
-                    Write-Output "  [INFO] Skipping Row-Level Security policies (disabled in $Mode mode)"
+            # Special handling for SecurityPolicies folder - may need to skip in Dev mode
+            if ($dir -eq '20_SecurityPolicies' -and -not $modeSettings.enableSecurityPolicies) {
+                Write-Output "  [INFO] Skipping Row-Level Security policies (disabled in $Mode mode)"
+                continue
+            }
+            
+            # Check if we have subfolder filters for this directory
+            $relevantSubfolders = @($subfolderPaths | Where-Object { $_.StartsWith("$dir\") })
+            
+            if ($relevantSubfolders.Count -gt 0) {
+                # Only get files from specific subfolders
+                foreach ($subfolderPath in $relevantSubfolders) {
+                    $subfolderFullPath = Join-Path $Path $subfolderPath
+                    if (Test-Path $subfolderFullPath) {
+                        $scripts += @(Get-ChildItem -Path $subfolderFullPath -Filter '*.sql' -Recurse | 
+                            Sort-Object FullName)
+                    }
                 }
             } else {
+                # No subfolder filter - get all SQL files recursively from this folder
                 $scripts += @(Get-ChildItem -Path $fullPath -Filter '*.sql' -Recurse | 
                     Sort-Object FullName)
             }
@@ -1058,7 +1345,7 @@ function Get-ScriptFiles {
     }
     
     # Track skipped folders for reporting
-    $allPossibleDirs = @('00_FileGroups', '01_DatabaseConfiguration', '16_ExternalData', '20_Data')
+    $allPossibleDirs = @('00_FileGroups', '02_DatabaseConfiguration', '17_ExternalData', '20_SecurityPolicies', '21_Data')
     foreach ($dir in $allPossibleDirs) {
         if ($dir -notin $orderedDirs) {
             $fullPath = Join-Path $Path $dir
@@ -1680,9 +1967,9 @@ try {
         foreach ($folder in $skippedFolders) {
             $reason = switch ($folder) {
                 '00_FileGroups' { 'FileGroups (environment-specific)' }
-                '01_DatabaseConfiguration' { 'Database Scoped Configurations (environment-specific)' }
-                '16_ExternalData' { 'External Data Sources (environment-specific)' }
-                '20_Data' { 'Data not requested' }
+                '02_DatabaseConfiguration' { 'Database Scoped Configurations (environment-specific)' }
+                '17_ExternalData' { 'External Data Sources (environment-specific)' }
+                '21_Data' { 'Data not requested' }
                 default { $folder }
             }
             Write-Output "  - $reason"
@@ -1727,8 +2014,98 @@ try {
     }
     Write-Verbose "Reusing shared SMO connection for script execution"
     
-    # Process non-data scripts first
-    foreach ($scriptFile in $nonDataScripts) {
+    # Get dependency retry settings from config
+    $retryEnabled = $true  # Default enabled
+    $retryMaxAttempts = 10  # Default 10 retries
+    $retryObjectTypes = @('Functions', 'StoredProcedures', 'Views')  # Default types
+    
+    if ($config -and $config.import -and $config.import.dependencyRetries) {
+        $retryConfig = $config.import.dependencyRetries
+        if ($retryConfig.ContainsKey('enabled')) {
+            $retryEnabled = $retryConfig.enabled
+        }
+        if ($retryConfig.ContainsKey('maxRetries')) {
+            $retryMaxAttempts = $retryConfig.maxRetries
+        }
+        if ($retryConfig.ContainsKey('objectTypes') -and $retryConfig.objectTypes.Count -gt 0) {
+            $retryObjectTypes = $retryConfig.objectTypes
+        }
+    }
+    
+    Write-Verbose "[RETRY] Dependency retry enabled: $retryEnabled"
+    Write-Verbose "[RETRY] Max retry attempts: $retryMaxAttempts"
+    Write-Verbose "[RETRY] Retry object types: $($retryObjectTypes -join ', ')"
+    
+    # Identify programmability scripts that need dependency retry logic
+    # These scripts are from folders: 14_Programmability/02_Functions, etc.
+    # Match folder patterns to retry object types
+    $folderPatternMap = @{
+        'Functions' = '14_Programmability[\\/]02_Functions'
+        'StoredProcedures' = '14_Programmability[\\/]03_StoredProcedures'
+        'Views' = '14_Programmability[\\/]05_Views'
+        'Synonyms' = '14_Programmability[\\/]06_Synonyms'
+        'TableTriggers' = '14_Programmability[\\/]04_TableTriggers'
+        'DatabaseTriggers' = '14_Programmability[\\/]01_DatabaseTriggers'
+    }
+    
+    # Build regex pattern to match programmability folders
+    $retryFolderPatterns = @()
+    foreach ($objectType in $retryObjectTypes) {
+        if ($folderPatternMap.ContainsKey($objectType)) {
+            $retryFolderPatterns += $folderPatternMap[$objectType]
+        }
+    }
+    
+    # If no specific patterns, match all programmability subfolder scripts
+    if ($retryFolderPatterns.Count -eq 0 -and $retryEnabled) {
+        $retryFolderPatterns += '14_Programmability'
+    }
+    
+    $retryFolderRegex = if ($retryFolderPatterns.Count -gt 0) {
+        "($($retryFolderPatterns -join '|'))"
+    } else {
+        '^$'  # Match nothing if no retry types configured
+    }
+    
+    Write-Verbose "[RETRY] Folder pattern regex: $retryFolderRegex"
+    
+    # Split scripts into programmability (needs retry), security policies (after programmability), and structural (no retry)
+    # Security policies depend on programmability objects (functions, etc.) so must be processed last
+    $programmabilityScripts = @()
+    $securityPolicyScripts = @()
+    $structuralScripts = @()
+    
+    if ($retryEnabled) {
+        foreach ($script in $nonDataScripts) {
+            # Check if script is in a programmability folder
+            $relativePath = $script.FullName.Substring($SourcePath.Length).TrimStart('\', '/')
+            if ($relativePath -match '20_SecurityPolicies') {
+                # Security policies depend on programmability objects - process after retry
+                $securityPolicyScripts += $script
+                Write-Verbose "[RETRY] Deferred security policy (depends on programmability): $($script.Name)"
+            } elseif ($relativePath -match $retryFolderRegex) {
+                $programmabilityScripts += $script
+                Write-Verbose "[RETRY] Marked for retry: $($script.Name)"
+            } else {
+                $structuralScripts += $script
+            }
+        }
+    } else {
+        # Retry disabled - treat all as structural (no retry), but still defer security policies to end
+        foreach ($script in $nonDataScripts) {
+            $relativePath = $script.FullName.Substring($SourcePath.Length).TrimStart('\', '/')
+            if ($relativePath -match '20_SecurityPolicies') {
+                $securityPolicyScripts += $script
+            } else {
+                $structuralScripts += $script
+            }
+        }
+    }
+    
+    Write-Verbose "[RETRY] Found $($programmabilityScripts.Count) programmability scripts, $($securityPolicyScripts.Count) security policy scripts, $($structuralScripts.Count) structural scripts"
+    
+    # Process structural scripts first (no retry logic - these define structure)
+    foreach ($scriptFile in $structuralScripts) {
         $result = Invoke-WithRetry -MaxAttempts $effectiveMaxRetries -InitialDelaySeconds $effectiveRetryDelay -OperationName "Script: $($scriptFile.Name)" -ScriptBlock {
             Invoke-SqlScript -FilePath $scriptFile.FullName -ServerName $Server `
                 -DatabaseName $Database -Cred $Credential -Timeout $effectiveCommandTimeout -Show:$ShowSQL `
@@ -1740,11 +2117,66 @@ try {
         } elseif ($result -eq -1) {
             $failureCount++
             if (-not $ContinueOnError) {
+                # Don't process programmability scripts if structural scripts failed
+                Write-Error "[ERROR] Structural script failed. Aborting import."
                 break
             }
         } else {
             $skipCount++
         }
+    }
+    
+    # Process programmability scripts with dependency retry logic (only if no structural failures)
+    if ($programmabilityScripts.Count -gt 0 -and ($failureCount -eq 0 -or $ContinueOnError)) {
+        $retryResults = Invoke-ScriptsWithDependencyRetries `
+            -Scripts $programmabilityScripts `
+            -MaxRetries $retryMaxAttempts `
+            -Server $Server `
+            -Database $Database `
+            -Credential $Credential `
+            -Timeout $effectiveCommandTimeout `
+            -ShowSQL:$ShowSQL `
+            -SqlCmdVariables $sqlCmdVars `
+            -Config $config `
+            -Connection $script:SharedConnection `
+            -ContinueOnError:$ContinueOnError `
+            -MaxAttempts $effectiveMaxRetries `
+            -InitialDelaySeconds $effectiveRetryDelay
+        
+        $successCount += $retryResults.Success
+        $failureCount += $retryResults.Failure
+        $skipCount += $retryResults.Skip
+    } elseif ($programmabilityScripts.Count -gt 0) {
+        Write-Warning "[WARNING] Skipping $($programmabilityScripts.Count) programmability script(s) due to earlier failures"
+        $skipCount += $programmabilityScripts.Count
+    }
+    
+    # Process security policy scripts AFTER programmability objects (they depend on functions/procedures)
+    if ($securityPolicyScripts.Count -gt 0 -and ($failureCount -eq 0 -or $ContinueOnError)) {
+        Write-Output ''
+        Write-Output "[INFO] Processing $($securityPolicyScripts.Count) security policy script(s)..."
+        foreach ($scriptFile in $securityPolicyScripts) {
+            $result = Invoke-WithRetry -MaxAttempts $effectiveMaxRetries -InitialDelaySeconds $effectiveRetryDelay -OperationName "Script: $($scriptFile.Name)" -ScriptBlock {
+                Invoke-SqlScript -FilePath $scriptFile.FullName -ServerName $Server `
+                    -DatabaseName $Database -Cred $Credential -Timeout $effectiveCommandTimeout -Show:$ShowSQL `
+                    -SqlCmdVariables $sqlCmdVars -Config $config -Connection $script:SharedConnection
+            }
+            
+            if ($result -eq $true) {
+                $successCount++
+            } elseif ($result -eq -1) {
+                $failureCount++
+                if (-not $ContinueOnError) {
+                    Write-Error "[ERROR] Security policy script failed. Aborting import."
+                    break
+                }
+            } else {
+                $skipCount++
+            }
+        }
+    } elseif ($securityPolicyScripts.Count -gt 0) {
+        Write-Warning "[WARNING] Skipping $($securityPolicyScripts.Count) security policy script(s) due to earlier failures"
+        $skipCount += $securityPolicyScripts.Count
     }
     
     # If we have data scripts and no failures so far, handle them with FK constraints disabled
@@ -1934,9 +2366,9 @@ try {
         foreach ($folder in $skippedFolders) {
             $reason = switch ($folder) {
                 '00_FileGroups' { 'FileGroups (environment-specific, skipped in Dev mode)' }
-                '01_DatabaseConfiguration' { 'Database Configurations (hardware-specific, skipped in Dev mode)' }
-                '16_ExternalData' { 'External Data Sources (environment-specific, skipped in Dev mode)' }
-                '20_Data' { 'Data not requested via -IncludeData flag' }
+                '02_DatabaseConfiguration' { 'Database Configurations (hardware-specific, skipped in Dev mode)' }
+                '17_ExternalData' { 'External Data Sources (environment-specific, skipped in Dev mode)' }
+                '21_Data' { 'Data not requested via -IncludeData flag' }
                 default { $folder }
             }
             Write-Output "  - $reason"
@@ -1955,51 +2387,56 @@ try {
     }
     
     # Check if DB Configurations were in source but skipped
-    $sourceDbConfigPath = Join-Path $SourcePath '01_DatabaseConfiguration'
-    if ((Test-Path $sourceDbConfigPath) -and ('01_DatabaseConfiguration' -in $skippedFolders)) {
+    $sourceDbConfigPath = Join-Path $SourcePath '02_DatabaseConfiguration'
+    if ((Test-Path $sourceDbConfigPath) -and ('02_DatabaseConfiguration' -in $skippedFolders)) {
         $manualActions += "[INFO] Database Scoped Configurations were exported but not imported (Dev mode)"
         $manualActions += "  Use -ImportMode Prod to import configurations (review settings first)"
     }
     
     # Check if External Data was in source but skipped
-    $sourceExtDataPath = Join-Path $SourcePath '16_ExternalData'
-    if ((Test-Path $sourceExtDataPath) -and ('16_ExternalData' -in $skippedFolders)) {
+    $sourceExtDataPath = Join-Path $SourcePath '17_ExternalData'
+    if ((Test-Path $sourceExtDataPath) -and ('17_ExternalData' -in $skippedFolders)) {
         $manualActions += "[INFO] External Data Sources were exported but not imported (Dev mode)"
         $manualActions += "  Use -ImportMode Prod to import external data (review connection strings first)"
     }
     
     # Check for Database Scoped Credentials (never imported, always manual)
-    $sourceCredsPath = Join-Path $SourcePath '01_DatabaseConfiguration' '002_DatabaseScopedCredentials.sql'
+    $sourceCredsPath = Join-Path $SourcePath '02_DatabaseConfiguration' '002_DatabaseScopedCredentials.sql'
     if (Test-Path $sourceCredsPath) {
         $credsContent = Get-Content $sourceCredsPath -Raw
         if ($credsContent -match 'CREATE DATABASE SCOPED CREDENTIAL') {
             $manualActions += "[ACTION REQUIRED] Database Scoped Credentials"
-            $manualActions += "  Location: Source\01_DatabaseConfiguration\002_DatabaseScopedCredentials.sql"
+            $manualActions += "  Location: Source\\02_DatabaseConfiguration\002_DatabaseScopedCredentials.sql"
             $manualActions += "  Action: Manually create credentials with appropriate secrets on target server"
             $manualActions += "  Note: Credentials cannot be scripted with secrets - must be manually configured"
         }
     }
     
-    # Check for RLS policies
-    $sourceRlsPath = Join-Path $SourcePath '19_Security' '008_SecurityPolicies.sql'
+    # Check for RLS policies in the new location
+    $sourceRlsPath = Join-Path $SourcePath '20_SecurityPolicies'
+    $hasRlsPolicies = $false
     if (Test-Path $sourceRlsPath) {
-        $rlsContent = Get-Content $sourceRlsPath -Raw
-        if ($rlsContent -match 'CREATE SECURITY POLICY') {
-            $modeSettings = if ($ImportMode -eq 'Dev') {
-                if ($config.import -and $config.import.developerMode) {
-                    $config.import.developerMode
-                } else {
-                    @{ enableSecurityPolicies = $false }
-                }
+        $rlsFiles = Get-ChildItem -Path $sourceRlsPath -Filter '*.sql' -ErrorAction SilentlyContinue
+        if ($rlsFiles.Count -gt 0) {
+            $hasRlsPolicies = $true
+        }
+    }
+    
+    if ($hasRlsPolicies) {
+        $modeSettings = if ($ImportMode -eq 'Dev') {
+            if ($config.import -and $config.import.developerMode) {
+                $config.import.developerMode
             } else {
-                @{ enableSecurityPolicies = $true }
+                @{ enableSecurityPolicies = $false }
             }
+        } else {
+            @{ enableSecurityPolicies = $true }
+        }
             
-            if (-not $modeSettings.enableSecurityPolicies) {
-                $manualActions += "[INFO] Row-Level Security Policies were exported but not imported ($ImportMode mode)"
-                $manualActions += "  RLS policies are disabled in Dev mode by default to simplify testing"
-                $manualActions += "  Use -ImportMode Prod or configure enableSecurityPolicies = true in config file"
-            }
+        if (-not $modeSettings.enableSecurityPolicies) {
+            $manualActions += "[INFO] Row-Level Security Policies were exported but not imported ($ImportMode mode)"
+            $manualActions += "  RLS policies are disabled in Dev mode by default to simplify testing"
+            $manualActions += "  Use -ImportMode Prod or configure enableSecurityPolicies = true in config file"
         }
     }
     

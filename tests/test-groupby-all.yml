@@ -1,0 +1,47 @@
+export:
+  includeData: false
+  excludeObjectTypes: []
+  excludeObjects: []
+  excludeSchemas: []
+  groupByObjectTypes:
+    # Schema-based objects (all mode = one file for all)
+    Sequences: all
+    UserDefinedTypes: all
+    XmlSchemaCollections: all
+    Tables: all
+    ForeignKeys: all
+    Indexes: all
+    Defaults: all
+    Rules: all
+    Functions: all
+    UserDefinedAggregates: all
+    StoredProcedures: all
+    Views: all
+    Synonyms: all
+    TableTriggers: all
+    # Database-level objects (all mode = one file)
+    Assemblies: all
+    DatabaseTriggers: all
+    PartitionFunctions: all
+    PartitionSchemes: all
+    Schemas: all
+    FullTextCatalogs: all
+    FullTextStopLists: all
+    ExternalDataSources: all
+    ExternalFileFormats: all
+    SearchPropertyLists: all
+    PlanGuides: all
+    # Security objects
+    DatabaseRoles: all
+    DatabaseUsers: all
+
+import:
+  defaultMode: Dev
+  developerMode:
+    fileGroupStrategy: autoRemap
+    includeFileGroups: false
+    includeConfigurations: false
+    includeDatabaseScopedCredentials: false
+    includeExternalData: false
+    enableSecurityPolicies: false
+    includeData: false

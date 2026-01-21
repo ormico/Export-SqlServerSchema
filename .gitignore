@@ -9,3 +9,7 @@ tests/exports/
 
 
 tests/exports_exclude_test/
+
+tests/exports_perf/
+
+*.log

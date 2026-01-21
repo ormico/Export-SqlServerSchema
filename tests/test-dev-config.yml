@@ -8,6 +8,16 @@ trustServerCertificate: true
 importMode: Dev
 includeData: true
 
+# Dependency retry settings
+import:
+  dependencyRetries:
+    enabled: true
+    maxRetries: 10
+    objectTypes:
+      - Functions
+      - StoredProcedures
+      - Views
+
 # Dev mode automatically skips:
 # - FileGroups (infrastructure)
 # - Database Scoped Configurations (infrastructure)

@@ -91,6 +91,35 @@ export:
     # - "staging"                      # Temporary staging area
     # - "temp"                         # Temporary objects
     # - "archive"                      # Old/archived objects
+  
+  # File grouping strategy per object type
+  # Options: single (default), schema, all
+  # - single: One file per object (best for Git tracking)
+  # - schema: Group by schema into numbered files (reduces file count)
+  # - all: All objects of type in one file (minimal files)
+  #
+  # NOTE: FileGroups do not support grouping modes - they always export to a single
+  # consolidated file (001_FileGroups.sql)
+  groupByObjectTypes: {}
+    # Sequences: schema                # Group sequences by schema
+    # PartitionFunctions: all          # All partition functions in one file
+    # PartitionSchemes: all            # All partition schemes in one file
+    # UserDefinedTypes: schema         # Group UDTs by schema
+    # XmlSchemaCollections: schema     # Group XML schemas by schema
+    # Tables: single                   # One file per table (default, best for Git)
+    # ForeignKeys: schema              # Group FKs by parent table's schema
+    # Indexes: schema                  # Group indexes by parent table's schema
+    # Defaults: schema                 # Group defaults by schema
+    # Rules: schema                    # Group rules by schema
+    # Assemblies: all                  # All assemblies in one file (no schema property)
+    # Functions: schema                # Group functions by schema
+    # UserDefinedAggregates: schema    # Group CLR aggregates by schema
+    # StoredProcedures: schema         # Group stored procs by schema
+    # DatabaseTriggers: all            # All database triggers in one file (no schema)
+    # TableTriggers: schema            # Group table triggers by parent table's schema
+    # Views: schema                    # Group views by schema
+    # Synonyms: schema                 # Group synonyms by schema
+    # PlanGuides: all                  # All plan guides in one file
 
 # ═══════════════════════════════════════════════════════════════
 # IMPORT CONFIGURATION
@@ -100,6 +129,31 @@ import:
   # Dev = simplified for local development (default)
   # Prod = full production deployment
   defaultMode: Dev
+  
+  # ─────────────────────────────────────────────────────────────
+  # DEPENDENCY RETRY SETTINGS
+  # ─────────────────────────────────────────────────────────────
+  # Handles cross-object dependencies in programmability objects
+  # Example: Function A calls Function B, View X selects from View Y
+  dependencyRetries:
+    # Enable retry logic for programmability objects (default: true)
+    enabled: true
+    
+    # Maximum retry attempts (default: 10)
+    # If objects still fail after max retries, likely due to syntax errors
+    # or missing references outside the retry group
+    maxRetries: 10
+    
+    # Object types to retry together as a group (default: Functions, StoredProcedures, Views)
+    # These are processed with multiple passes to resolve cross-type dependencies
+    # For example: Stored procedure queries a view, or function calls another function
+    objectTypes:
+      - Functions
+      - StoredProcedures
+      - Views
+      # - Synonyms              # Uncomment if synonyms reference other synonyms
+      # - TableTriggers         # Uncomment if triggers reference each other
+      # - DatabaseTriggers      # Uncomment if database triggers have dependencies
   
   # ─────────────────────────────────────────────────────────────
   # DEVELOPER MODE SETTINGS (Local Development)

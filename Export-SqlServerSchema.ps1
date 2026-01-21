@@ -93,7 +93,27 @@ param(
     [int]$RetryDelaySeconds = 0,
     
     [Parameter(HelpMessage = 'Collect performance metrics for analysis')]
-    [switch]$CollectMetrics
+    [switch]$CollectMetrics,
+    
+    [Parameter(HelpMessage = 'Include only specific object types (overrides config file). Example: Tables,Views,StoredProcedures')]
+    [ValidateSet('FileGroups', 'DatabaseScopedConfigurations', 'DatabaseScopedCredentials', 'Schemas', 'Sequences', 
+                 'PartitionFunctions', 'PartitionSchemes', 'UserDefinedTypes', 'XmlSchemaCollections', 'Tables', 
+                 'ForeignKeys', 'Indexes', 'Defaults', 'Rules', 'Assemblies', 'DatabaseTriggers', 'TableTriggers', 
+                 'Functions', 'UserDefinedAggregates', 'StoredProcedures', 'Views', 'Synonyms', 'FullTextCatalogs', 
+                 'FullTextStopLists', 'SearchPropertyLists', 'ExternalDataSources', 'ExternalFileFormats', 
+                 'DatabaseRoles', 'DatabaseUsers', 'Certificates', 'AsymmetricKeys', 'SymmetricKeys', 
+                 'SecurityPolicies', 'PlanGuides', 'Data')]
+    [string[]]$IncludeObjectTypes,
+    
+    [Parameter(HelpMessage = 'Exclude specific object types (overrides config file). Example: Data,SecurityPolicies')]
+    [ValidateSet('FileGroups', 'DatabaseScopedConfigurations', 'DatabaseScopedCredentials', 'Schemas', 'Sequences', 
+                 'PartitionFunctions', 'PartitionSchemes', 'UserDefinedTypes', 'XmlSchemaCollections', 'Tables', 
+                 'ForeignKeys', 'Indexes', 'Defaults', 'Rules', 'Assemblies', 'DatabaseTriggers', 'TableTriggers', 
+                 'Functions', 'UserDefinedAggregates', 'StoredProcedures', 'Views', 'Synonyms', 'FullTextCatalogs', 
+                 'FullTextStopLists', 'SearchPropertyLists', 'ExternalDataSources', 'ExternalFileFormats', 
+                 'DatabaseRoles', 'DatabaseUsers', 'Certificates', 'AsymmetricKeys', 'SymmetricKeys', 
+                 'SecurityPolicies', 'PlanGuides', 'Data')]
+    [string[]]$ExcludeObjectTypes
 )
 
 $ErrorActionPreference = 'Stop'
@@ -674,30 +694,31 @@ function Initialize-OutputDirectory {
     
     $subdirs = @(
         '00_FileGroups',
-        '01_DatabaseConfiguration',
-        '02_Schemas',
-        '03_Sequences',
-        '04_PartitionFunctions',
-        '05_PartitionSchemes',
-        '06_Types',
-        '07_XmlSchemaCollections',
-        '08_Tables_PrimaryKey',
-        '09_Tables_ForeignKeys',
-        '10_Indexes',
-        '11_Defaults',
-        '12_Rules',
-        '13_Programmability/01_Assemblies',
-        '13_Programmability/02_Functions',
-        '13_Programmability/03_StoredProcedures',
-        '13_Programmability/04_Triggers',
-        '13_Programmability/05_Views',
-        '14_Synonyms',
-        '15_FullTextSearch',
-        '16_ExternalData',
-        '17_SearchPropertyLists',
-        '18_PlanGuides',
-        '19_Security',
-        '20_Data'
+        '01_Security',
+        '02_DatabaseConfiguration',
+        '03_Schemas',
+        '04_Sequences',
+        '05_PartitionFunctions',
+        '06_PartitionSchemes',
+        '07_Types',
+        '08_XmlSchemaCollections',
+        '09_Tables_PrimaryKey',
+        '10_Tables_ForeignKeys',
+        '11_Indexes',
+        '12_Defaults',
+        '13_Rules',
+        '14_Programmability/01_Assemblies',
+        '14_Programmability/02_Functions',
+        '14_Programmability/03_StoredProcedures',
+        '14_Programmability/04_Triggers',
+        '14_Programmability/05_Views',
+        '15_Synonyms',
+        '16_FullTextSearch',
+        '17_ExternalData',
+        '18_SearchPropertyLists',
+        '19_PlanGuides',
+        '20_SecurityPolicies',
+        '21_Data'
     )
     
     if (-not (Test-Path $exportDir)) {
@@ -789,8 +810,23 @@ function Import-YamlConfig {
         if (-not $config.export) {
             $config.export = @{}
         }
+        if (-not $config.export.includeObjectTypes) {
+            $config.export.includeObjectTypes = @()
+        }
         if (-not $config.export.excludeObjectTypes) {
             $config.export.excludeObjectTypes = @()
+        }
+        
+        # Command-line IncludeObjectTypes overrides config file
+        if ($IncludeObjectTypes -and $IncludeObjectTypes.Count -gt 0) {
+            $config.export.includeObjectTypes = $IncludeObjectTypes
+            Write-Verbose "Command-line override: IncludeObjectTypes = $($IncludeObjectTypes -join ', ')"
+        }
+        
+        # Command-line ExcludeObjectTypes overrides config file
+        if ($ExcludeObjectTypes -and $ExcludeObjectTypes.Count -gt 0) {
+            $config.export.excludeObjectTypes = $ExcludeObjectTypes
+            Write-Verbose "Command-line override: ExcludeObjectTypes = $($ExcludeObjectTypes -join ', ')"
         }
         if (-not $config.export.ContainsKey('includeData')) {
             $config.export.includeData = $false
@@ -800,6 +836,9 @@ function Import-YamlConfig {
         }
         if (-not $config.export.excludeSchemas) {
             $config.export.excludeSchemas = @()
+        }
+        if (-not $config.export.groupByObjectTypes) {
+            $config.export.groupByObjectTypes = @{}
         }
         
         Write-Host "[SUCCESS] Configuration loaded successfully" -ForegroundColor Green
@@ -843,8 +882,11 @@ function Show-ExportConfiguration {
     Write-Host "Include Data: " -NoNewline -ForegroundColor Gray
     Write-Host $(if ($DataExport) { "Yes" } else { "No" }) -ForegroundColor White
     
-    # Show excluded object types if any
-    if ($Config.export -and $Config.export.excludeObjectTypes -and $Config.export.excludeObjectTypes.Count -gt 0) {
+    # Show included/excluded object types
+    if ($Config.export -and $Config.export.includeObjectTypes -and $Config.export.includeObjectTypes.Count -gt 0) {
+        Write-Host "Included Object Types (whitelist): " -NoNewline -ForegroundColor Gray
+        Write-Host ($Config.export.includeObjectTypes -join ", ") -ForegroundColor Cyan
+    } elseif ($Config.export -and $Config.export.excludeObjectTypes -and $Config.export.excludeObjectTypes.Count -gt 0) {
         Write-Host "Excluded Object Types: " -NoNewline -ForegroundColor Gray
         Write-Host ($Config.export.excludeObjectTypes -join ", ") -ForegroundColor Yellow
     } else {
@@ -861,10 +903,14 @@ function Show-ExportConfiguration {
     Write-Host ""
     Write-Host "EXPORT STRATEGY" -ForegroundColor Yellow
     Write-Host "---------------" -ForegroundColor Yellow
-    Write-Host "[ENABLED] All object types exported by default" -ForegroundColor Green
     
-    if ($Config.export -and $Config.export.excludeObjectTypes -and $Config.export.excludeObjectTypes.Count -gt 0) {
+    if ($Config.export -and $Config.export.includeObjectTypes -and $Config.export.includeObjectTypes.Count -gt 0) {
+        Write-Host "[INCLUDE ONLY] $($Config.export.includeObjectTypes -join ', ')" -ForegroundColor Cyan
+    } elseif ($Config.export -and $Config.export.excludeObjectTypes -and $Config.export.excludeObjectTypes.Count -gt 0) {
+        Write-Host "[ENABLED] All object types exported by default" -ForegroundColor Green
         Write-Host "[EXCLUDED] $($Config.export.excludeObjectTypes -join ', ')" -ForegroundColor Yellow
+    } else {
+        Write-Host "[ENABLED] All object types exported by default" -ForegroundColor Green
     }
     
     if ($DataExport) {
@@ -941,6 +987,9 @@ function Test-ObjectTypeExcluded {
     <#
     .SYNOPSIS
         Checks if an object type should be excluded from export based on configuration.
+    .DESCRIPTION
+        If includeObjectTypes is specified, only those types are exported (whitelist).
+        Otherwise, excludeObjectTypes acts as a blacklist.
     #>
     param(
         [Parameter(Mandatory=$true)]
@@ -948,8 +997,16 @@ function Test-ObjectTypeExcluded {
     )
     
     # Use script-level $Config variable
-    if ($script:Config -and $script:Config.export -and $script:Config.export.excludeObjectTypes) {
-        return $script:Config.export.excludeObjectTypes -contains $ObjectType
+    if ($script:Config -and $script:Config.export) {
+        # If includeObjectTypes is specified, it acts as a whitelist
+        if ($script:Config.export.includeObjectTypes -and $script:Config.export.includeObjectTypes.Count -gt 0) {
+            return -not ($script:Config.export.includeObjectTypes -contains $ObjectType)
+        }
+        
+        # Otherwise, use excludeObjectTypes as a blacklist
+        if ($script:Config.export.excludeObjectTypes) {
+            return $script:Config.export.excludeObjectTypes -contains $ObjectType
+        }
     }
     
     return $false
@@ -1003,6 +1060,36 @@ function Test-ObjectExcluded {
     }
 
     return $false
+}
+
+function Get-ObjectGroupingMode {
+    <#
+    .SYNOPSIS
+        Gets the file grouping mode for a specific object type.
+    .DESCRIPTION
+        Returns 'single', 'schema', or 'all' based on configuration.
+        Defaults to 'single' if not specified.
+    #>
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$ObjectType
+    )
+
+    # Default is 'single' (one file per object)
+    $defaultMode = 'single'
+
+    if ($script:Config -and 
+        $script:Config.export -and 
+        $script:Config.export.groupByObjectTypes -and 
+        $script:Config.export.groupByObjectTypes.ContainsKey($ObjectType)) {
+        
+        $mode = $script:Config.export.groupByObjectTypes[$ObjectType]
+        if ($mode -in @('single', 'schema', 'all')) {
+            return $mode
+        }
+    }
+
+    return $defaultMode
 }
 
 function Export-DatabaseObjects {
@@ -1123,7 +1210,7 @@ function Export-DatabaseObjects {
     try {
         $dbConfigs = @($Database.DatabaseScopedConfigurations)
         if ($dbConfigs.Count -gt 0) {
-            $configFilePath = Join-Path $OutputDir '01_DatabaseConfiguration' '001_DatabaseScopedConfigurations.sql'
+            $configFilePath = Join-Path $OutputDir '02_DatabaseConfiguration' '001_DatabaseScopedConfigurations.sql'
             $configScript = New-Object System.Text.StringBuilder
             [void]$configScript.AppendLine("-- Database Scoped Configurations")
             [void]$configScript.AppendLine("-- WARNING: These settings are hardware-specific (e.g., MAXDOP)")
@@ -1159,7 +1246,7 @@ function Export-DatabaseObjects {
         # Filter to actual credentials (collection may contain null/empty elements)
         $dbCredentials = @($Database.Credentials | Where-Object { $null -ne $_.Name -and $_.Name -ne '' })
         if ($dbCredentials.Count -gt 0) {
-            $credFilePath = Join-Path $OutputDir '01_DatabaseConfiguration' '002_DatabaseScopedCredentials.sql'
+            $credFilePath = Join-Path $OutputDir '02_DatabaseConfiguration' '002_DatabaseScopedCredentials.sql'
             $credScript = New-Object System.Text.StringBuilder
             [void]$credScript.AppendLine("-- Database Scoped Credentials (Structure Only)")
             [void]$credScript.AppendLine("-- WARNING: Secrets cannot be exported and must be provided during import")
@@ -1199,7 +1286,8 @@ function Export-DatabaseObjects {
     } else {
     $schemas = @($Database.Schemas | Where-Object { -not $_.IsSystemObject -and $_.Name -ne $_.Owner -and -not (Test-SchemaExcluded -Schema $_.Name) })
     if ($schemas.Count -gt 0) {
-        Write-Output "  Found $($schemas.Count) schema(s) to export"
+        $groupingMode = Get-ObjectGroupingMode -ObjectType 'Schemas'
+        Write-Output "  Found $($schemas.Count) schema(s) to export (grouping: $groupingMode)"
         $successCount = 0
         $failCount = 0
         $currentItem = 0
@@ -1207,29 +1295,53 @@ function Export-DatabaseObjects {
         $Scripter.Options = $opts
         Write-ProgressHeader 'Schemas'
         
-        foreach ($schema in $schemas) {
-            $currentItem++
-            $percentComplete = [math]::Round(($currentItem / $schemas.Count) * 100)
-            try {
-                Write-ObjectProgress -ObjectName $schema.Name -Current $currentItem -Total $schemas.Count
-                $safeName = Get-SafeFileName $schema.Name
-                $fileName = Join-Path $OutputDir '02_Schemas' "$safeName.sql"
-                
-                # Ensure directory exists and validate path
-                Ensure-DirectoryExists $fileName
-                if (-not (Test-Path (Split-Path $fileName -Parent))) {
-                    throw "Failed to create directory: $(Split-Path $fileName -Parent)"
+        if ($groupingMode -eq 'single') {
+            # One file per schema
+            foreach ($schema in $schemas) {
+                $currentItem++
+                $percentComplete = [math]::Round(($currentItem / $schemas.Count) * 100)
+                try {
+                    Write-ObjectProgress -ObjectName $schema.Name -Current $currentItem -Total $schemas.Count
+                    $safeName = Get-SafeFileName $schema.Name
+                    $fileName = Join-Path $OutputDir '03_Schemas' "$safeName.sql"
+                    
+                    # Ensure directory exists and validate path
+                    Ensure-DirectoryExists $fileName
+                    if (-not (Test-Path (Split-Path $fileName -Parent))) {
+                        throw "Failed to create directory: $(Split-Path $fileName -Parent)"
+                    }
+                    
+                    $opts.FileName = $fileName
+                    $Scripter.Options = $opts
+                    $Scripter.EnumScript($schema) | Out-Null
+                    Write-ObjectProgress -ObjectName $schema.Name -Current $currentItem -Total $schemas.Count -Success
+                    $successCount++
+                } catch {
+                    Write-ObjectProgress -ObjectName $schema.Name -Current $currentItem -Total $schemas.Count -Failed
+                    Write-ExportError -ObjectType 'Schema' -ObjectName $schema.Name -ErrorRecord $_ -FilePath $fileName
+                    $failCount++
                 }
-                
-                $opts.FileName = $fileName
-                $Scripter.Options = $opts
-                $schema.Script($opts) | Out-Null
-                Write-ObjectProgress -ObjectName $schema.Name -Current $currentItem -Total $schemas.Count -Success
-                $successCount++
-            } catch {
-                Write-ObjectProgress -ObjectName $schema.Name -Current $currentItem -Total $schemas.Count -Failed
-                Write-ExportError -ObjectType 'Schema' -ObjectName $schema.Name -ErrorRecord $_ -FilePath $fileName
-                $failCount++
+            }
+        } elseif ($groupingMode -eq 'schema' -or $groupingMode -eq 'all') {
+            # Schemas have no parent schema, so both modes produce one file
+            $fileName = Join-Path $OutputDir '03_Schemas' "001_AllSchemas.sql"
+            Ensure-DirectoryExists $fileName
+            $opts.FileName = $fileName
+            $opts.AppendToFile = $false  # Start fresh
+            $Scripter.Options = $opts
+            foreach ($schema in $schemas) {
+                $currentItem++
+                try {
+                    Write-ObjectProgress -ObjectName $schema.Name -Current $currentItem -Total $schemas.Count
+                    $Scripter.EnumScript($schema) | Out-Null
+                    $opts.AppendToFile = $true  # Append subsequent objects
+                    Write-ObjectProgress -ObjectName $schema.Name -Current $currentItem -Total $schemas.Count -Success
+                    $successCount++
+                } catch {
+                    Write-ObjectProgress -ObjectName $schema.Name -Current $currentItem -Total $schemas.Count -Failed
+                    Write-ExportError -ObjectType 'Schema' -ObjectName $schema.Name -ErrorRecord $_ -FilePath $fileName
+                    $failCount++
+                }
             }
         }
         $script:CurrentProgressLabel = $null
@@ -1245,7 +1357,8 @@ function Export-DatabaseObjects {
     } else {
     $sequences = @($Database.Sequences | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) })
     if ($sequences.Count -gt 0) {
-        Write-Output "  Found $($sequences.Count) sequence(s) to export"
+        $groupingMode = Get-ObjectGroupingMode -ObjectType 'Sequences'
+        Write-Output "  Found $($sequences.Count) sequence(s) to export (grouping: $groupingMode)"
         $successCount = 0
         $failCount = 0
         $currentItem = 0
@@ -1253,29 +1366,73 @@ function Export-DatabaseObjects {
         $Scripter.Options = $opts
         Write-ProgressHeader 'Sequences'
         
-        foreach ($sequence in $sequences) {
-            $currentItem++
-            try {
-                Write-ObjectProgress -ObjectName "$($sequence.Schema).$($sequence.Name)" -Current $currentItem -Total $sequences.Count
-                $safeSchema = Get-SafeFileName $sequence.Schema
-                $safeName = Get-SafeFileName $sequence.Name
-                $fileName = Join-Path $OutputDir '03_Sequences' "$safeSchema.$safeName.sql"
-                
-                # Ensure directory exists and validate path
-                Ensure-DirectoryExists $fileName
-                if (-not (Test-Path (Split-Path $fileName -Parent))) {
-                    throw "Failed to create directory: $(Split-Path $fileName -Parent)"
+        if ($groupingMode -eq 'single') {
+            # One file per sequence
+            foreach ($sequence in $sequences) {
+                $currentItem++
+                try {
+                    Write-ObjectProgress -ObjectName "$($sequence.Schema).$($sequence.Name)" -Current $currentItem -Total $sequences.Count
+                    $safeSchema = Get-SafeFileName $sequence.Schema
+                    $safeName = Get-SafeFileName $sequence.Name
+                    $fileName = Join-Path $OutputDir '04_Sequences' "$safeSchema.$safeName.sql"
+                    Ensure-DirectoryExists $fileName
+                    $opts.FileName = $fileName
+                    $Scripter.Options = $opts
+                    $Scripter.EnumScript($sequence) | Out-Null
+                    Write-ObjectProgress -ObjectName "$($sequence.Schema).$($sequence.Name)" -Current $currentItem -Total $sequences.Count -Success
+                    $successCount++
+                } catch {
+                    Write-ObjectProgress -ObjectName "$($sequence.Schema).$($sequence.Name)" -Current $currentItem -Total $sequences.Count -Failed
+                    Write-ExportError -ObjectType 'Sequence' -ObjectName "$($sequence.Schema).$($sequence.Name)" -ErrorRecord $_ -FilePath $fileName
+                    $failCount++
                 }
-                
+            }
+        } elseif ($groupingMode -eq 'schema') {
+            # Group by schema
+            $sequencesBySchema = $sequences | Group-Object -Property Schema | Sort-Object Name
+            $schemaIndex = 0
+            foreach ($schemaGroup in $sequencesBySchema) {
+                $schemaIndex++
+                $fileName = Join-Path $OutputDir '04_Sequences' ("{0:D3}_{1}.sql" -f $schemaIndex, (Get-SafeFileName $schemaGroup.Name))
+                Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
+                $opts.AppendToFile = $false  # Start fresh for each schema file
                 $Scripter.Options = $opts
-                $sequence.Script($opts) | Out-Null
-                Write-ObjectProgress -ObjectName "$($sequence.Schema).$($sequence.Name)" -Current $currentItem -Total $sequences.Count -Success
-                $successCount++
-            } catch {
-                Write-ObjectProgress -ObjectName "$($sequence.Schema).$($sequence.Name)" -Current $currentItem -Total $sequences.Count -Failed
-                Write-ExportError -ObjectType 'Sequence' -ObjectName "$($sequence.Schema).$($sequence.Name)" -ErrorRecord $_ -FilePath $fileName
-                $failCount++
+                foreach ($sequence in $schemaGroup.Group) {
+                    $currentItem++
+                    try {
+                        Write-ObjectProgress -ObjectName "$($sequence.Schema).$($sequence.Name)" -Current $currentItem -Total $sequences.Count
+                        $Scripter.EnumScript($sequence) | Out-Null
+                        $opts.AppendToFile = $true  # Append subsequent objects
+                        Write-ObjectProgress -ObjectName "$($sequence.Schema).$($sequence.Name)" -Current $currentItem -Total $sequences.Count -Success
+                        $successCount++
+                    } catch {
+                        Write-ObjectProgress -ObjectName "$($sequence.Schema).$($sequence.Name)" -Current $currentItem -Total $sequences.Count -Failed
+                        Write-ExportError -ObjectType 'Sequence' -ObjectName "$($sequence.Schema).$($sequence.Name)" -ErrorRecord $_ -FilePath $fileName
+                        $failCount++
+                    }
+                }
+            }
+        } elseif ($groupingMode -eq 'all') {
+            # All in one file
+            $fileName = Join-Path $OutputDir '04_Sequences' "001_AllSequences.sql"
+            Ensure-DirectoryExists $fileName
+            $opts.FileName = $fileName
+            $opts.AppendToFile = $false  # Start fresh
+            $Scripter.Options = $opts
+            foreach ($sequence in $sequences) {
+                $currentItem++
+                try {
+                    Write-ObjectProgress -ObjectName "$($sequence.Schema).$($sequence.Name)" -Current $currentItem -Total $sequences.Count
+                    $Scripter.EnumScript($sequence) | Out-Null
+                    $opts.AppendToFile = $true  # Append subsequent objects
+                    Write-ObjectProgress -ObjectName "$($sequence.Schema).$($sequence.Name)" -Current $currentItem -Total $sequences.Count -Success
+                    $successCount++
+                } catch {
+                    Write-ObjectProgress -ObjectName "$($sequence.Schema).$($sequence.Name)" -Current $currentItem -Total $sequences.Count -Failed
+                    Write-ExportError -ObjectType 'Sequence' -ObjectName "$($sequence.Schema).$($sequence.Name)" -ErrorRecord $_ -FilePath $fileName
+                    $failCount++
+                }
             }
         }
         $script:CurrentProgressLabel = $null
@@ -1291,7 +1448,8 @@ function Export-DatabaseObjects {
     } else {
     $partitionFunctions = @($Database.PartitionFunctions | Where-Object { -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) })
     if ($partitionFunctions.Count -gt 0) {
-        Write-Output "  Found $($partitionFunctions.Count) partition function(s) to export"
+        $groupingMode = Get-ObjectGroupingMode -ObjectType 'PartitionFunctions'
+        Write-Output "  Found $($partitionFunctions.Count) partition function(s) to export (grouping: $groupingMode)"
         $successCount = 0
         $failCount = 0
         $currentItem = 0
@@ -1299,21 +1457,45 @@ function Export-DatabaseObjects {
         $Scripter.Options = $opts
         Write-ProgressHeader 'PartitionFunctions'
         
-        foreach ($pf in $partitionFunctions) {
-            $currentItem++
-            try {
-                Write-ObjectProgress -ObjectName $pf.Name -Current $currentItem -Total $partitionFunctions.Count
-                $fileName = Join-Path $OutputDir '04_PartitionFunctions' "$(Get-SafeFileName $($pf.Name)).sql"
-                Ensure-DirectoryExists $fileName
-                $opts.FileName = $fileName
-                $Scripter.Options = $opts
-                $pf.Script($opts) | Out-Null
-                Write-ObjectProgress -ObjectName $pf.Name -Current $currentItem -Total $partitionFunctions.Count -Success
-                $successCount++
-            } catch {
-                Write-ObjectProgress -ObjectName $pf.Name -Current $currentItem -Total $partitionFunctions.Count -Failed
-                Write-ExportError -ObjectType 'PartitionFunction' -ObjectName $pf.Name -ErrorRecord $_ -FilePath $fileName
-                $failCount++
+        if ($groupingMode -eq 'single') {
+            # One file per partition function
+            foreach ($pf in $partitionFunctions) {
+                $currentItem++
+                try {
+                    Write-ObjectProgress -ObjectName $pf.Name -Current $currentItem -Total $partitionFunctions.Count
+                    $fileName = Join-Path $OutputDir '05_PartitionFunctions' "PartitionFunction.$(Get-SafeFileName $($pf.Name)).sql"
+                    Ensure-DirectoryExists $fileName
+                    $opts.FileName = $fileName
+                    $Scripter.Options = $opts
+                    $Scripter.EnumScript($pf) | Out-Null
+                    Write-ObjectProgress -ObjectName $pf.Name -Current $currentItem -Total $partitionFunctions.Count -Success
+                    $successCount++
+                } catch {
+                    Write-ObjectProgress -ObjectName $pf.Name -Current $currentItem -Total $partitionFunctions.Count -Failed
+                    Write-ExportError -ObjectType 'PartitionFunction' -ObjectName $pf.Name -ErrorRecord $_ -FilePath $fileName
+                    $failCount++
+                }
+            }
+        } elseif ($groupingMode -eq 'schema' -or $groupingMode -eq 'all') {
+            # No schema property, so both modes produce one file
+            $fileName = Join-Path $OutputDir '05_PartitionFunctions' "001_AllPartitionFunctions.sql"
+            Ensure-DirectoryExists $fileName
+            $opts.FileName = $fileName
+            $opts.AppendToFile = $false  # Start fresh
+            $Scripter.Options = $opts
+            foreach ($pf in $partitionFunctions) {
+                $currentItem++
+                try {
+                    Write-ObjectProgress -ObjectName $pf.Name -Current $currentItem -Total $partitionFunctions.Count
+                    $Scripter.EnumScript($pf) | Out-Null
+                    $opts.AppendToFile = $true  # Append subsequent objects
+                    Write-ObjectProgress -ObjectName $pf.Name -Current $currentItem -Total $partitionFunctions.Count -Success
+                    $successCount++
+                } catch {
+                    Write-ObjectProgress -ObjectName $pf.Name -Current $currentItem -Total $partitionFunctions.Count -Failed
+                    Write-ExportError -ObjectType 'PartitionFunction' -ObjectName $pf.Name -ErrorRecord $_ -FilePath $fileName
+                    $failCount++
+                }
             }
         }
         $script:CurrentProgressLabel = $null
@@ -1329,7 +1511,8 @@ function Export-DatabaseObjects {
     } else {
     $partitionSchemes = @($Database.PartitionSchemes | Where-Object { -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) })
     if ($partitionSchemes.Count -gt 0) {
-        Write-Output "  Found $($partitionSchemes.Count) partition scheme(s) to export"
+        $groupingMode = Get-ObjectGroupingMode -ObjectType 'PartitionSchemes'
+        Write-Output "  Found $($partitionSchemes.Count) partition scheme(s) to export (grouping: $groupingMode)"
         $successCount = 0
         $failCount = 0
         $currentItem = 0
@@ -1337,21 +1520,45 @@ function Export-DatabaseObjects {
         $Scripter.Options = $opts
         Write-ProgressHeader 'PartitionSchemes'
         
-        foreach ($ps in $partitionSchemes) {
-            $currentItem++
-            try {
-                Write-ObjectProgress -ObjectName $ps.Name -Current $currentItem -Total $partitionSchemes.Count
-                $fileName = Join-Path $OutputDir '05_PartitionSchemes' "$(Get-SafeFileName $($ps.Name)).sql"
-                Ensure-DirectoryExists $fileName
-                $opts.FileName = $fileName
-                $Scripter.Options = $opts
-                $ps.Script($opts) | Out-Null
-                Write-ObjectProgress -ObjectName $ps.Name -Current $currentItem -Total $partitionSchemes.Count -Success
-                $successCount++
-            } catch {
-                Write-ObjectProgress -ObjectName $ps.Name -Current $currentItem -Total $partitionSchemes.Count -Failed
-                Write-ExportError -ObjectType 'PartitionScheme' -ObjectName $ps.Name -ErrorRecord $_ -FilePath $fileName
-                $failCount++
+        if ($groupingMode -eq 'single') {
+            # One file per partition scheme
+            foreach ($ps in $partitionSchemes) {
+                $currentItem++
+                try {
+                    Write-ObjectProgress -ObjectName $ps.Name -Current $currentItem -Total $partitionSchemes.Count
+                    $fileName = Join-Path $OutputDir '06_PartitionSchemes' "PartitionScheme.$(Get-SafeFileName $($ps.Name)).sql"
+                    Ensure-DirectoryExists $fileName
+                    $opts.FileName = $fileName
+                    $Scripter.Options = $opts
+                    $Scripter.EnumScript($ps) | Out-Null
+                    Write-ObjectProgress -ObjectName $ps.Name -Current $currentItem -Total $partitionSchemes.Count -Success
+                    $successCount++
+                } catch {
+                    Write-ObjectProgress -ObjectName $ps.Name -Current $currentItem -Total $partitionSchemes.Count -Failed
+                    Write-ExportError -ObjectType 'PartitionScheme' -ObjectName $ps.Name -ErrorRecord $_ -FilePath $fileName
+                    $failCount++
+                }
+            }
+        } elseif ($groupingMode -eq 'schema' -or $groupingMode -eq 'all') {
+            # No schema property, so both modes produce one file
+            $fileName = Join-Path $OutputDir '06_PartitionSchemes' "001_AllPartitionSchemes.sql"
+            Ensure-DirectoryExists $fileName
+            $opts.FileName = $fileName
+            $opts.AppendToFile = $false  # Start fresh
+            $Scripter.Options = $opts
+            foreach ($ps in $partitionSchemes) {
+                $currentItem++
+                try {
+                    Write-ObjectProgress -ObjectName $ps.Name -Current $currentItem -Total $partitionSchemes.Count
+                    $Scripter.EnumScript($ps) | Out-Null
+                    $opts.AppendToFile = $true  # Append subsequent objects
+                    Write-ObjectProgress -ObjectName $ps.Name -Current $currentItem -Total $partitionSchemes.Count -Success
+                    $successCount++
+                } catch {
+                    Write-ObjectProgress -ObjectName $ps.Name -Current $currentItem -Total $partitionSchemes.Count -Failed
+                    Write-ExportError -ObjectType 'PartitionScheme' -ObjectName $ps.Name -ErrorRecord $_ -FilePath $fileName
+                    $failCount++
+                }
             }
         }
         $script:CurrentProgressLabel = $null
@@ -1383,7 +1590,8 @@ function Export-DatabaseObjects {
     }
     
     if ($allTypes.Count -gt 0) {
-        Write-Output "  Found $($allTypes.Count) type(s) to export"
+        $groupingMode = Get-ObjectGroupingMode -ObjectType 'UserDefinedTypes'
+        Write-Output "  Found $($allTypes.Count) type(s) to export (grouping: $groupingMode)"
         $successCount = 0
         $failCount = 0
         $currentItem = 0
@@ -1391,24 +1599,78 @@ function Export-DatabaseObjects {
         $Scripter.Options = $opts
         Write-ProgressHeader 'Types'
         
-        foreach ($type in $allTypes) {
-            $currentItem++
-            try {
-                $typeName = if ($type.Schema) { "$($type.Schema).$($type.Name)" } else { $type.Name }
-                Write-ObjectProgress -ObjectName $typeName -Current $currentItem -Total $allTypes.Count
-                $safeTypeName = Get-SafeFileName $typeName
-                $fileName = Join-Path $OutputDir '06_Types' "$safeTypeName.sql"
+        if ($groupingMode -eq 'single') {
+            # One file per type
+            foreach ($type in $allTypes) {
+                $currentItem++
+                try {
+                    $typeName = if ($type.Schema) { "$($type.Schema).$($type.Name)" } else { $type.Name }
+                    Write-ObjectProgress -ObjectName $typeName -Current $currentItem -Total $allTypes.Count
+                    $safeTypeName = Get-SafeFileName $typeName
+                    $fileName = Join-Path $OutputDir '07_Types' "$safeTypeName.sql"
+                    Ensure-DirectoryExists $fileName
+                    $opts.FileName = $fileName
+                    $Scripter.Options = $opts
+                    $Scripter.EnumScript($type) | Out-Null
+                    Write-ObjectProgress -ObjectName $typeName -Current $currentItem -Total $allTypes.Count -Success
+                    $successCount++
+                } catch {
+                    $typeName = if ($type.Schema) { "$($type.Schema).$($type.Name)" } else { $type.Name }
+                    Write-ObjectProgress -ObjectName $typeName -Current $currentItem -Total $allTypes.Count -Failed
+                    Write-ExportError -ObjectType 'UserDefinedType' -ObjectName $typeName -ErrorRecord $_ -FilePath $fileName
+                    $failCount++
+                }
+            }
+        } elseif ($groupingMode -eq 'schema') {
+            # Group by schema
+            $typesBySchema = $allTypes | Where-Object { $_.Schema } | Group-Object -Property Schema | Sort-Object Name
+            $schemaIndex = 0
+            foreach ($schemaGroup in $typesBySchema) {
+                $schemaIndex++
+                $fileName = Join-Path $OutputDir '07_Types' ("{0:D3}_{1}.sql" -f $schemaIndex, (Get-SafeFileName $schemaGroup.Name))
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
+                $opts.AppendToFile = $false  # Start fresh for each schema file
                 $Scripter.Options = $opts
-                $type.Script($opts) | Out-Null
-                Write-ObjectProgress -ObjectName $typeName -Current $currentItem -Total $allTypes.Count -Success
-                $successCount++
-            } catch {
-                $typeName = if ($type.Schema) { "$($type.Schema).$($type.Name)" } else { $type.Name }
-                Write-ObjectProgress -ObjectName $typeName -Current $currentItem -Total $allTypes.Count -Failed
-                Write-ExportError -ObjectType 'UserDefinedType' -ObjectName $typeName -ErrorRecord $_ -FilePath $fileName
-                $failCount++
+                foreach ($type in $schemaGroup.Group) {
+                    $currentItem++
+                    try {
+                        $typeName = "$($type.Schema).$($type.Name)"
+                        Write-ObjectProgress -ObjectName $typeName -Current $currentItem -Total $allTypes.Count
+                        $Scripter.EnumScript($type) | Out-Null
+                        $opts.AppendToFile = $true  # Append subsequent objects
+                        Write-ObjectProgress -ObjectName $typeName -Current $currentItem -Total $allTypes.Count -Success
+                        $successCount++
+                    } catch {
+                        $typeName = "$($type.Schema).$($type.Name)"
+                        Write-ObjectProgress -ObjectName $typeName -Current $currentItem -Total $allTypes.Count -Failed
+                        Write-ExportError -ObjectType 'UserDefinedType' -ObjectName $typeName -ErrorRecord $_ -FilePath $fileName
+                        $failCount++
+                    }
+                }
+            }
+        } elseif ($groupingMode -eq 'all') {
+            # All in one file
+            $fileName = Join-Path $OutputDir '07_Types' "001_AllTypes.sql"
+            Ensure-DirectoryExists $fileName
+            $opts.FileName = $fileName
+            $opts.AppendToFile = $false  # Start fresh
+            $Scripter.Options = $opts
+            foreach ($type in $allTypes) {
+                $currentItem++
+                try {
+                    $typeName = if ($type.Schema) { "$($type.Schema).$($type.Name)" } else { $type.Name }
+                    Write-ObjectProgress -ObjectName $typeName -Current $currentItem -Total $allTypes.Count
+                    $Scripter.EnumScript($type) | Out-Null
+                    $opts.AppendToFile = $true  # Append subsequent objects
+                    Write-ObjectProgress -ObjectName $typeName -Current $currentItem -Total $allTypes.Count -Success
+                    $successCount++
+                } catch {
+                    $typeName = if ($type.Schema) { "$($type.Schema).$($type.Name)" } else { $type.Name }
+                    Write-ObjectProgress -ObjectName $typeName -Current $currentItem -Total $allTypes.Count -Failed
+                    Write-ExportError -ObjectType 'UserDefinedType' -ObjectName $typeName -ErrorRecord $_ -FilePath $fileName
+                    $failCount++
+                }
             }
         }
         $script:CurrentProgressLabel = $null
@@ -1429,7 +1691,8 @@ function Export-DatabaseObjects {
         Write-Output "  [INFO] Unable to enumerate XML schema collections: $_"
     }
     if ($xmlSchemaCollections.Count -gt 0) {
-        Write-Output "  Found $($xmlSchemaCollections.Count) XML schema collection(s) to export"
+        $groupingMode = Get-ObjectGroupingMode -ObjectType 'XmlSchemaCollections'
+        Write-Output "  Found $($xmlSchemaCollections.Count) XML schema collection(s) to export (grouping: $groupingMode)"
         $successCount = 0
         $failCount = 0
         $currentItem = 0
@@ -1437,23 +1700,73 @@ function Export-DatabaseObjects {
         $Scripter.Options = $opts
         Write-ProgressHeader 'XmlSchemaCollections'
         
-        foreach ($xsc in $xmlSchemaCollections) {
-            $currentItem++
-            try {
-                Write-ObjectProgress -ObjectName "$($xsc.Schema).$($xsc.Name)" -Current $currentItem -Total $xmlSchemaCollections.Count
-                $safeSchema = Get-SafeFileName $xsc.Schema
-                $safeName = Get-SafeFileName $xsc.Name
-                $fileName = Join-Path $OutputDir '07_XmlSchemaCollections' "$safeSchema.$safeName.sql"
+        if ($groupingMode -eq 'single') {
+            # One file per XML schema collection
+            foreach ($xsc in $xmlSchemaCollections) {
+                $currentItem++
+                try {
+                    Write-ObjectProgress -ObjectName "$($xsc.Schema).$($xsc.Name)" -Current $currentItem -Total $xmlSchemaCollections.Count
+                    $safeSchema = Get-SafeFileName $xsc.Schema
+                    $safeName = Get-SafeFileName $xsc.Name
+                    $fileName = Join-Path $OutputDir '08_XmlSchemaCollections' "$safeSchema.$safeName.sql"
+                    Ensure-DirectoryExists $fileName
+                    $opts.FileName = $fileName
+                    $Scripter.Options = $opts
+                    $Scripter.EnumScript($xsc) | Out-Null
+                    Write-ObjectProgress -ObjectName "$($xsc.Schema).$($xsc.Name)" -Current $currentItem -Total $xmlSchemaCollections.Count -Success
+                    $successCount++
+                } catch {
+                    Write-ObjectProgress -ObjectName "$($xsc.Schema).$($xsc.Name)" -Current $currentItem -Total $xmlSchemaCollections.Count -Failed
+                    Write-ExportError -ObjectType 'XmlSchemaCollection' -ObjectName "$($xsc.Schema).$($xsc.Name)" -ErrorRecord $_ -FilePath $fileName
+                    $failCount++
+                }
+            }
+        } elseif ($groupingMode -eq 'schema') {
+            # Group by schema
+            $xscBySchema = $xmlSchemaCollections | Group-Object -Property Schema | Sort-Object Name
+            $schemaIndex = 0
+            foreach ($schemaGroup in $xscBySchema) {
+                $schemaIndex++
+                $fileName = Join-Path $OutputDir '08_XmlSchemaCollections' ("{0:D3}_{1}.sql" -f $schemaIndex, (Get-SafeFileName $schemaGroup.Name))
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
+                $opts.AppendToFile = $false  # Start fresh for each schema file
                 $Scripter.Options = $opts
-                $xsc.Script($opts) | Out-Null
-                Write-ObjectProgress -ObjectName "$($xsc.Schema).$($xsc.Name)" -Current $currentItem -Total $xmlSchemaCollections.Count -Success
-                $successCount++
-            } catch {
-                Write-ObjectProgress -ObjectName "$($xsc.Schema).$($xsc.Name)" -Current $currentItem -Total $xmlSchemaCollections.Count -Failed
-                Write-ExportError -ObjectType 'XmlSchemaCollection' -ObjectName "$($xsc.Schema).$($xsc.Name)" -ErrorRecord $_ -FilePath $fileName
-                $failCount++
+                foreach ($xsc in $schemaGroup.Group) {
+                    $currentItem++
+                    try {
+                        Write-ObjectProgress -ObjectName "$($xsc.Schema).$($xsc.Name)" -Current $currentItem -Total $xmlSchemaCollections.Count
+                        $Scripter.EnumScript($xsc) | Out-Null
+                        $opts.AppendToFile = $true  # Append subsequent objects
+                        Write-ObjectProgress -ObjectName "$($xsc.Schema).$($xsc.Name)" -Current $currentItem -Total $xmlSchemaCollections.Count -Success
+                        $successCount++
+                    } catch {
+                        Write-ObjectProgress -ObjectName "$($xsc.Schema).$($xsc.Name)" -Current $currentItem -Total $xmlSchemaCollections.Count -Failed
+                        Write-ExportError -ObjectType 'XmlSchemaCollection' -ObjectName "$($xsc.Schema).$($xsc.Name)" -ErrorRecord $_ -FilePath $fileName
+                        $failCount++
+                    }
+                }
+            }
+        } elseif ($groupingMode -eq 'all') {
+            # All in one file
+            $fileName = Join-Path $OutputDir '08_XmlSchemaCollections' "001_AllXmlSchemaCollections.sql"
+            Ensure-DirectoryExists $fileName
+            $opts.FileName = $fileName
+            $opts.AppendToFile = $false  # Start fresh
+            $Scripter.Options = $opts
+            foreach ($xsc in $xmlSchemaCollections) {
+                $currentItem++
+                try {
+                    Write-ObjectProgress -ObjectName "$($xsc.Schema).$($xsc.Name)" -Current $currentItem -Total $xmlSchemaCollections.Count
+                    $Scripter.EnumScript($xsc) | Out-Null
+                    $opts.AppendToFile = $true  # Append subsequent objects
+                    Write-ObjectProgress -ObjectName "$($xsc.Schema).$($xsc.Name)" -Current $currentItem -Total $xmlSchemaCollections.Count -Success
+                    $successCount++
+                } catch {
+                    Write-ObjectProgress -ObjectName "$($xsc.Schema).$($xsc.Name)" -Current $currentItem -Total $xmlSchemaCollections.Count -Failed
+                    Write-ExportError -ObjectType 'XmlSchemaCollection' -ObjectName "$($xsc.Schema).$($xsc.Name)" -ErrorRecord $_ -FilePath $fileName
+                    $failCount++
+                }
             }
         }
         $script:CurrentProgressLabel = $null
@@ -1470,10 +1783,10 @@ function Export-DatabaseObjects {
     } else {
         $tables = @($Database.Tables | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) })
         if ($tables.Count -gt 0) {
-            Write-Output "  Found $($tables.Count) table(s) to export"
+            $groupingMode = Get-ObjectGroupingMode -ObjectType 'Tables'
+            Write-Output "  Found $($tables.Count) table(s) to export (grouping: $groupingMode)"
             $successCount = 0
             $failCount = 0
-            $currentItem = 0
             $opts = New-ScriptingOptions -TargetVersion $TargetVersion -Overrides @{
                 DriAll              = $false
                 DriPrimaryKey       = $true
@@ -1489,24 +1802,81 @@ function Export-DatabaseObjects {
             $Scripter.Options = $opts
             Write-ProgressHeader 'Tables'
             
-            foreach ($table in $tables) {
-                $currentItem++
-                $percentComplete = [math]::Round(($currentItem / $tables.Count) * 100)
-                try {
-                    Write-ObjectProgress -ObjectName "$($table.Schema).$($table.Name)" -Current $currentItem -Total $tables.Count
-                    $fileName = Join-Path $OutputDir '08_Tables_PrimaryKey' "$(Get-SafeFileName $($table.Schema)).$(Get-SafeFileName $($table.Name)).sql"
+            if ($groupingMode -eq 'single') {
+                # One file per table (current behavior)
+                $currentItem = 0
+                foreach ($table in $tables) {
+                    $currentItem++
+                    try {
+                        Write-ObjectProgress -ObjectName "$($table.Schema).$($table.Name)" -Current $currentItem -Total $tables.Count
+                        $fileName = Join-Path $OutputDir '09_Tables_PrimaryKey' "$(Get-SafeFileName $($table.Schema)).$(Get-SafeFileName $($table.Name)).sql"
+                        Ensure-DirectoryExists $fileName
+                        $opts.FileName = $fileName
+                        $Scripter.Options = $opts
+                        $Scripter.EnumScript($table) | Out-Null
+                        Write-ObjectProgress -ObjectName "$($table.Schema).$($table.Name)" -Current $currentItem -Total $tables.Count -Success
+                        $successCount++
+                    } catch {
+                        Write-ObjectProgress -ObjectName "$($table.Schema).$($table.Name)" -Current $currentItem -Total $tables.Count -Failed
+                        Write-ExportError -ObjectType 'Table' -ObjectName "$($table.Schema).$($table.Name)" -ErrorRecord $_ -AdditionalContext "Exporting table structure with primary keys"
+                        $failCount++
+                    }
+                }
+            } elseif ($groupingMode -eq 'schema') {
+                # Group by schema into numbered files
+                $tablesBySchema = $tables | Group-Object -Property Schema
+                $schemaIndex = 0
+                $currentItem = 0
+                foreach ($schemaGroup in $tablesBySchema) {
+                    $schemaIndex++
+                    $schemaName = $schemaGroup.Name
+                    $schemaTables = $schemaGroup.Group
+                    $fileName = Join-Path $OutputDir '09_Tables_PrimaryKey' ("{0:D3}_{1}.sql" -f $schemaIndex, (Get-SafeFileName $schemaName))
                     Ensure-DirectoryExists $fileName
                     $opts.FileName = $fileName
+                    $opts.AppendToFile = $false  # Start fresh for each schema file
                     $Scripter.Options = $opts
-                    $table.Script($opts) | Out-Null
-                    Write-ObjectProgress -ObjectName "$($table.Schema).$($table.Name)" -Current $currentItem -Total $tables.Count -Success
-                    $successCount++
+                    
+                    try {
+                        foreach ($table in $schemaTables) {
+                            $currentItem++
+                            Write-ObjectProgress -ObjectName "$($table.Schema).$($table.Name)" -Current $currentItem -Total $tables.Count
+                            $Scripter.EnumScript($table) | Out-Null
+                            $opts.AppendToFile = $true  # Append subsequent objects
+                            Write-ObjectProgress -ObjectName "$($table.Schema).$($table.Name)" -Current $currentItem -Total $tables.Count -Success
+                            $successCount++
+                        }
+                    } catch {
+                        Write-ObjectProgress -ObjectName "$($schemaName).*" -Current $currentItem -Total $tables.Count -Failed
+                        Write-ExportError -ObjectType 'Table' -ObjectName "$($schemaName) schema tables" -ErrorRecord $_ -FilePath $fileName
+                        $failCount++
+                    }
+                }
+            } elseif ($groupingMode -eq 'all') {
+                # All tables in one file
+                $fileName = Join-Path $OutputDir '09_Tables_PrimaryKey' "001_AllTables.sql"
+                Ensure-DirectoryExists $fileName
+                $opts.FileName = $fileName
+                $opts.AppendToFile = $false  # Start fresh
+                $Scripter.Options = $opts
+                
+                $currentItem = 0
+                try {
+                    foreach ($table in $tables) {
+                        $currentItem++
+                        Write-ObjectProgress -ObjectName "$($table.Schema).$($table.Name)" -Current $currentItem -Total $tables.Count
+                        $Scripter.EnumScript($table) | Out-Null
+                        $opts.AppendToFile = $true  # Append subsequent objects
+                        Write-ObjectProgress -ObjectName "$($table.Schema).$($table.Name)" -Current $currentItem -Total $tables.Count -Success
+                        $successCount++
+                    }
                 } catch {
-                    Write-ObjectProgress -ObjectName "$($table.Schema).$($table.Name)" -Current $currentItem -Total $tables.Count -Failed
-                    Write-ExportError -ObjectType 'Table' -ObjectName "$($table.Schema).$($table.Name)" -ErrorRecord $_ -AdditionalContext "Exporting table structure with primary keys"
-                    $failCount++
+                    Write-ObjectProgress -ObjectName "Tables" -Current $currentItem -Total $tables.Count -Failed
+                    Write-ExportError -ObjectType 'Table' -ObjectName "All tables" -ErrorRecord $_ -FilePath $fileName
+                    $failCount = $tables.Count - $successCount
                 }
             }
+            
             $script:CurrentProgressLabel = $null
             Write-Output "  [SUMMARY] Exported $successCount/$($tables.Count) table(s) successfully" + $(if ($failCount -gt 0) { " ($failCount failed)" } else { "" })
             $functionMetrics.TotalObjects += $tables.Count
@@ -1540,7 +1910,8 @@ function Export-DatabaseObjects {
             }
         }
         if ($foreignKeys.Count -gt 0) {
-            Write-Output "  Found $($foreignKeys.Count) foreign key constraint(s) to export"
+            $groupingMode = Get-ObjectGroupingMode -ObjectType 'ForeignKeys'
+            Write-Output "  Found $($foreignKeys.Count) foreign key constraint(s) to export (grouping: $groupingMode)"
             $successCount = 0
             $failCount = 0
             $currentItem = 0
@@ -1551,22 +1922,71 @@ function Export-DatabaseObjects {
             $Scripter.Options = $opts
             Write-ProgressHeader 'ForeignKeys'
             
-            foreach ($fk in $foreignKeys) {
-                $currentItem++
-                $percentComplete = [math]::Round(($currentItem / $foreignKeys.Count) * 100)
-                try {
-                    Write-ObjectProgress -ObjectName "$($fk.Parent.Schema).$($fk.Parent.Name).$($fk.Name)" -Current $currentItem -Total $foreignKeys.Count
-                    $fileName = Join-Path $OutputDir '09_Tables_ForeignKeys' "$(Get-SafeFileName $($fk.Parent.Schema)).$(Get-SafeFileName $($fk.Parent.Name)).$(Get-SafeFileName $($fk.Name)).sql"
+            if ($groupingMode -eq 'single') {
+                # One file per FK
+                foreach ($fk in $foreignKeys) {
+                    $currentItem++
+                    try {
+                        Write-ObjectProgress -ObjectName "$($fk.Parent.Schema).$($fk.Parent.Name).$($fk.Name)" -Current $currentItem -Total $foreignKeys.Count
+                        $fileName = Join-Path $OutputDir '10_Tables_ForeignKeys' "$(Get-SafeFileName $($fk.Parent.Schema)).$(Get-SafeFileName $($fk.Parent.Name)).$(Get-SafeFileName $($fk.Name)).sql"
+                        Ensure-DirectoryExists $fileName
+                        $opts.FileName = $fileName
+                        $Scripter.Options = $opts
+                        $Scripter.EnumScript($fk) | Out-Null
+                        Write-ObjectProgress -ObjectName "$($fk.Parent.Schema).$($fk.Parent.Name).$($fk.Name)" -Current $currentItem -Total $foreignKeys.Count -Success
+                        $successCount++
+                    } catch {
+                        Write-ObjectProgress -ObjectName "$($fk.Parent.Schema).$($fk.Parent.Name).$($fk.Name)" -Current $currentItem -Total $foreignKeys.Count -Failed
+                        Write-ExportError -ObjectType 'ForeignKey' -ObjectName "$($fk.Parent.Schema).$($fk.Parent.Name).$($fk.Name)" -ErrorRecord $_ -FilePath $fileName
+                        $failCount++
+                    }
+                }
+            } elseif ($groupingMode -eq 'schema') {
+                # Group by parent table schema
+                $fksBySchema = $foreignKeys | Group-Object -Property { $_.Parent.Schema } | Sort-Object Name
+                $schemaIndex = 0
+                foreach ($schemaGroup in $fksBySchema) {
+                    $schemaIndex++
+                    $fileName = Join-Path $OutputDir '10_Tables_ForeignKeys' ("{0:D3}_{1}.sql" -f $schemaIndex, (Get-SafeFileName $schemaGroup.Name))
                     Ensure-DirectoryExists $fileName
                     $opts.FileName = $fileName
+                    $opts.AppendToFile = $false  # Start fresh for each schema file
                     $Scripter.Options = $opts
-                    $fk.Script($opts) | Out-Null
-                    Write-ObjectProgress -ObjectName "$($fk.Parent.Schema).$($fk.Parent.Name).$($fk.Name)" -Current $currentItem -Total $foreignKeys.Count -Success
-                    $successCount++
-                } catch {
-                    Write-ObjectProgress -ObjectName "$($fk.Parent.Schema).$($fk.Parent.Name).$($fk.Name)" -Current $currentItem -Total $foreignKeys.Count -Failed
-                    Write-ExportError -ObjectType 'ForeignKey' -ObjectName "$($fk.Parent.Schema).$($fk.Parent.Name).$($fk.Name)" -ErrorRecord $_ -FilePath $fileName
-                    $failCount++
+                    foreach ($fk in $schemaGroup.Group) {
+                        $currentItem++
+                        try {
+                            Write-ObjectProgress -ObjectName "$($fk.Parent.Schema).$($fk.Parent.Name).$($fk.Name)" -Current $currentItem -Total $foreignKeys.Count
+                            $Scripter.EnumScript($fk) | Out-Null
+                            $opts.AppendToFile = $true  # Append subsequent objects
+                            Write-ObjectProgress -ObjectName "$($fk.Parent.Schema).$($fk.Parent.Name).$($fk.Name)" -Current $currentItem -Total $foreignKeys.Count -Success
+                            $successCount++
+                        } catch {
+                            Write-ObjectProgress -ObjectName "$($fk.Parent.Schema).$($fk.Parent.Name).$($fk.Name)" -Current $currentItem -Total $foreignKeys.Count -Failed
+                            Write-ExportError -ObjectType 'ForeignKey' -ObjectName "$($fk.Parent.Schema).$($fk.Parent.Name).$($fk.Name)" -ErrorRecord $_ -FilePath $fileName
+                            $failCount++
+                        }
+                    }
+                }
+            } elseif ($groupingMode -eq 'all') {
+                # All in one file
+                $fileName = Join-Path $OutputDir '10_Tables_ForeignKeys' "001_AllForeignKeys.sql"
+                Ensure-DirectoryExists $fileName
+                $opts.FileName = $fileName
+                $opts.AppendToFile = $false  # Start fresh
+                $Scripter.Options = $opts
+                foreach ($fk in $foreignKeys) {
+                    $currentItem++
+                    try {
+                        Write-ObjectProgress -ObjectName "$($fk.Parent.Schema).$($fk.Parent.Name).$($fk.Name)" -Current $currentItem -Total $foreignKeys.Count
+                        $Scripter.EnumScript($fk) | Out-Null
+                        $opts.AppendToFile = $true  # Append subsequent objects
+                        Write-ObjectProgress -ObjectName "$($fk.Parent.Schema).$($fk.Parent.Name).$($fk.Name)" -Current $currentItem -Total $foreignKeys.Count -Success
+                        $successCount++
+                    } catch {
+                        Write-ObjectProgress -ObjectName "$($fk.Parent.Schema).$($fk.Parent.Name).$($fk.Name)" -Current $currentItem -Total $foreignKeys.Count -Failed
+                        Write-ExportError -ObjectType 'ForeignKey' -ObjectName "$($fk.Parent.Schema).$($fk.Parent.Name).$($fk.Name)" -ErrorRecord $_ -FilePath $fileName
+                        $failCount++
+                    }
                 }
             }
             $script:CurrentProgressLabel = $null
@@ -1606,7 +2026,8 @@ function Export-DatabaseObjects {
             }
         }
         if ($indexes.Count -gt 0) {
-            Write-Output "  Found $($indexes.Count) index(es) to export"
+            $groupingMode = Get-ObjectGroupingMode -ObjectType 'Indexes'
+            Write-Output "  Found $($indexes.Count) index(es) to export (grouping: $groupingMode)"
             $successCount = 0
             $failCount = 0
             $currentItem = 0
@@ -1619,22 +2040,71 @@ function Export-DatabaseObjects {
             $Scripter.Options = $opts
             Write-ProgressHeader 'Indexes'
             
-            foreach ($index in $indexes) {
-                $currentItem++
-                $percentComplete = [math]::Round(($currentItem / $indexes.Count) * 100)
-                try {
-                    Write-ObjectProgress -ObjectName "$($index.Parent.Schema).$($index.Parent.Name).$($index.Name)" -Current $currentItem -Total $indexes.Count
-                    $fileName = Join-Path $OutputDir '10_Indexes' "$(Get-SafeFileName $($index.Parent.Schema)).$(Get-SafeFileName $($index.Parent.Name)).$(Get-SafeFileName $($index.Name)).sql"
+            if ($groupingMode -eq 'single') {
+                # One file per index
+                foreach ($index in $indexes) {
+                    $currentItem++
+                    try {
+                        Write-ObjectProgress -ObjectName "$($index.Parent.Schema).$($index.Parent.Name).$($index.Name)" -Current $currentItem -Total $indexes.Count
+                        $fileName = Join-Path $OutputDir '11_Indexes' "$(Get-SafeFileName $($index.Parent.Schema)).$(Get-SafeFileName $($index.Parent.Name)).$(Get-SafeFileName $($index.Name)).sql"
+                        Ensure-DirectoryExists $fileName
+                        $opts.FileName = $fileName
+                        $Scripter.Options = $opts
+                        $Scripter.EnumScript($index) | Out-Null
+                        Write-ObjectProgress -ObjectName "$($index.Parent.Schema).$($index.Parent.Name).$($index.Name)" -Current $currentItem -Total $indexes.Count -Success
+                        $successCount++
+                    } catch {
+                        Write-ObjectProgress -ObjectName "$($index.Parent.Schema).$($index.Parent.Name).$($index.Name)" -Current $currentItem -Total $indexes.Count -Failed
+                        Write-ExportError -ObjectType 'Index' -ObjectName "$($index.Parent.Schema).$($index.Parent.Name).$($index.Name)" -ErrorRecord $_ -FilePath $fileName
+                        $failCount++
+                    }
+                }
+            } elseif ($groupingMode -eq 'schema') {
+                # Group by parent table schema
+                $indexesBySchema = $indexes | Group-Object -Property { $_.Parent.Schema } | Sort-Object Name
+                $schemaIndex = 0
+                foreach ($schemaGroup in $indexesBySchema) {
+                    $schemaIndex++
+                    $fileName = Join-Path $OutputDir '11_Indexes' ("{0:D3}_{1}.sql" -f $schemaIndex, (Get-SafeFileName $schemaGroup.Name))
                     Ensure-DirectoryExists $fileName
                     $opts.FileName = $fileName
+                    $opts.AppendToFile = $false  # Start fresh for each schema file
                     $Scripter.Options = $opts
-                    $index.Script($opts) | Out-Null
-                    Write-ObjectProgress -ObjectName "$($index.Parent.Schema).$($index.Parent.Name).$($index.Name)" -Current $currentItem -Total $indexes.Count -Success
-                    $successCount++
-                } catch {
-                    Write-ObjectProgress -ObjectName "$($index.Parent.Schema).$($index.Parent.Name).$($index.Name)" -Current $currentItem -Total $indexes.Count -Failed
-                    Write-ExportError -ObjectType 'Index' -ObjectName "$($index.Parent.Schema).$($index.Parent.Name).$($index.Name)" -ErrorRecord $_ -FilePath $fileName
-                    $failCount++
+                    foreach ($index in $schemaGroup.Group) {
+                        $currentItem++
+                        try {
+                            Write-ObjectProgress -ObjectName "$($index.Parent.Schema).$($index.Parent.Name).$($index.Name)" -Current $currentItem -Total $indexes.Count
+                            $Scripter.EnumScript($index) | Out-Null
+                            $opts.AppendToFile = $true  # Append subsequent objects
+                            Write-ObjectProgress -ObjectName "$($index.Parent.Schema).$($index.Parent.Name).$($index.Name)" -Current $currentItem -Total $indexes.Count -Success
+                            $successCount++
+                        } catch {
+                            Write-ObjectProgress -ObjectName "$($index.Parent.Schema).$($index.Parent.Name).$($index.Name)" -Current $currentItem -Total $indexes.Count -Failed
+                            Write-ExportError -ObjectType 'Index' -ObjectName "$($index.Parent.Schema).$($index.Parent.Name).$($index.Name)" -ErrorRecord $_ -FilePath $fileName
+                            $failCount++
+                        }
+                    }
+                }
+            } elseif ($groupingMode -eq 'all') {
+                # All in one file
+                $fileName = Join-Path $OutputDir '11_Indexes' "001_AllIndexes.sql"
+                Ensure-DirectoryExists $fileName
+                $opts.FileName = $fileName
+                $opts.AppendToFile = $false  # Start fresh
+                $Scripter.Options = $opts
+                foreach ($index in $indexes) {
+                    $currentItem++
+                    try {
+                        Write-ObjectProgress -ObjectName "$($index.Parent.Schema).$($index.Parent.Name).$($index.Name)" -Current $currentItem -Total $indexes.Count
+                        $Scripter.EnumScript($index) | Out-Null
+                        $opts.AppendToFile = $true  # Append subsequent objects
+                        Write-ObjectProgress -ObjectName "$($index.Parent.Schema).$($index.Parent.Name).$($index.Name)" -Current $currentItem -Total $indexes.Count -Success
+                        $successCount++
+                    } catch {
+                        Write-ObjectProgress -ObjectName "$($index.Parent.Schema).$($index.Parent.Name).$($index.Name)" -Current $currentItem -Total $indexes.Count -Failed
+                        Write-ExportError -ObjectType 'Index' -ObjectName "$($index.Parent.Schema).$($index.Parent.Name).$($index.Name)" -ErrorRecord $_ -FilePath $fileName
+                        $failCount++
+                    }
                 }
             }
             $script:CurrentProgressLabel = $null
@@ -1655,7 +2125,8 @@ function Export-DatabaseObjects {
     } else {
     $defaults = @($Database.Defaults | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) })
     if ($defaults.Count -gt 0) {
-        Write-Output "  Found $($defaults.Count) default constraint(s) to export"
+        $groupingMode = Get-ObjectGroupingMode -ObjectType 'Defaults'
+        Write-Output "  Found $($defaults.Count) default constraint(s) to export (grouping: $groupingMode)"
         $successCount = 0
         $failCount = 0
         $currentItem = 0
@@ -1663,21 +2134,71 @@ function Export-DatabaseObjects {
         $Scripter.Options = $opts
         Write-ProgressHeader 'Defaults'
         
-        foreach ($default in $defaults) {
-            $currentItem++
-            try {
-                Write-ObjectProgress -ObjectName "$($default.Schema).$($default.Name)" -Current $currentItem -Total $defaults.Count
-                $fileName = Join-Path $OutputDir '11_Defaults' "$(Get-SafeFileName $($default.Schema)).$(Get-SafeFileName $($default.Name)).sql"
+        if ($groupingMode -eq 'single') {
+            # One file per default
+            foreach ($default in $defaults) {
+                $currentItem++
+                try {
+                    Write-ObjectProgress -ObjectName "$($default.Schema).$($default.Name)" -Current $currentItem -Total $defaults.Count
+                    $fileName = Join-Path $OutputDir '12_Defaults' "$(Get-SafeFileName $($default.Schema)).$(Get-SafeFileName $($default.Name)).sql"
+                    Ensure-DirectoryExists $fileName
+                    $opts.FileName = $fileName
+                    $Scripter.Options = $opts
+                    $Scripter.EnumScript($default) | Out-Null
+                    Write-ObjectProgress -ObjectName "$($default.Schema).$($default.Name)" -Current $currentItem -Total $defaults.Count -Success
+                    $successCount++
+                } catch {
+                    Write-ObjectProgress -ObjectName "$($default.Schema).$($default.Name)" -Current $currentItem -Total $defaults.Count -Failed
+                    Write-ExportError -ObjectType 'Default' -ObjectName "$($default.Schema).$($default.Name)" -ErrorRecord $_ -FilePath $fileName
+                    $failCount++
+                }
+            }
+        } elseif ($groupingMode -eq 'schema') {
+            # Group by schema
+            $defaultsBySchema = $defaults | Group-Object -Property Schema | Sort-Object Name
+            $schemaIndex = 0
+            foreach ($schemaGroup in $defaultsBySchema) {
+                $schemaIndex++
+                $fileName = Join-Path $OutputDir '12_Defaults' ("{0:D3}_{1}.sql" -f $schemaIndex, (Get-SafeFileName $schemaGroup.Name))
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
+                $opts.AppendToFile = $false  # Start fresh for each schema file
                 $Scripter.Options = $opts
-                $default.Script($opts) | Out-Null
-                Write-ObjectProgress -ObjectName "$($default.Schema).$($default.Name)" -Current $currentItem -Total $defaults.Count -Success
-                $successCount++
-            } catch {
-                Write-ObjectProgress -ObjectName "$($default.Schema).$($default.Name)" -Current $currentItem -Total $defaults.Count -Failed
-                Write-ExportError -ObjectType 'Default' -ObjectName "$($default.Schema).$($default.Name)" -ErrorRecord $_ -FilePath $fileName
-                $failCount++
+                foreach ($default in $schemaGroup.Group) {
+                    $currentItem++
+                    try {
+                        Write-ObjectProgress -ObjectName "$($default.Schema).$($default.Name)" -Current $currentItem -Total $defaults.Count
+                        $Scripter.EnumScript($default) | Out-Null
+                        $opts.AppendToFile = $true  # Append subsequent objects
+                        Write-ObjectProgress -ObjectName "$($default.Schema).$($default.Name)" -Current $currentItem -Total $defaults.Count -Success
+                        $successCount++
+                    } catch {
+                        Write-ObjectProgress -ObjectName "$($default.Schema).$($default.Name)" -Current $currentItem -Total $defaults.Count -Failed
+                        Write-ExportError -ObjectType 'Default' -ObjectName "$($default.Schema).$($default.Name)" -ErrorRecord $_ -FilePath $fileName
+                        $failCount++
+                    }
+                }
+            }
+        } elseif ($groupingMode -eq 'all') {
+            # All in one file
+            $fileName = Join-Path $OutputDir '12_Defaults' "001_AllDefaults.sql"
+            Ensure-DirectoryExists $fileName
+            $opts.FileName = $fileName
+            $opts.AppendToFile = $false  # Start fresh
+            $Scripter.Options = $opts
+            foreach ($default in $defaults) {
+                $currentItem++
+                try {
+                    Write-ObjectProgress -ObjectName "$($default.Schema).$($default.Name)" -Current $currentItem -Total $defaults.Count
+                    $Scripter.EnumScript($default) | Out-Null
+                    $opts.AppendToFile = $true  # Append subsequent objects
+                    Write-ObjectProgress -ObjectName "$($default.Schema).$($default.Name)" -Current $currentItem -Total $defaults.Count -Success
+                    $successCount++
+                } catch {
+                    Write-ObjectProgress -ObjectName "$($default.Schema).$($default.Name)" -Current $currentItem -Total $defaults.Count -Failed
+                    Write-ExportError -ObjectType 'Default' -ObjectName "$($default.Schema).$($default.Name)" -ErrorRecord $_ -FilePath $fileName
+                    $failCount++
+                }
             }
         }
         $script:CurrentProgressLabel = $null
@@ -1693,7 +2214,8 @@ function Export-DatabaseObjects {
     } else {
     $rules = @($Database.Rules | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) })
     if ($rules.Count -gt 0) {
-        Write-Output "  Found $($rules.Count) rule(s) to export"
+        $groupingMode = Get-ObjectGroupingMode -ObjectType 'Rules'
+        Write-Output "  Found $($rules.Count) rule(s) to export (grouping: $groupingMode)"
         $successCount = 0
         $failCount = 0
         $currentItem = 0
@@ -1701,21 +2223,71 @@ function Export-DatabaseObjects {
         $Scripter.Options = $opts
         Write-ProgressHeader 'Rules'
         
-        foreach ($rule in $rules) {
-            $currentItem++
-            try {
-                Write-ObjectProgress -ObjectName "$($rule.Schema).$($rule.Name)" -Current $currentItem -Total $rules.Count
-                $fileName = Join-Path $OutputDir '12_Rules' "$(Get-SafeFileName $($rule.Schema)).$(Get-SafeFileName $($rule.Name)).sql"
+        if ($groupingMode -eq 'single') {
+            # One file per rule
+            foreach ($rule in $rules) {
+                $currentItem++
+                try {
+                    Write-ObjectProgress -ObjectName "$($rule.Schema).$($rule.Name)" -Current $currentItem -Total $rules.Count
+                    $fileName = Join-Path $OutputDir '13_Rules' "$(Get-SafeFileName $($rule.Schema)).$(Get-SafeFileName $($rule.Name)).sql"
+                    Ensure-DirectoryExists $fileName
+                    $opts.FileName = $fileName
+                    $Scripter.Options = $opts
+                    $Scripter.EnumScript($rule) | Out-Null
+                    Write-ObjectProgress -ObjectName "$($rule.Schema).$($rule.Name)" -Current $currentItem -Total $rules.Count -Success
+                    $successCount++
+                } catch {
+                    Write-ObjectProgress -ObjectName "$($rule.Schema).$($rule.Name)" -Current $currentItem -Total $rules.Count -Failed
+                    Write-ExportError -ObjectType 'Rule' -ObjectName "$($rule.Schema).$($rule.Name)" -ErrorRecord $_ -FilePath $fileName
+                    $failCount++
+                }
+            }
+        } elseif ($groupingMode -eq 'schema') {
+            # Group by schema
+            $rulesBySchema = $rules | Group-Object -Property Schema | Sort-Object Name
+            $schemaIndex = 0
+            foreach ($schemaGroup in $rulesBySchema) {
+                $schemaIndex++
+                $fileName = Join-Path $OutputDir '13_Rules' ("{0:D3}_{1}.sql" -f $schemaIndex, (Get-SafeFileName $schemaGroup.Name))
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
+                $opts.AppendToFile = $false  # Start fresh for each schema file
                 $Scripter.Options = $opts
-                $rule.Script($opts) | Out-Null
-                Write-ObjectProgress -ObjectName "$($rule.Schema).$($rule.Name)" -Current $currentItem -Total $rules.Count -Success
-                $successCount++
-            } catch {
-                Write-ObjectProgress -ObjectName "$($rule.Schema).$($rule.Name)" -Current $currentItem -Total $rules.Count -Failed
-                Write-ExportError -ObjectType 'Rule' -ObjectName "$($rule.Schema).$($rule.Name)" -ErrorRecord $_ -FilePath $fileName
-                $failCount++
+                foreach ($rule in $schemaGroup.Group) {
+                    $currentItem++
+                    try {
+                        Write-ObjectProgress -ObjectName "$($rule.Schema).$($rule.Name)" -Current $currentItem -Total $rules.Count
+                        $Scripter.EnumScript($rule) | Out-Null
+                        $opts.AppendToFile = $true  # Append subsequent objects
+                        Write-ObjectProgress -ObjectName "$($rule.Schema).$($rule.Name)" -Current $currentItem -Total $rules.Count -Success
+                        $successCount++
+                    } catch {
+                        Write-ObjectProgress -ObjectName "$($rule.Schema).$($rule.Name)" -Current $currentItem -Total $rules.Count -Failed
+                        Write-ExportError -ObjectType 'Rule' -ObjectName "$($rule.Schema).$($rule.Name)" -ErrorRecord $_ -FilePath $fileName
+                        $failCount++
+                    }
+                }
+            }
+        } elseif ($groupingMode -eq 'all') {
+            # All in one file
+            $fileName = Join-Path $OutputDir '13_Rules' "001_AllRules.sql"
+            Ensure-DirectoryExists $fileName
+            $opts.FileName = $fileName
+            $opts.AppendToFile = $false  # Start fresh
+            $Scripter.Options = $opts
+            foreach ($rule in $rules) {
+                $currentItem++
+                try {
+                    Write-ObjectProgress -ObjectName "$($rule.Schema).$($rule.Name)" -Current $currentItem -Total $rules.Count
+                    $Scripter.EnumScript($rule) | Out-Null
+                    $opts.AppendToFile = $true  # Append subsequent objects
+                    Write-ObjectProgress -ObjectName "$($rule.Schema).$($rule.Name)" -Current $currentItem -Total $rules.Count -Success
+                    $successCount++
+                } catch {
+                    Write-ObjectProgress -ObjectName "$($rule.Schema).$($rule.Name)" -Current $currentItem -Total $rules.Count -Failed
+                    Write-ExportError -ObjectType 'Rule' -ObjectName "$($rule.Schema).$($rule.Name)" -ErrorRecord $_ -FilePath $fileName
+                    $failCount++
+                }
             }
         }
         $script:CurrentProgressLabel = $null
@@ -1731,7 +2303,8 @@ function Export-DatabaseObjects {
     } else {
     $assemblies = @($Database.Assemblies | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $null -Name $_.Name) })
     if ($assemblies.Count -gt 0) {
-        Write-Output "  Found $($assemblies.Count) assembly(ies) to export"
+        $groupingMode = Get-ObjectGroupingMode -ObjectType 'Assemblies'
+        Write-Output "  Found $($assemblies.Count) assembly(ies) to export (grouping: $groupingMode)"
         $successCount = 0
         $failCount = 0
         $currentItem = 0
@@ -1739,21 +2312,45 @@ function Export-DatabaseObjects {
         $Scripter.Options = $opts
         Write-ProgressHeader 'Assemblies'
         
-        foreach ($assembly in $assemblies) {
-            $currentItem++
-            try {
-                Write-ObjectProgress -ObjectName $assembly.Name -Current $currentItem -Total $assemblies.Count
-                $fileName = Join-Path $OutputDir '13_Programmability/01_Assemblies' "$(Get-SafeFileName $($assembly.Name)).sql"
-                Ensure-DirectoryExists $fileName
-                $opts.FileName = $fileName
-                $Scripter.Options = $opts
-                $assembly.Script($opts) | Out-Null
-                Write-ObjectProgress -ObjectName $assembly.Name -Current $currentItem -Total $assemblies.Count -Success
-                $successCount++
-            } catch {
-                Write-ObjectProgress -ObjectName $assembly.Name -Current $currentItem -Total $assemblies.Count -Failed
-                Write-ExportError -ObjectType 'Assembly' -ObjectName $assembly.Name -ErrorRecord $_ -FilePath $fileName
-                $failCount++
+        if ($groupingMode -eq 'single') {
+            # One file per assembly
+            foreach ($assembly in $assemblies) {
+                $currentItem++
+                try {
+                    Write-ObjectProgress -ObjectName $assembly.Name -Current $currentItem -Total $assemblies.Count
+                    $fileName = Join-Path $OutputDir '14_Programmability/01_Assemblies' "$(Get-SafeFileName $($assembly.Name)).sql"
+                    Ensure-DirectoryExists $fileName
+                    $opts.FileName = $fileName
+                    $Scripter.Options = $opts
+                    $Scripter.EnumScript($assembly) | Out-Null
+                    Write-ObjectProgress -ObjectName $assembly.Name -Current $currentItem -Total $assemblies.Count -Success
+                    $successCount++
+                } catch {
+                    Write-ObjectProgress -ObjectName $assembly.Name -Current $currentItem -Total $assemblies.Count -Failed
+                    Write-ExportError -ObjectType 'Assembly' -ObjectName $assembly.Name -ErrorRecord $_ -FilePath $fileName
+                    $failCount++
+                }
+            }
+        } elseif ($groupingMode -eq 'schema' -or $groupingMode -eq 'all') {
+            # Assemblies have no schema property, so both schema and all modes produce one file
+            $fileName = Join-Path $OutputDir '14_Programmability/01_Assemblies' "001_AllAssemblies.sql"
+            Ensure-DirectoryExists $fileName
+            $opts.FileName = $fileName
+            $opts.AppendToFile = $false  # Start fresh
+            $Scripter.Options = $opts
+            foreach ($assembly in $assemblies) {
+                $currentItem++
+                try {
+                    Write-ObjectProgress -ObjectName $assembly.Name -Current $currentItem -Total $assemblies.Count
+                    $Scripter.EnumScript($assembly) | Out-Null
+                    $opts.AppendToFile = $true  # Append subsequent objects
+                    Write-ObjectProgress -ObjectName $assembly.Name -Current $currentItem -Total $assemblies.Count -Success
+                    $successCount++
+                } catch {
+                    Write-ObjectProgress -ObjectName $assembly.Name -Current $currentItem -Total $assemblies.Count -Failed
+                    Write-ExportError -ObjectType 'Assembly' -ObjectName $assembly.Name -ErrorRecord $_ -FilePath $fileName
+                    $failCount++
+                }
             }
         }
         $script:CurrentProgressLabel = $null
@@ -1769,10 +2366,10 @@ function Export-DatabaseObjects {
     } else {
     $functions = @($Database.UserDefinedFunctions | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) })
     if ($functions.Count -gt 0) {
-        Write-Output "  Found $($functions.Count) function(s) to export"
+        $groupingMode = Get-ObjectGroupingMode -ObjectType 'Functions'
+        Write-Output "  Found $($functions.Count) function(s) to export (grouping: $groupingMode)"
         $successCount = 0
         $failCount = 0
-        $currentItem = 0
         $opts = New-ScriptingOptions -TargetVersion $TargetVersion -Overrides @{
             Indexes     = $false
             Triggers    = $false
@@ -1780,24 +2377,78 @@ function Export-DatabaseObjects {
         $Scripter.Options = $opts
         Write-ProgressHeader 'Functions'
         
-        foreach ($function in $functions) {
-            $currentItem++
-            $percentComplete = [math]::Round(($currentItem / $functions.Count) * 100)
-            try {
-                Write-ObjectProgress -ObjectName "$($function.Schema).$($function.Name)" -Current $currentItem -Total $functions.Count
-                $fileName = Join-Path $OutputDir '13_Programmability/02_Functions' "$(Get-SafeFileName $($function.Schema)).$(Get-SafeFileName $($function.Name)).sql"
+        if ($groupingMode -eq 'single') {
+            $currentItem = 0
+            foreach ($function in $functions) {
+                $currentItem++
+                try {
+                    Write-ObjectProgress -ObjectName "$($function.Schema).$($function.Name)" -Current $currentItem -Total $functions.Count
+                    $fileName = Join-Path $OutputDir '14_Programmability/02_Functions' "$(Get-SafeFileName $($function.Schema)).$(Get-SafeFileName $($function.Name)).sql"
+                    Ensure-DirectoryExists $fileName
+                    $opts.FileName = $fileName
+                    $Scripter.Options = $opts
+                    $Scripter.EnumScript($function) | Out-Null
+                    Write-ObjectProgress -ObjectName "$($function.Schema).$($function.Name)" -Current $currentItem -Total $functions.Count -Success
+                    $successCount++
+                } catch {
+                    Write-ObjectProgress -ObjectName "$($function.Schema).$($function.Name)" -Current $currentItem -Total $functions.Count -Failed
+                    Write-ExportError -ObjectType 'Function' -ObjectName "$($function.Schema).$($function.Name)" -ErrorRecord $_ -FilePath $fileName
+                    $failCount++
+                }
+            }
+        } elseif ($groupingMode -eq 'schema') {
+            $functionsBySchema = $functions | Group-Object -Property Schema
+            $schemaIndex = 0
+            $currentItem = 0
+            foreach ($schemaGroup in $functionsBySchema) {
+                $schemaIndex++
+                $schemaName = $schemaGroup.Name
+                $schemaFunctions = $schemaGroup.Group
+                $fileName = Join-Path $OutputDir '14_Programmability/02_Functions' ("{0:D3}_{1}.sql" -f $schemaIndex, (Get-SafeFileName $schemaName))
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
+                $opts.AppendToFile = $false  # Start fresh for each schema file
                 $Scripter.Options = $opts
-                $function.Script($opts) | Out-Null
-                Write-ObjectProgress -ObjectName "$($function.Schema).$($function.Name)" -Current $currentItem -Total $functions.Count -Success
-                $successCount++
+                
+                try {
+                    foreach ($function in $schemaFunctions) {
+                        $currentItem++
+                        Write-ObjectProgress -ObjectName "$($function.Schema).$($function.Name)" -Current $currentItem -Total $functions.Count
+                        $Scripter.EnumScript($function) | Out-Null
+                        $opts.AppendToFile = $true  # Append subsequent objects
+                        Write-ObjectProgress -ObjectName "$($function.Schema).$($function.Name)" -Current $currentItem -Total $functions.Count -Success
+                        $successCount++
+                    }
+                } catch {
+                    Write-ObjectProgress -ObjectName "$($schemaName).*" -Current $currentItem -Total $functions.Count -Failed
+                    Write-ExportError -ObjectType 'Function' -ObjectName "$($schemaName) schema functions" -ErrorRecord $_ -FilePath $fileName
+                    $failCount++
+                }
+            }
+        } elseif ($groupingMode -eq 'all') {
+            $fileName = Join-Path $OutputDir '14_Programmability/02_Functions' "001_AllFunctions.sql"
+            Ensure-DirectoryExists $fileName
+            $opts.FileName = $fileName
+            $opts.AppendToFile = $false  # Start fresh
+            $Scripter.Options = $opts
+            
+            $currentItem = 0
+            try {
+                foreach ($function in $functions) {
+                    $currentItem++
+                    Write-ObjectProgress -ObjectName "$($function.Schema).$($function.Name)" -Current $currentItem -Total $functions.Count
+                    $Scripter.EnumScript($function) | Out-Null
+                    $opts.AppendToFile = $true  # Append subsequent objects
+                    Write-ObjectProgress -ObjectName "$($function.Schema).$($function.Name)" -Current $currentItem -Total $functions.Count -Success
+                    $successCount++
+                }
             } catch {
-                Write-ObjectProgress -ObjectName "$($function.Schema).$($function.Name)" -Current $currentItem -Total $functions.Count -Failed
-                Write-ExportError -ObjectType 'Function' -ObjectName "$($function.Schema).$($function.Name)" -ErrorRecord $_ -FilePath $fileName
-                $failCount++
+                Write-ObjectProgress -ObjectName "Functions" -Current $currentItem -Total $functions.Count -Failed
+                Write-ExportError -ObjectType 'Function' -ObjectName "All functions" -ErrorRecord $_ -FilePath $fileName
+                $failCount = $functions.Count - $successCount
             }
         }
+        
         $script:CurrentProgressLabel = $null
         Write-Output "  [SUMMARY] Exported $successCount/$($functions.Count) function(s) successfully" + $(if ($failCount -gt 0) { " ($failCount failed)" } else { "" })
     }
@@ -1811,7 +2462,8 @@ function Export-DatabaseObjects {
     } else {
     $aggregates = @($Database.UserDefinedAggregates | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) })
     if ($aggregates.Count -gt 0) {
-        Write-Output "  Found $($aggregates.Count) aggregate(s) to export"
+        $groupingMode = Get-ObjectGroupingMode -ObjectType 'UserDefinedAggregates'
+        Write-Output "  Found $($aggregates.Count) aggregate(s) to export (grouping: $groupingMode)"
         $successCount = 0
         $failCount = 0
         $currentItem = 0
@@ -1819,21 +2471,71 @@ function Export-DatabaseObjects {
         $Scripter.Options = $opts
         Write-ProgressHeader 'Aggregates'
         
-        foreach ($aggregate in $aggregates) {
-            $currentItem++
-            try {
-                Write-ObjectProgress -ObjectName "$($aggregate.Schema).$($aggregate.Name)" -Current $currentItem -Total $aggregates.Count
-                $fileName = Join-Path $OutputDir '13_Programmability/02_Functions' "$($aggregate.Schema).$($aggregate.Name).aggregate.sql"
+        if ($groupingMode -eq 'single') {
+            # One file per aggregate
+            foreach ($aggregate in $aggregates) {
+                $currentItem++
+                try {
+                    Write-ObjectProgress -ObjectName "$($aggregate.Schema).$($aggregate.Name)" -Current $currentItem -Total $aggregates.Count
+                    $fileName = Join-Path $OutputDir '14_Programmability/02_Functions' "$(Get-SafeFileName $($aggregate.Schema)).$(Get-SafeFileName $($aggregate.Name)).aggregate.sql"
+                    Ensure-DirectoryExists $fileName
+                    $opts.FileName = $fileName
+                    $Scripter.Options = $opts
+                    $Scripter.EnumScript($aggregate) | Out-Null
+                    Write-ObjectProgress -ObjectName "$($aggregate.Schema).$($aggregate.Name)" -Current $currentItem -Total $aggregates.Count -Success
+                    $successCount++
+                } catch {
+                    Write-ObjectProgress -ObjectName "$($aggregate.Schema).$($aggregate.Name)" -Current $currentItem -Total $aggregates.Count -Failed
+                    Write-ExportError -ObjectType 'Aggregate' -ObjectName "$($aggregate.Schema).$($aggregate.Name)" -ErrorRecord $_ -FilePath $fileName
+                    $failCount++
+                }
+            }
+        } elseif ($groupingMode -eq 'schema') {
+            # Group by schema
+            $aggregatesBySchema = $aggregates | Group-Object -Property Schema | Sort-Object Name
+            $schemaIndex = 0
+            foreach ($schemaGroup in $aggregatesBySchema) {
+                $schemaIndex++
+                $fileName = Join-Path $OutputDir '14_Programmability/02_Functions' ("{0:D3}_{1}.aggregates.sql" -f $schemaIndex, (Get-SafeFileName $schemaGroup.Name))
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
+                $opts.AppendToFile = $false  # Start fresh for each schema file
                 $Scripter.Options = $opts
-                $aggregate.Script($opts) | Out-Null
-                Write-ObjectProgress -ObjectName "$($aggregate.Schema).$($aggregate.Name)" -Current $currentItem -Total $aggregates.Count -Success
-                $successCount++
-            } catch {
-                Write-ObjectProgress -ObjectName "$($aggregate.Schema).$($aggregate.Name)" -Current $currentItem -Total $aggregates.Count -Failed
-                Write-ExportError -ObjectType 'Aggregate' -ObjectName "$($aggregate.Schema).$($aggregate.Name)" -ErrorRecord $_ -FilePath $fileName
-                $failCount++
+                foreach ($aggregate in $schemaGroup.Group) {
+                    $currentItem++
+                    try {
+                        Write-ObjectProgress -ObjectName "$($aggregate.Schema).$($aggregate.Name)" -Current $currentItem -Total $aggregates.Count
+                        $Scripter.EnumScript($aggregate) | Out-Null
+                        $opts.AppendToFile = $true  # Append subsequent objects
+                        Write-ObjectProgress -ObjectName "$($aggregate.Schema).$($aggregate.Name)" -Current $currentItem -Total $aggregates.Count -Success
+                        $successCount++
+                    } catch {
+                        Write-ObjectProgress -ObjectName "$($aggregate.Schema).$($aggregate.Name)" -Current $currentItem -Total $aggregates.Count -Failed
+                        Write-ExportError -ObjectType 'Aggregate' -ObjectName "$($aggregate.Schema).$($aggregate.Name)" -ErrorRecord $_ -FilePath $fileName
+                        $failCount++
+                    }
+                }
+            }
+        } elseif ($groupingMode -eq 'all') {
+            # All in one file
+            $fileName = Join-Path $OutputDir '14_Programmability/02_Functions' "001_AllAggregates.sql"
+            Ensure-DirectoryExists $fileName
+            $opts.FileName = $fileName
+            $opts.AppendToFile = $false  # Start fresh
+            $Scripter.Options = $opts
+            foreach ($aggregate in $aggregates) {
+                $currentItem++
+                try {
+                    Write-ObjectProgress -ObjectName "$($aggregate.Schema).$($aggregate.Name)" -Current $currentItem -Total $aggregates.Count
+                    $Scripter.EnumScript($aggregate) | Out-Null
+                    $opts.AppendToFile = $true  # Append subsequent objects
+                    Write-ObjectProgress -ObjectName "$($aggregate.Schema).$($aggregate.Name)" -Current $currentItem -Total $aggregates.Count -Success
+                    $successCount++
+                } catch {
+                    Write-ObjectProgress -ObjectName "$($aggregate.Schema).$($aggregate.Name)" -Current $currentItem -Total $aggregates.Count -Failed
+                    Write-ExportError -ObjectType 'Aggregate' -ObjectName "$($aggregate.Schema).$($aggregate.Name)" -ErrorRecord $_ -FilePath $fileName
+                    $failCount++
+                }
             }
         }
         $script:CurrentProgressLabel = $null
@@ -1852,10 +2554,10 @@ function Export-DatabaseObjects {
     $extendedProcs = @($Database.ExtendedStoredProcedures | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) })
     $totalProcs = $storedProcs.Count + $extendedProcs.Count
     if ($totalProcs -gt 0) {
-        Write-Output "  Found $($storedProcs.Count) stored procedure(s) and $($extendedProcs.Count) extended stored procedure(s) to export"
+        $groupingMode = Get-ObjectGroupingMode -ObjectType 'StoredProcedures'
+        Write-Output "  Found $($storedProcs.Count) stored procedure(s) and $($extendedProcs.Count) extended stored procedure(s) to export (grouping: $groupingMode)"
         $successCount = 0
         $failCount = 0
-        $currentItem = 0
         $opts = New-ScriptingOptions -TargetVersion $TargetVersion -Overrides @{
             Indexes  = $false
             Triggers = $false
@@ -1863,43 +2565,106 @@ function Export-DatabaseObjects {
         $Scripter.Options = $opts
         Write-ProgressHeader 'StoredProcedures'
         
-        foreach ($proc in $storedProcs) {
-            $currentItem++
-            $percentComplete = [math]::Round(($currentItem / $totalProcs) * 100)
-            try {
-                Write-ObjectProgress -ObjectName "$($proc.Schema).$($proc.Name)" -Current $currentItem -Total $totalProcs
-                $fileName = Join-Path $OutputDir '13_Programmability/03_StoredProcedures' "$(Get-SafeFileName $($proc.Schema)).$(Get-SafeFileName $($proc.Name)).sql"
+        if ($groupingMode -eq 'single') {
+            $currentItem = 0
+            foreach ($proc in $storedProcs) {
+                $currentItem++
+                try {
+                    Write-ObjectProgress -ObjectName "$($proc.Schema).$($proc.Name)" -Current $currentItem -Total $totalProcs
+                    $fileName = Join-Path $OutputDir '14_Programmability/03_StoredProcedures' "$(Get-SafeFileName $($proc.Schema)).$(Get-SafeFileName $($proc.Name)).sql"
+                    Ensure-DirectoryExists $fileName
+                    $opts.FileName = $fileName
+                    $Scripter.Options = $opts
+                    $Scripter.EnumScript($proc) | Out-Null
+                    Write-ObjectProgress -ObjectName "$($proc.Schema).$($proc.Name)" -Current $currentItem -Total $totalProcs -Success
+                    $successCount++
+                } catch {
+                    Write-ObjectProgress -ObjectName "$($proc.Schema).$($proc.Name)" -Current $currentItem -Total $totalProcs -Failed
+                    Write-ExportError -ObjectType 'StoredProcedure' -ObjectName "$($proc.Schema).$($proc.Name)" -ErrorRecord $_ -FilePath $fileName
+                    $failCount++
+                }
+            }
+            
+            foreach ($extProc in $extendedProcs) {
+                $currentItem++
+                try {
+                    Write-ObjectProgress -ObjectName "$($extProc.Schema).$($extProc.Name)" -Current $currentItem -Total $totalProcs
+                    $fileName = Join-Path $OutputDir '14_Programmability/03_StoredProcedures' "$(Get-SafeFileName $($extProc.Schema)).$(Get-SafeFileName $($extProc.Name)).extended.sql"
+                    Ensure-DirectoryExists $fileName
+                    $opts.FileName = $fileName
+                    $Scripter.Options = $opts
+                    $Scripter.EnumScript($extProc) | Out-Null
+                    Write-ObjectProgress -ObjectName "$($extProc.Schema).$($extProc.Name)" -Current $currentItem -Total $totalProcs -Success
+                    $successCount++
+                } catch {
+                    Write-ObjectProgress -ObjectName "$($extProc.Schema).$($extProc.Name)" -Current $currentItem -Total $totalProcs -Failed
+                    Write-ExportError -ObjectType 'ExtendedStoredProcedure' -ObjectName "$($extProc.Schema).$($extProc.Name)" -ErrorRecord $_ -FilePath $fileName
+                    $failCount++
+                }
+            }
+        } elseif ($groupingMode -eq 'schema') {
+            $allProcs = @($storedProcs) + @($extendedProcs)
+            $procsBySchema = $allProcs | Group-Object -Property Schema
+            $schemaIndex = 0
+            $currentItem = 0
+            foreach ($schemaGroup in $procsBySchema) {
+                $schemaIndex++
+                $schemaName = $schemaGroup.Name
+                $schemaProcs = $schemaGroup.Group
+                $fileName = Join-Path $OutputDir '14_Programmability/03_StoredProcedures' ("{0:D3}_{1}.sql" -f $schemaIndex, (Get-SafeFileName $schemaName))
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
+                $opts.AppendToFile = $false  # Start fresh for each schema file
                 $Scripter.Options = $opts
-                $proc.Script($opts) | Out-Null
-                Write-ObjectProgress -ObjectName "$($proc.Schema).$($proc.Name)" -Current $currentItem -Total $totalProcs -Success
-                $successCount++
+                
+                try {
+                    foreach ($proc in $schemaProcs) {
+                        $currentItem++
+                        Write-ObjectProgress -ObjectName "$($proc.Schema).$($proc.Name)" -Current $currentItem -Total $totalProcs
+                        $Scripter.EnumScript($proc) | Out-Null
+                        $opts.AppendToFile = $true  # Append subsequent objects
+                        Write-ObjectProgress -ObjectName "$($proc.Schema).$($proc.Name)" -Current $currentItem -Total $totalProcs -Success
+                        $successCount++
+                    }
+                } catch {
+                    Write-ObjectProgress -ObjectName "$($schemaName).*" -Current $currentItem -Total $totalProcs -Failed
+                    Write-ExportError -ObjectType 'StoredProcedure' -ObjectName "$($schemaName) schema procedures" -ErrorRecord $_ -FilePath $fileName
+                    $failCount++
+                }
+            }
+        } elseif ($groupingMode -eq 'all') {
+            $fileName = Join-Path $OutputDir '14_Programmability/03_StoredProcedures' "001_AllProcedures.sql"
+            Ensure-DirectoryExists $fileName
+            $opts.FileName = $fileName
+            $opts.AppendToFile = $false  # Start fresh
+            $Scripter.Options = $opts
+            
+            $currentItem = 0
+            try {
+                foreach ($proc in $storedProcs) {
+                    $currentItem++
+                    Write-ObjectProgress -ObjectName "$($proc.Schema).$($proc.Name)" -Current $currentItem -Total $totalProcs
+                    $Scripter.EnumScript($proc) | Out-Null
+                    $opts.AppendToFile = $true  # Append subsequent objects
+                    Write-ObjectProgress -ObjectName "$($proc.Schema).$($proc.Name)" -Current $currentItem -Total $totalProcs -Success
+                    $successCount++
+                }
+                
+                foreach ($extProc in $extendedProcs) {
+                    $currentItem++
+                    Write-ObjectProgress -ObjectName "$($extProc.Schema).$($extProc.Name)" -Current $currentItem -Total $totalProcs
+                    $Scripter.EnumScript($extProc) | Out-Null
+                    $opts.AppendToFile = $true  # Append subsequent objects
+                    Write-ObjectProgress -ObjectName "$($extProc.Schema).$($extProc.Name)" -Current $currentItem -Total $totalProcs -Success
+                    $successCount++
+                }
             } catch {
-                Write-ObjectProgress -ObjectName "$($proc.Schema).$($proc.Name)" -Current $currentItem -Total $totalProcs -Failed
-                Write-ExportError -ObjectType 'StoredProcedure' -ObjectName "$($proc.Schema).$($proc.Name)" -ErrorRecord $_ -FilePath $fileName
-                $failCount++
+                Write-ObjectProgress -ObjectName "Procedures" -Current $currentItem -Total $totalProcs -Failed
+                Write-ExportError -ObjectType 'StoredProcedure' -ObjectName "All procedures" -ErrorRecord $_ -FilePath $fileName
+                $failCount = $totalProcs - $successCount
             }
         }
         
-        foreach ($extProc in $extendedProcs) {
-            $currentItem++
-            $percentComplete = [math]::Round(($currentItem / $totalProcs) * 100)
-            try {
-                Write-ObjectProgress -ObjectName "$($extProc.Schema).$($extProc.Name)" -Current $currentItem -Total $totalProcs
-                $fileName = Join-Path $OutputDir '13_Programmability/03_StoredProcedures' "$($extProc.Schema).$($extProc.Name).extended.sql"
-                Ensure-DirectoryExists $fileName
-                $opts.FileName = $fileName
-                $Scripter.Options = $opts
-                $extProc.Script($opts) | Out-Null
-                Write-ObjectProgress -ObjectName "$($extProc.Schema).$($extProc.Name)" -Current $currentItem -Total $totalProcs -Success
-                $successCount++
-            } catch {
-                Write-ObjectProgress -ObjectName "$($extProc.Schema).$($extProc.Name)" -Current $currentItem -Total $totalProcs -Failed
-                Write-ExportError -ObjectType 'ExtendedStoredProcedure' -ObjectName "$($extProc.Schema).$($extProc.Name)" -ErrorRecord $_ -FilePath $fileName
-                $failCount++
-            }
-        }
         $script:CurrentProgressLabel = $null
         Write-Output "  [SUMMARY] Exported $successCount/$totalProcs stored procedure(s) successfully" + $(if ($failCount -gt 0) { " ($failCount failed)" } else { "" })
         $functionMetrics.TotalObjects += $totalProcs
@@ -1918,7 +2683,8 @@ function Export-DatabaseObjects {
     } else {
     $dbTriggers = @($Database.Triggers | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $null -Name $_.Name) })
     if ($dbTriggers.Count -gt 0) {
-        Write-Output "  Found $($dbTriggers.Count) database trigger(s) to export"
+        $groupingMode = Get-ObjectGroupingMode -ObjectType 'DatabaseTriggers'
+        Write-Output "  Found $($dbTriggers.Count) database trigger(s) to export (grouping: $groupingMode)"
         $successCount = 0
         $failCount = 0
         $currentItem = 0
@@ -1928,22 +2694,46 @@ function Export-DatabaseObjects {
         $Scripter.Options = $opts
         Write-ProgressHeader 'DatabaseTriggers'
         
-        foreach ($trigger in $dbTriggers) {
-            $currentItem++
-            try {
-                Write-ObjectProgress -ObjectName $trigger.Name -Current $currentItem -Total $dbTriggers.Count
-                $safeName = Get-SafeFileName $trigger.Name
-                $fileName = Join-Path $OutputDir '13_Programmability/04_Triggers' "Database.$safeName.sql"
-                Ensure-DirectoryExists $fileName
-                $opts.FileName = $fileName
-                $Scripter.Options = $opts
-                $trigger.Script($opts) | Out-Null
-                Write-ObjectProgress -ObjectName $trigger.Name -Current $currentItem -Total $dbTriggers.Count -Success
-                $successCount++
-            } catch {
-                Write-ObjectProgress -ObjectName $trigger.Name -Current $currentItem -Total $dbTriggers.Count -Failed
-                Write-ExportError -ObjectType 'DatabaseTrigger' -ObjectName $trigger.Name -ErrorRecord $_ -FilePath $fileName
-                $failCount++
+        if ($groupingMode -eq 'single') {
+            # One file per trigger
+            foreach ($trigger in $dbTriggers) {
+                $currentItem++
+                try {
+                    Write-ObjectProgress -ObjectName $trigger.Name -Current $currentItem -Total $dbTriggers.Count
+                    $safeName = Get-SafeFileName $trigger.Name
+                    $fileName = Join-Path $OutputDir '14_Programmability/04_Triggers' "Database.$safeName.sql"
+                    Ensure-DirectoryExists $fileName
+                    $opts.FileName = $fileName
+                    $Scripter.Options = $opts
+                    $Scripter.EnumScript($trigger) | Out-Null
+                    Write-ObjectProgress -ObjectName $trigger.Name -Current $currentItem -Total $dbTriggers.Count -Success
+                    $successCount++
+                } catch {
+                    Write-ObjectProgress -ObjectName $trigger.Name -Current $currentItem -Total $dbTriggers.Count -Failed
+                    Write-ExportError -ObjectType 'DatabaseTrigger' -ObjectName $trigger.Name -ErrorRecord $_ -FilePath $fileName
+                    $failCount++
+                }
+            }
+        } elseif ($groupingMode -eq 'schema' -or $groupingMode -eq 'all') {
+            # Database triggers have no schema, so both modes produce one file
+            $fileName = Join-Path $OutputDir '14_Programmability/04_Triggers' "001_AllDatabaseTriggers.sql"
+            Ensure-DirectoryExists $fileName
+            $opts.FileName = $fileName
+            $opts.AppendToFile = $false  # Start fresh
+            $Scripter.Options = $opts
+            foreach ($trigger in $dbTriggers) {
+                $currentItem++
+                try {
+                    Write-ObjectProgress -ObjectName $trigger.Name -Current $currentItem -Total $dbTriggers.Count
+                    $Scripter.EnumScript($trigger) | Out-Null
+                    $opts.AppendToFile = $true  # Append subsequent objects
+                    Write-ObjectProgress -ObjectName $trigger.Name -Current $currentItem -Total $dbTriggers.Count -Success
+                    $successCount++
+                } catch {
+                    Write-ObjectProgress -ObjectName $trigger.Name -Current $currentItem -Total $dbTriggers.Count -Failed
+                    Write-ExportError -ObjectType 'DatabaseTrigger' -ObjectName $trigger.Name -ErrorRecord $_ -FilePath $fileName
+                    $failCount++
+                }
             }
         }
         $script:CurrentProgressLabel = $null
@@ -1976,7 +2766,8 @@ function Export-DatabaseObjects {
         }
     }
     if ($tableTriggers.Count -gt 0) {
-        Write-Output "  Found $($tableTriggers.Count) table trigger(s) to export"
+        $groupingMode = Get-ObjectGroupingMode -ObjectType 'TableTriggers'
+        Write-Output "  Found $($tableTriggers.Count) table trigger(s) to export (grouping: $groupingMode)"
         $successCount = 0
         $failCount = 0
         $opts = New-ScriptingOptions -TargetVersion $TargetVersion -Overrides @{
@@ -1991,21 +2782,71 @@ function Export-DatabaseObjects {
         Write-ProgressHeader 'TableTriggers'
         
         $currentItem = 0
-        foreach ($trigger in $tableTriggers) {
-            $currentItem++
-            try {
-                Write-ObjectProgress -ObjectName "$($trigger.Parent.Schema).$($trigger.Parent.Name).$($trigger.Name)" -Current $currentItem -Total $tableTriggers.Count
-                $fileName = Join-Path $OutputDir '13_Programmability/04_Triggers' "$(Get-SafeFileName $($trigger.Parent.Schema)).$(Get-SafeFileName $($trigger.Parent.Name)).$(Get-SafeFileName $($trigger.Name)).sql"
+        if ($groupingMode -eq 'single') {
+            # One file per trigger
+            foreach ($trigger in $tableTriggers) {
+                $currentItem++
+                try {
+                    Write-ObjectProgress -ObjectName "$($trigger.Parent.Schema).$($trigger.Parent.Name).$($trigger.Name)" -Current $currentItem -Total $tableTriggers.Count
+                    $fileName = Join-Path $OutputDir '14_Programmability/04_Triggers' "$(Get-SafeFileName $($trigger.Parent.Schema)).$(Get-SafeFileName $($trigger.Parent.Name)).$(Get-SafeFileName $($trigger.Name)).sql"
+                    Ensure-DirectoryExists $fileName
+                    $opts.FileName = $fileName
+                    $Scripter.Options = $opts
+                    $Scripter.EnumScript($trigger) | Out-Null
+                    Write-ObjectProgress -ObjectName "$($trigger.Parent.Schema).$($trigger.Parent.Name).$($trigger.Name)" -Current $currentItem -Total $tableTriggers.Count -Success
+                    $successCount++
+                } catch {
+                    Write-ObjectProgress -ObjectName "$($trigger.Parent.Schema).$($trigger.Parent.Name).$($trigger.Name)" -Current $currentItem -Total $tableTriggers.Count -Failed
+                    Write-ExportError -ObjectType 'TableTrigger' -ObjectName "$($trigger.Parent.Schema).$($trigger.Parent.Name).$($trigger.Name)" -ErrorRecord $_ -FilePath $fileName
+                    $failCount++
+                }
+            }
+        } elseif ($groupingMode -eq 'schema') {
+            # Group by parent table schema
+            $triggersBySchema = $tableTriggers | Group-Object -Property { $_.Parent.Schema } | Sort-Object Name
+            $schemaIndex = 0
+            foreach ($schemaGroup in $triggersBySchema) {
+                $schemaIndex++
+                $fileName = Join-Path $OutputDir '14_Programmability/04_Triggers' ("{0:D3}_{1}.triggers.sql" -f $schemaIndex, (Get-SafeFileName $schemaGroup.Name))
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
+                $opts.AppendToFile = $false  # Start fresh for each schema file
                 $Scripter.Options = $opts
-                $trigger.Script($opts) | Out-Null
-                Write-ObjectProgress -ObjectName "$($trigger.Parent.Schema).$($trigger.Parent.Name).$($trigger.Name)" -Current $currentItem -Total $tableTriggers.Count -Success
-                $successCount++
-            } catch {
-                Write-ObjectProgress -ObjectName "$($trigger.Parent.Schema).$($trigger.Parent.Name).$($trigger.Name)" -Current $currentItem -Total $tableTriggers.Count -Failed
-                Write-ExportError -ObjectType 'TableTrigger' -ObjectName "$($trigger.Parent.Schema).$($trigger.Parent.Name).$($trigger.Name)" -ErrorRecord $_ -FilePath $fileName
-                $failCount++
+                foreach ($trigger in $schemaGroup.Group) {
+                    $currentItem++
+                    try {
+                        Write-ObjectProgress -ObjectName "$($trigger.Parent.Schema).$($trigger.Parent.Name).$($trigger.Name)" -Current $currentItem -Total $tableTriggers.Count
+                        $Scripter.EnumScript($trigger) | Out-Null
+                        $opts.AppendToFile = $true  # Append subsequent objects
+                        Write-ObjectProgress -ObjectName "$($trigger.Parent.Schema).$($trigger.Parent.Name).$($trigger.Name)" -Current $currentItem -Total $tableTriggers.Count -Success
+                        $successCount++
+                    } catch {
+                        Write-ObjectProgress -ObjectName "$($trigger.Parent.Schema).$($trigger.Parent.Name).$($trigger.Name)" -Current $currentItem -Total $tableTriggers.Count -Failed
+                        Write-ExportError -ObjectType 'TableTrigger' -ObjectName "$($trigger.Parent.Schema).$($trigger.Parent.Name).$($trigger.Name)" -ErrorRecord $_ -FilePath $fileName
+                        $failCount++
+                    }
+                }
+            }
+        } elseif ($groupingMode -eq 'all') {
+            # All in one file
+            $fileName = Join-Path $OutputDir '14_Programmability/04_Triggers' "001_AllTableTriggers.sql"
+            Ensure-DirectoryExists $fileName
+            $opts.FileName = $fileName
+            $opts.AppendToFile = $false  # Start fresh
+            $Scripter.Options = $opts
+            foreach ($trigger in $tableTriggers) {
+                $currentItem++
+                try {
+                    Write-ObjectProgress -ObjectName "$($trigger.Parent.Schema).$($trigger.Parent.Name).$($trigger.Name)" -Current $currentItem -Total $tableTriggers.Count
+                    $Scripter.EnumScript($trigger) | Out-Null
+                    $opts.AppendToFile = $true  # Append subsequent objects
+                    Write-ObjectProgress -ObjectName "$($trigger.Parent.Schema).$($trigger.Parent.Name).$($trigger.Name)" -Current $currentItem -Total $tableTriggers.Count -Success
+                    $successCount++
+                } catch {
+                    Write-ObjectProgress -ObjectName "$($trigger.Parent.Schema).$($trigger.Parent.Name).$($trigger.Name)" -Current $currentItem -Total $tableTriggers.Count -Failed
+                    Write-ExportError -ObjectType 'TableTrigger' -ObjectName "$($trigger.Parent.Schema).$($trigger.Parent.Name).$($trigger.Name)" -ErrorRecord $_ -FilePath $fileName
+                    $failCount++
+                }
             }
         }
         $script:CurrentProgressLabel = $null
@@ -2021,7 +2862,8 @@ function Export-DatabaseObjects {
     } else {
     $views = @($Database.Views | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) })
     if ($views.Count -gt 0) {
-        Write-Output "  Found $($views.Count) view(s) to export"
+        $groupingMode = Get-ObjectGroupingMode -ObjectType 'Views'
+        Write-Output "  Found $($views.Count) view(s) to export (grouping: $groupingMode)"
         $successCount = 0
         $failCount = 0
         $opts = New-ScriptingOptions -TargetVersion $TargetVersion
@@ -2029,22 +2871,71 @@ function Export-DatabaseObjects {
         Write-ProgressHeader 'Views'
         
         $currentItem = 0
-        foreach ($view in $views) {
-            $currentItem++
-            $percentComplete = [math]::Round(($currentItem / $views.Count) * 100)
-            try {
-                Write-ObjectProgress -ObjectName "$($view.Schema).$($view.Name)" -Current $currentItem -Total $views.Count
-                $fileName = Join-Path $OutputDir '13_Programmability/05_Views' "$(Get-SafeFileName $($view.Schema)).$(Get-SafeFileName $($view.Name)).sql"
+        if ($groupingMode -eq 'single') {
+            # One file per view
+            foreach ($view in $views) {
+                $currentItem++
+                try {
+                    Write-ObjectProgress -ObjectName "$($view.Schema).$($view.Name)" -Current $currentItem -Total $views.Count
+                    $fileName = Join-Path $OutputDir '14_Programmability/05_Views' "$(Get-SafeFileName $($view.Schema)).$(Get-SafeFileName $($view.Name)).sql"
+                    Ensure-DirectoryExists $fileName
+                    $opts.FileName = $fileName
+                    $Scripter.Options = $opts
+                    $Scripter.EnumScript($view) | Out-Null
+                    Write-ObjectProgress -ObjectName "$($view.Schema).$($view.Name)" -Current $currentItem -Total $views.Count -Success
+                    $successCount++
+                } catch {
+                    Write-ObjectProgress -ObjectName "$($view.Schema).$($view.Name)" -Current $currentItem -Total $views.Count -Failed
+                    Write-ExportError -ObjectType 'View' -ObjectName "$($view.Schema).$($view.Name)" -ErrorRecord $_ -FilePath $fileName
+                    $failCount++
+                }
+            }
+        } elseif ($groupingMode -eq 'schema') {
+            # Group by schema
+            $viewsBySchema = $views | Group-Object -Property Schema | Sort-Object Name
+            $schemaIndex = 0
+            foreach ($schemaGroup in $viewsBySchema) {
+                $schemaIndex++
+                $fileName = Join-Path $OutputDir '14_Programmability/05_Views' ("{0:D3}_{1}.sql" -f $schemaIndex, (Get-SafeFileName $schemaGroup.Name))
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
+                $opts.AppendToFile = $false  # Start fresh for each schema file
                 $Scripter.Options = $opts
-                $view.Script($opts) | Out-Null
-                Write-ObjectProgress -ObjectName "$($view.Schema).$($view.Name)" -Current $currentItem -Total $views.Count -Success
-                $successCount++
-            } catch {
-                Write-ObjectProgress -ObjectName "$($view.Schema).$($view.Name)" -Current $currentItem -Total $views.Count -Failed
-                Write-ExportError -ObjectType 'View' -ObjectName "$($view.Schema).$($view.Name)" -ErrorRecord $_ -FilePath $fileName
-                $failCount++
+                foreach ($view in $schemaGroup.Group) {
+                    $currentItem++
+                    try {
+                        Write-ObjectProgress -ObjectName "$($view.Schema).$($view.Name)" -Current $currentItem -Total $views.Count
+                        $Scripter.EnumScript($view) | Out-Null
+                        $opts.AppendToFile = $true  # Append subsequent objects
+                        Write-ObjectProgress -ObjectName "$($view.Schema).$($view.Name)" -Current $currentItem -Total $views.Count -Success
+                        $successCount++
+                    } catch {
+                        Write-ObjectProgress -ObjectName "$($view.Schema).$($view.Name)" -Current $currentItem -Total $views.Count -Failed
+                        Write-ExportError -ObjectType 'View' -ObjectName "$($view.Schema).$($view.Name)" -ErrorRecord $_ -FilePath $fileName
+                        $failCount++
+                    }
+                }
+            }
+        } elseif ($groupingMode -eq 'all') {
+            # All in one file
+            $fileName = Join-Path $OutputDir '14_Programmability/05_Views' "001_AllViews.sql"
+            Ensure-DirectoryExists $fileName
+            $opts.FileName = $fileName
+            $opts.AppendToFile = $false  # Start fresh
+            $Scripter.Options = $opts
+            foreach ($view in $views) {
+                $currentItem++
+                try {
+                    Write-ObjectProgress -ObjectName "$($view.Schema).$($view.Name)" -Current $currentItem -Total $views.Count
+                    $Scripter.EnumScript($view) | Out-Null
+                    $opts.AppendToFile = $true  # Append subsequent objects
+                    Write-ObjectProgress -ObjectName "$($view.Schema).$($view.Name)" -Current $currentItem -Total $views.Count -Success
+                    $successCount++
+                } catch {
+                    Write-ObjectProgress -ObjectName "$($view.Schema).$($view.Name)" -Current $currentItem -Total $views.Count -Failed
+                    Write-ExportError -ObjectType 'View' -ObjectName "$($view.Schema).$($view.Name)" -ErrorRecord $_ -FilePath $fileName
+                    $failCount++
+                }
             }
         }
         $script:CurrentProgressLabel = $null
@@ -2060,7 +2951,8 @@ function Export-DatabaseObjects {
     } else {
     $synonyms = @($Database.Synonyms | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) })
     if ($synonyms.Count -gt 0) {
-        Write-Output "  Found $($synonyms.Count) synonym(s) to export"
+        $groupingMode = Get-ObjectGroupingMode -ObjectType 'Synonyms'
+        Write-Output "  Found $($synonyms.Count) synonym(s) to export (grouping: $groupingMode)"
         $successCount = 0
         $failCount = 0
         $currentItem = 0
@@ -2068,21 +2960,71 @@ function Export-DatabaseObjects {
         $Scripter.Options = $opts
         Write-ProgressHeader 'Synonyms'
         
-        foreach ($synonym in $synonyms) {
-            $currentItem++
-            try {
-                Write-ObjectProgress -ObjectName "$($synonym.Schema).$($synonym.Name)" -Current $currentItem -Total $synonyms.Count
-                $fileName = Join-Path $OutputDir '14_Synonyms' "$(Get-SafeFileName $($synonym.Schema)).$(Get-SafeFileName $($synonym.Name)).sql"
+        if ($groupingMode -eq 'single') {
+            # One file per synonym
+            foreach ($synonym in $synonyms) {
+                $currentItem++
+                try {
+                    Write-ObjectProgress -ObjectName "$($synonym.Schema).$($synonym.Name)" -Current $currentItem -Total $synonyms.Count
+                    $fileName = Join-Path $OutputDir '15_Synonyms' "$(Get-SafeFileName $($synonym.Schema)).$(Get-SafeFileName $($synonym.Name)).sql"
+                    Ensure-DirectoryExists $fileName
+                    $opts.FileName = $fileName
+                    $Scripter.Options = $opts
+                    $Scripter.EnumScript($synonym) | Out-Null
+                    Write-ObjectProgress -ObjectName "$($synonym.Schema).$($synonym.Name)" -Current $currentItem -Total $synonyms.Count -Success
+                    $successCount++
+                } catch {
+                    Write-ObjectProgress -ObjectName "$($synonym.Schema).$($synonym.Name)" -Current $currentItem -Total $synonyms.Count -Failed
+                    Write-ExportError -ObjectType 'Synonym' -ObjectName "$($synonym.Schema).$($synonym.Name)" -ErrorRecord $_ -FilePath $fileName
+                    $failCount++
+                }
+            }
+        } elseif ($groupingMode -eq 'schema') {
+            # Group by schema
+            $synonymsBySchema = $synonyms | Group-Object -Property Schema | Sort-Object Name
+            $schemaIndex = 0
+            foreach ($schemaGroup in $synonymsBySchema) {
+                $schemaIndex++
+                $fileName = Join-Path $OutputDir '15_Synonyms' ("{0:D3}_{1}.sql" -f $schemaIndex, (Get-SafeFileName $schemaGroup.Name))
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
+                $opts.AppendToFile = $false  # Start fresh for each schema file
                 $Scripter.Options = $opts
-                $synonym.Script($opts) | Out-Null
-                Write-ObjectProgress -ObjectName "$($synonym.Schema).$($synonym.Name)" -Current $currentItem -Total $synonyms.Count -Success
-                $successCount++
-            } catch {
-                Write-ObjectProgress -ObjectName "$($synonym.Schema).$($synonym.Name)" -Current $currentItem -Total $synonyms.Count -Failed
-                Write-ExportError -ObjectType 'Synonym' -ObjectName "$($synonym.Schema).$($synonym.Name)" -ErrorRecord $_ -FilePath $fileName
-                $failCount++
+                foreach ($synonym in $schemaGroup.Group) {
+                    $currentItem++
+                    try {
+                        Write-ObjectProgress -ObjectName "$($synonym.Schema).$($synonym.Name)" -Current $currentItem -Total $synonyms.Count
+                        $Scripter.EnumScript($synonym) | Out-Null
+                        $opts.AppendToFile = $true  # Append subsequent objects
+                        Write-ObjectProgress -ObjectName "$($synonym.Schema).$($synonym.Name)" -Current $currentItem -Total $synonyms.Count -Success
+                        $successCount++
+                    } catch {
+                        Write-ObjectProgress -ObjectName "$($synonym.Schema).$($synonym.Name)" -Current $currentItem -Total $synonyms.Count -Failed
+                        Write-ExportError -ObjectType 'Synonym' -ObjectName "$($synonym.Schema).$($synonym.Name)" -ErrorRecord $_ -FilePath $fileName
+                        $failCount++
+                    }
+                }
+            }
+        } elseif ($groupingMode -eq 'all') {
+            # All in one file
+            $fileName = Join-Path $OutputDir '15_Synonyms' "001_AllSynonyms.sql"
+            Ensure-DirectoryExists $fileName
+            $opts.FileName = $fileName
+            $opts.AppendToFile = $false  # Start fresh
+            $Scripter.Options = $opts
+            foreach ($synonym in $synonyms) {
+                $currentItem++
+                try {
+                    Write-ObjectProgress -ObjectName "$($synonym.Schema).$($synonym.Name)" -Current $currentItem -Total $synonyms.Count
+                    $Scripter.EnumScript($synonym) | Out-Null
+                    $opts.AppendToFile = $true  # Append subsequent objects
+                    Write-ObjectProgress -ObjectName "$($synonym.Schema).$($synonym.Name)" -Current $currentItem -Total $synonyms.Count -Success
+                    $successCount++
+                } catch {
+                    Write-ObjectProgress -ObjectName "$($synonym.Schema).$($synonym.Name)" -Current $currentItem -Total $synonyms.Count -Failed
+                    Write-ExportError -ObjectType 'Synonym' -ObjectName "$($synonym.Schema).$($synonym.Name)" -ErrorRecord $_ -FilePath $fileName
+                    $failCount++
+                }
             }
         }
         $script:CurrentProgressLabel = $null
@@ -2100,7 +3042,8 @@ function Export-DatabaseObjects {
     $ftStopLists = @($Database.FullTextStopLists | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Name $_.Name) })
     
     if ($ftCatalogs.Count -gt 0) {
-        Write-Output "  Found $($ftCatalogs.Count) full-text catalog(s) to export"
+        $groupingMode = Get-ObjectGroupingMode -ObjectType 'FullTextCatalogs'
+        Write-Output "  Found $($ftCatalogs.Count) full-text catalog(s) to export (grouping: $groupingMode)"
         $successCount = 0
         $failCount = 0
         $currentItem = 0
@@ -2108,21 +3051,45 @@ function Export-DatabaseObjects {
         $Scripter.Options = $opts
         Write-ProgressHeader 'FullTextCatalogs'
         
-        foreach ($ftc in $ftCatalogs) {
-            $currentItem++
-            try {
-                Write-ObjectProgress -ObjectName $ftc.Name -Current $currentItem -Total $ftCatalogs.Count
-                $fileName = Join-Path $OutputDir '15_FullTextSearch' "$($ftc.Name).catalog.sql"
-                Ensure-DirectoryExists $fileName
-                $opts.FileName = $fileName
-                $Scripter.Options = $opts
-                $ftc.Script($opts) | Out-Null
-                Write-ObjectProgress -ObjectName $ftc.Name -Current $currentItem -Total $ftCatalogs.Count -Success
-                $successCount++
-            } catch {
-                Write-ObjectProgress -ObjectName $ftc.Name -Current $currentItem -Total $ftCatalogs.Count -Failed
-                Write-ExportError -ObjectType 'FullTextCatalog' -ObjectName $ftc.Name -ErrorRecord $_ -FilePath $fileName
-                $failCount++
+        if ($groupingMode -eq 'single') {
+            # One file per catalog
+            foreach ($ftc in $ftCatalogs) {
+                $currentItem++
+                try {
+                    Write-ObjectProgress -ObjectName $ftc.Name -Current $currentItem -Total $ftCatalogs.Count
+                    $fileName = Join-Path $OutputDir '16_FullTextSearch' "FullTextCatalog.$(Get-SafeFileName $($ftc.Name)).sql"
+                    Ensure-DirectoryExists $fileName
+                    $opts.FileName = $fileName
+                    $Scripter.Options = $opts
+                    $Scripter.EnumScript($ftc) | Out-Null
+                    Write-ObjectProgress -ObjectName $ftc.Name -Current $currentItem -Total $ftCatalogs.Count -Success
+                    $successCount++
+                } catch {
+                    Write-ObjectProgress -ObjectName $ftc.Name -Current $currentItem -Total $ftCatalogs.Count -Failed
+                    Write-ExportError -ObjectType 'FullTextCatalog' -ObjectName $ftc.Name -ErrorRecord $_ -FilePath $fileName
+                    $failCount++
+                }
+            }
+        } elseif ($groupingMode -eq 'schema' -or $groupingMode -eq 'all') {
+            # No schema property, so both modes produce one file
+            $fileName = Join-Path $OutputDir '16_FullTextSearch' "001_AllFullTextCatalogs.sql"
+            Ensure-DirectoryExists $fileName
+            $opts.FileName = $fileName
+            $opts.AppendToFile = $false  # Start fresh
+            $Scripter.Options = $opts
+            foreach ($ftc in $ftCatalogs) {
+                $currentItem++
+                try {
+                    Write-ObjectProgress -ObjectName $ftc.Name -Current $currentItem -Total $ftCatalogs.Count
+                    $Scripter.EnumScript($ftc) | Out-Null
+                    $opts.AppendToFile = $true  # Append subsequent objects
+                    Write-ObjectProgress -ObjectName $ftc.Name -Current $currentItem -Total $ftCatalogs.Count -Success
+                    $successCount++
+                } catch {
+                    Write-ObjectProgress -ObjectName $ftc.Name -Current $currentItem -Total $ftCatalogs.Count -Failed
+                    Write-ExportError -ObjectType 'FullTextCatalog' -ObjectName $ftc.Name -ErrorRecord $_ -FilePath $fileName
+                    $failCount++
+                }
             }
         }
         $script:CurrentProgressLabel = $null
@@ -2130,7 +3097,8 @@ function Export-DatabaseObjects {
     }
     
     if ($ftStopLists.Count -gt 0) {
-        Write-Output "  Found $($ftStopLists.Count) full-text stop list(s) to export"
+        $groupingMode = Get-ObjectGroupingMode -ObjectType 'FullTextStopLists'
+        Write-Output "  Found $($ftStopLists.Count) full-text stop list(s) to export (grouping: $groupingMode)"
         $successCount = 0
         $failCount = 0
         $currentItem = 0
@@ -2138,21 +3106,45 @@ function Export-DatabaseObjects {
         $Scripter.Options = $opts
         Write-ProgressHeader 'FullTextStopLists'
         
-        foreach ($ftsl in $ftStopLists) {
-            $currentItem++
-            try {
-                Write-ObjectProgress -ObjectName $ftsl.Name -Current $currentItem -Total $ftStopLists.Count
-                $fileName = Join-Path $OutputDir '15_FullTextSearch' "$($ftsl.Name).stoplist.sql"
-                Ensure-DirectoryExists $fileName
-                $opts.FileName = $fileName
-                $Scripter.Options = $opts
-                $ftsl.Script($opts) | Out-Null
-                Write-ObjectProgress -ObjectName $ftsl.Name -Current $currentItem -Total $ftStopLists.Count -Success
-                $successCount++
-            } catch {
-                Write-ObjectProgress -ObjectName $ftsl.Name -Current $currentItem -Total $ftStopLists.Count -Failed
-                Write-ExportError -ObjectType 'FullTextStopList' -ObjectName $ftsl.Name -ErrorRecord $_ -FilePath $fileName
-                $failCount++
+        if ($groupingMode -eq 'single') {
+            # One file per stop list
+            foreach ($ftsl in $ftStopLists) {
+                $currentItem++
+                try {
+                    Write-ObjectProgress -ObjectName $ftsl.Name -Current $currentItem -Total $ftStopLists.Count
+                    $fileName = Join-Path $OutputDir '16_FullTextSearch' "FullTextStopList.$(Get-SafeFileName $($ftsl.Name)).sql"
+                    Ensure-DirectoryExists $fileName
+                    $opts.FileName = $fileName
+                    $Scripter.Options = $opts
+                    $Scripter.EnumScript($ftsl) | Out-Null
+                    Write-ObjectProgress -ObjectName $ftsl.Name -Current $currentItem -Total $ftStopLists.Count -Success
+                    $successCount++
+                } catch {
+                    Write-ObjectProgress -ObjectName $ftsl.Name -Current $currentItem -Total $ftStopLists.Count -Failed
+                    Write-ExportError -ObjectType 'FullTextStopList' -ObjectName $ftsl.Name -ErrorRecord $_ -FilePath $fileName
+                    $failCount++
+                }
+            }
+        } elseif ($groupingMode -eq 'schema' -or $groupingMode -eq 'all') {
+            # No schema property, so both modes produce one file
+            $fileName = Join-Path $OutputDir '16_FullTextSearch' "002_AllFullTextStopLists.sql"
+            Ensure-DirectoryExists $fileName
+            $opts.FileName = $fileName
+            $opts.AppendToFile = $false  # Start fresh
+            $Scripter.Options = $opts
+            foreach ($ftsl in $ftStopLists) {
+                $currentItem++
+                try {
+                    Write-ObjectProgress -ObjectName $ftsl.Name -Current $currentItem -Total $ftStopLists.Count
+                    $Scripter.EnumScript($ftsl) | Out-Null
+                    $opts.AppendToFile = $true  # Append subsequent objects
+                    Write-ObjectProgress -ObjectName $ftsl.Name -Current $currentItem -Total $ftStopLists.Count -Success
+                    $successCount++
+                } catch {
+                    Write-ObjectProgress -ObjectName $ftsl.Name -Current $currentItem -Total $ftStopLists.Count -Failed
+                    Write-ExportError -ObjectType 'FullTextStopList' -ObjectName $ftsl.Name -ErrorRecord $_ -FilePath $fileName
+                    $failCount++
+                }
             }
         }
         $script:CurrentProgressLabel = $null
@@ -2177,7 +3169,8 @@ function Export-DatabaseObjects {
         )
         
         if ($externalDataSources.Count -gt 0) {
-            Write-Output "  Found $($externalDataSources.Count) external data source(s) to export"
+            $groupingMode = Get-ObjectGroupingMode -ObjectType 'ExternalDataSources'
+            Write-Output "  Found $($externalDataSources.Count) external data source(s) to export (grouping: $groupingMode)"
             $successCount = 0
             $failCount = 0
             $currentItem = 0
@@ -2185,21 +3178,45 @@ function Export-DatabaseObjects {
             $Scripter.Options = $opts
             Write-ProgressHeader 'ExternalDataSources'
             
-            foreach ($eds in $externalDataSources) {
-                $currentItem++
-                try {
-                    Write-ObjectProgress -ObjectName $eds.Name -Current $currentItem -Total $externalDataSources.Count
-                    $fileName = Join-Path $OutputDir '16_ExternalData' "$($eds.Name).datasource.sql"
+            if ($groupingMode -eq 'single') {
+                # One file per data source
+                foreach ($eds in $externalDataSources) {
+                    $currentItem++
+                    try {
+                        Write-ObjectProgress -ObjectName $eds.Name -Current $currentItem -Total $externalDataSources.Count
+                        $fileName = Join-Path $OutputDir '17_ExternalData' "ExternalDataSource.$(Get-SafeFileName $($eds.Name)).sql"
+                        Ensure-DirectoryExists $fileName
+                        $opts.FileName = $fileName
+                        $Scripter.Options = $opts
+                        $Scripter.EnumScript($eds) | Out-Null
+                        Write-ObjectProgress -ObjectName $eds.Name -Current $currentItem -Total $externalDataSources.Count -Success
+                        $successCount++
+                    } catch {
+                        Write-ObjectProgress -ObjectName $eds.Name -Current $currentItem -Total $externalDataSources.Count -Failed
+                        Write-ExportError -ObjectType 'ExternalDataSource' -ObjectName $eds.Name -ErrorRecord $_ -FilePath $fileName
+                        $failCount++
+                    }
+                }
+            } elseif ($groupingMode -eq 'schema' -or $groupingMode -eq 'all') {
+                # No schema property, so both modes produce one file
+                $fileName = Join-Path $OutputDir '17_ExternalData' "001_AllExternalDataSources.sql"
                 Ensure-DirectoryExists $fileName
-                    $opts.FileName = $fileName
-                    $Scripter.Options = $opts
-                    $eds.Script($opts) | Out-Null
-                    Write-ObjectProgress -ObjectName $eds.Name -Current $currentItem -Total $externalDataSources.Count -Success
-                    $successCount++
-                } catch {
-                    Write-ObjectProgress -ObjectName $eds.Name -Current $currentItem -Total $externalDataSources.Count -Failed
-                    Write-ExportError -ObjectType 'ExternalDataSource' -ObjectName $eds.Name -ErrorRecord $_ -FilePath $fileName
-                    $failCount++
+                $opts.FileName = $fileName
+                $opts.AppendToFile = $false  # Start fresh
+                $Scripter.Options = $opts
+                foreach ($eds in $externalDataSources) {
+                    $currentItem++
+                    try {
+                        Write-ObjectProgress -ObjectName $eds.Name -Current $currentItem -Total $externalDataSources.Count
+                        $Scripter.EnumScript($eds) | Out-Null
+                        $opts.AppendToFile = $true  # Append subsequent objects
+                        Write-ObjectProgress -ObjectName $eds.Name -Current $currentItem -Total $externalDataSources.Count -Success
+                        $successCount++
+                    } catch {
+                        Write-ObjectProgress -ObjectName $eds.Name -Current $currentItem -Total $externalDataSources.Count -Failed
+                        Write-ExportError -ObjectType 'ExternalDataSource' -ObjectName $eds.Name -ErrorRecord $_ -FilePath $fileName
+                        $failCount++
+                    }
                 }
             }
             $script:CurrentProgressLabel = $null
@@ -2208,7 +3225,8 @@ function Export-DatabaseObjects {
         }
         
         if ($externalFileFormats.Count -gt 0) {
-            Write-Output "  Found $($externalFileFormats.Count) external file format(s) to export"
+            $groupingMode = Get-ObjectGroupingMode -ObjectType 'ExternalFileFormats'
+            Write-Output "  Found $($externalFileFormats.Count) external file format(s) to export (grouping: $groupingMode)"
             $successCount = 0
             $failCount = 0
             $currentItem = 0
@@ -2216,21 +3234,45 @@ function Export-DatabaseObjects {
             $Scripter.Options = $opts
             Write-ProgressHeader 'ExternalFileFormats'
             
-            foreach ($eff in $externalFileFormats) {
-                $currentItem++
-                try {
-                    Write-ObjectProgress -ObjectName $eff.Name -Current $currentItem -Total $externalFileFormats.Count
-                    $fileName = Join-Path $OutputDir '16_ExternalData' "$($eff.Name).fileformat.sql"
+            if ($groupingMode -eq 'single') {
+                # One file per file format
+                foreach ($eff in $externalFileFormats) {
+                    $currentItem++
+                    try {
+                        Write-ObjectProgress -ObjectName $eff.Name -Current $currentItem -Total $externalFileFormats.Count
+                        $fileName = Join-Path $OutputDir '17_ExternalData' "ExternalFileFormat.$(Get-SafeFileName $($eff.Name)).sql"
+                        Ensure-DirectoryExists $fileName
+                        $opts.FileName = $fileName
+                        $Scripter.Options = $opts
+                        $Scripter.EnumScript($eff) | Out-Null
+                        Write-ObjectProgress -ObjectName $eff.Name -Current $currentItem -Total $externalFileFormats.Count -Success
+                        $successCount++
+                    } catch {
+                        Write-ObjectProgress -ObjectName $eff.Name -Current $currentItem -Total $externalFileFormats.Count -Failed
+                        Write-ExportError -ObjectType 'ExternalFileFormat' -ObjectName $eff.Name -ErrorRecord $_ -FilePath $fileName
+                        $failCount++
+                    }
+                }
+            } elseif ($groupingMode -eq 'schema' -or $groupingMode -eq 'all') {
+                # No schema property, so both modes produce one file
+                $fileName = Join-Path $OutputDir '17_ExternalData' "002_AllExternalFileFormats.sql"
                 Ensure-DirectoryExists $fileName
-                    $opts.FileName = $fileName
-                    $Scripter.Options = $opts
-                    $eff.Script($opts) | Out-Null
-                    Write-ObjectProgress -ObjectName $eff.Name -Current $currentItem -Total $externalFileFormats.Count -Success
-                    $successCount++
-                } catch {
-                    Write-ObjectProgress -ObjectName $eff.Name -Current $currentItem -Total $externalFileFormats.Count -Failed
-                    Write-ExportError -ObjectType 'ExternalFileFormat' -ObjectName $eff.Name -ErrorRecord $_ -FilePath $fileName
-                    $failCount++
+                $opts.FileName = $fileName
+                $opts.AppendToFile = $false  # Start fresh
+                $Scripter.Options = $opts
+                foreach ($eff in $externalFileFormats) {
+                    $currentItem++
+                    try {
+                        Write-ObjectProgress -ObjectName $eff.Name -Current $currentItem -Total $externalFileFormats.Count
+                        $Scripter.EnumScript($eff) | Out-Null
+                        $opts.AppendToFile = $true  # Append subsequent objects
+                        Write-ObjectProgress -ObjectName $eff.Name -Current $currentItem -Total $externalFileFormats.Count -Success
+                        $successCount++
+                    } catch {
+                        Write-ObjectProgress -ObjectName $eff.Name -Current $currentItem -Total $externalFileFormats.Count -Failed
+                        Write-ExportError -ObjectType 'ExternalFileFormat' -ObjectName $eff.Name -ErrorRecord $_ -FilePath $fileName
+                        $failCount++
+                    }
                 }
             }
             $script:CurrentProgressLabel = $null
@@ -2257,7 +3299,8 @@ function Export-DatabaseObjects {
             Where-Object { -not (Test-ObjectExcluded -ObjectType 'SearchPropertyLists' -ObjectName $_.Name) }
         )
         if ($searchPropertyLists.Count -gt 0) {
-            Write-Output "  Found $($searchPropertyLists.Count) search property list(s) to export"
+            $groupingMode = Get-ObjectGroupingMode -ObjectType 'SearchPropertyLists'
+            Write-Output "  Found $($searchPropertyLists.Count) search property list(s) to export (grouping: $groupingMode)"
             $successCount = 0
             $failCount = 0
             $currentItem = 0
@@ -2265,21 +3308,45 @@ function Export-DatabaseObjects {
             $Scripter.Options = $opts
             Write-ProgressHeader 'SearchPropertyLists'
             
-            foreach ($spl in $searchPropertyLists) {
-                $currentItem++
-                try {
-                    Write-ObjectProgress -ObjectName $spl.Name -Current $currentItem -Total $searchPropertyLists.Count
-                    $fileName = Join-Path $OutputDir '17_SearchPropertyLists' "$(Get-SafeFileName $($spl.Name)).sql"
+            if ($groupingMode -eq 'single') {
+                # One file per search property list
+                foreach ($spl in $searchPropertyLists) {
+                    $currentItem++
+                    try {
+                        Write-ObjectProgress -ObjectName $spl.Name -Current $currentItem -Total $searchPropertyLists.Count
+                        $fileName = Join-Path $OutputDir '18_SearchPropertyLists' "SearchPropertyList.$(Get-SafeFileName $($spl.Name)).sql"
+                        Ensure-DirectoryExists $fileName
+                        $opts.FileName = $fileName
+                        $Scripter.Options = $opts
+                        $Scripter.EnumScript($spl) | Out-Null
+                        Write-ObjectProgress -ObjectName $spl.Name -Current $currentItem -Total $searchPropertyLists.Count -Success
+                        $successCount++
+                    } catch {
+                        Write-ObjectProgress -ObjectName $spl.Name -Current $currentItem -Total $searchPropertyLists.Count -Failed
+                        Write-ExportError -ObjectType 'SearchPropertyList' -ObjectName $spl.Name -ErrorRecord $_ -FilePath $fileName
+                        $failCount++
+                    }
+                }
+            } elseif ($groupingMode -eq 'schema' -or $groupingMode -eq 'all') {
+                # No schema property, so both modes produce one file
+                $fileName = Join-Path $OutputDir '18_SearchPropertyLists' "001_AllSearchPropertyLists.sql"
                 Ensure-DirectoryExists $fileName
-                    $opts.FileName = $fileName
-                    $Scripter.Options = $opts
-                    $spl.Script($opts) | Out-Null
-                    Write-ObjectProgress -ObjectName $spl.Name -Current $currentItem -Total $searchPropertyLists.Count -Success
-                    $successCount++
-                } catch {
-                    Write-ObjectProgress -ObjectName $spl.Name -Current $currentItem -Total $searchPropertyLists.Count -Failed
-                    Write-ExportError -ObjectType 'SearchPropertyList' -ObjectName $spl.Name -ErrorRecord $_ -FilePath $fileName
-                    $failCount++
+                $opts.FileName = $fileName
+                $opts.AppendToFile = $false  # Start fresh
+                $Scripter.Options = $opts
+                foreach ($spl in $searchPropertyLists) {
+                    $currentItem++
+                    try {
+                        Write-ObjectProgress -ObjectName $spl.Name -Current $currentItem -Total $searchPropertyLists.Count
+                        $Scripter.EnumScript($spl) | Out-Null
+                        $opts.AppendToFile = $true  # Append subsequent objects
+                        Write-ObjectProgress -ObjectName $spl.Name -Current $currentItem -Total $searchPropertyLists.Count -Success
+                        $successCount++
+                    } catch {
+                        Write-ObjectProgress -ObjectName $spl.Name -Current $currentItem -Total $searchPropertyLists.Count -Failed
+                        Write-ExportError -ObjectType 'SearchPropertyList' -ObjectName $spl.Name -ErrorRecord $_ -FilePath $fileName
+                        $failCount++
+                    }
                 }
             }
             $script:CurrentProgressLabel = $null
@@ -2301,7 +3368,8 @@ function Export-DatabaseObjects {
     try {
         $planGuides = @($Database.PlanGuides | Where-Object { -not (Test-ObjectExcluded -Schema $null -Name $_.Name) })
         if ($planGuides.Count -gt 0) {
-            Write-Output "  Found $($planGuides.Count) plan guide(s) to export"
+            $groupingMode = Get-ObjectGroupingMode -ObjectType 'PlanGuides'
+            Write-Output "  Found $($planGuides.Count) plan guide(s) to export (grouping: $groupingMode)"
             $successCount = 0
             $failCount = 0
             $currentItem = 0
@@ -2309,21 +3377,45 @@ function Export-DatabaseObjects {
             $Scripter.Options = $opts
             Write-ProgressHeader 'PlanGuides'
             
-            foreach ($pg in $planGuides) {
-                $currentItem++
-                try {
-                    Write-ObjectProgress -ObjectName $pg.Name -Current $currentItem -Total $planGuides.Count
-                    $fileName = Join-Path $OutputDir '18_PlanGuides' "$(Get-SafeFileName $($pg.Name)).sql"
+            if ($groupingMode -eq 'single') {
+                # One file per plan guide
+                foreach ($pg in $planGuides) {
+                    $currentItem++
+                    try {
+                        Write-ObjectProgress -ObjectName $pg.Name -Current $currentItem -Total $planGuides.Count
+                        $fileName = Join-Path $OutputDir '19_PlanGuides' "PlanGuide.$(Get-SafeFileName $($pg.Name)).sql"
+                        Ensure-DirectoryExists $fileName
+                        $opts.FileName = $fileName
+                        $Scripter.Options = $opts
+                        $Scripter.EnumScript($pg) | Out-Null
+                        Write-ObjectProgress -ObjectName $pg.Name -Current $currentItem -Total $planGuides.Count -Success
+                        $successCount++
+                    } catch {
+                        Write-ObjectProgress -ObjectName $pg.Name -Current $currentItem -Total $planGuides.Count -Failed
+                        Write-ExportError -ObjectType 'PlanGuide' -ObjectName $pg.Name -ErrorRecord $_ -FilePath $fileName
+                        $failCount++
+                    }
+                }
+            } elseif ($groupingMode -eq 'schema' -or $groupingMode -eq 'all') {
+                # PlanGuides don't have reliable schema grouping, use all mode
+                $fileName = Join-Path $OutputDir '19_PlanGuides' "001_AllPlanGuides.sql"
                 Ensure-DirectoryExists $fileName
-                    $opts.FileName = $fileName
-                    $Scripter.Options = $opts
-                    $pg.Script($opts) | Out-Null
-                    Write-ObjectProgress -ObjectName $pg.Name -Current $currentItem -Total $planGuides.Count -Success
-                    $successCount++
-                } catch {
-                    Write-ObjectProgress -ObjectName $pg.Name -Current $currentItem -Total $planGuides.Count -Failed
-                    Write-ExportError -ObjectType 'PlanGuide' -ObjectName $pg.Name -ErrorRecord $_ -FilePath $fileName
-                    $failCount++
+                $opts.FileName = $fileName
+                $opts.AppendToFile = $false  # Start fresh
+                $Scripter.Options = $opts
+                foreach ($pg in $planGuides) {
+                    $currentItem++
+                    try {
+                        Write-ObjectProgress -ObjectName $pg.Name -Current $currentItem -Total $planGuides.Count
+                        $Scripter.EnumScript($pg) | Out-Null
+                        $opts.AppendToFile = $true  # Append subsequent objects
+                        Write-ObjectProgress -ObjectName $pg.Name -Current $currentItem -Total $planGuides.Count -Success
+                        $successCount++
+                    } catch {
+                        Write-ObjectProgress -ObjectName $pg.Name -Current $currentItem -Total $planGuides.Count -Failed
+                        Write-ExportError -ObjectType 'PlanGuide' -ObjectName $pg.Name -ErrorRecord $_ -FilePath $fileName
+                        $failCount++
+                    }
                 }
             }
             $script:CurrentProgressLabel = $null
@@ -2364,11 +3456,11 @@ function Export-DatabaseObjects {
             $currentItem++
             try {
                 Write-ObjectProgress -ObjectName $key.Name -Current $currentItem -Total $asymmetricKeys.Count
-                $fileName = Join-Path $OutputDir '19_Security' "$($key.Name).asymmetrickey.sql"
+                $fileName = Join-Path $OutputDir '01_Security' "$($key.Name).asymmetrickey.sql"
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
-                $key.Script($opts) | Out-Null
+                $Scripter.EnumScript($key) | Out-Null
                 Write-ObjectProgress -ObjectName $key.Name -Current $currentItem -Total $asymmetricKeys.Count -Success
                 $successCount++
             } catch {
@@ -2394,11 +3486,11 @@ function Export-DatabaseObjects {
             $currentItem++
             try {
                 Write-ObjectProgress -ObjectName $cert.Name -Current $currentItem -Total $certs.Count
-                $fileName = Join-Path $OutputDir '19_Security' "$($cert.Name).certificate.sql"
+                $fileName = Join-Path $OutputDir '01_Security' "$($cert.Name).certificate.sql"
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
-                $cert.Script($opts) | Out-Null
+                $Scripter.EnumScript($cert) | Out-Null
                 Write-ObjectProgress -ObjectName $cert.Name -Current $currentItem -Total $certs.Count -Success
                 $successCount++
             } catch {
@@ -2424,11 +3516,11 @@ function Export-DatabaseObjects {
             $currentItem++
             try {
                 Write-ObjectProgress -ObjectName $key.Name -Current $currentItem -Total $symKeys.Count
-                $fileName = Join-Path $OutputDir '19_Security' "$($key.Name).symmetrickey.sql"
+                $fileName = Join-Path $OutputDir '01_Security' "$($key.Name).symmetrickey.sql"
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
-                $key.Script($opts) | Out-Null
+                $Scripter.EnumScript($key) | Out-Null
                 Write-ObjectProgress -ObjectName $key.Name -Current $currentItem -Total $symKeys.Count -Success
                 $successCount++
             } catch {
@@ -2454,11 +3546,11 @@ function Export-DatabaseObjects {
             $currentItem++
             try {
                 Write-ObjectProgress -ObjectName $role.Name -Current $currentItem -Total $appRoles.Count
-                $fileName = Join-Path $OutputDir '19_Security' "$($role.Name).approle.sql"
+                $fileName = Join-Path $OutputDir '01_Security' "$($role.Name).approle.sql"
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
-                $role.Script($opts) | Out-Null
+                $Scripter.EnumScript($role) | Out-Null
                 Write-ObjectProgress -ObjectName $role.Name -Current $currentItem -Total $appRoles.Count -Success
                 $successCount++
             } catch {
@@ -2484,11 +3576,11 @@ function Export-DatabaseObjects {
             $currentItem++
             try {
                 Write-ObjectProgress -ObjectName $role.Name -Current $currentItem -Total $dbRoles.Count
-                $fileName = Join-Path $OutputDir '19_Security' "$($role.Name).role.sql"
+                $fileName = Join-Path $OutputDir '01_Security' "$($role.Name).role.sql"
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
-                $role.Script($opts) | Out-Null
+                $Scripter.EnumScript($role) | Out-Null
                 Write-ObjectProgress -ObjectName $role.Name -Current $currentItem -Total $dbRoles.Count -Success
                 $successCount++
             } catch {
@@ -2514,11 +3606,11 @@ function Export-DatabaseObjects {
             $currentItem++
             try {
                 Write-ObjectProgress -ObjectName $user.Name -Current $currentItem -Total $dbUsers.Count
-                $fileName = Join-Path $OutputDir '19_Security' "$($user.Name).user.sql"
+                $fileName = Join-Path $OutputDir '01_Security' "$($user.Name).user.sql"
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
-                $user.Script($opts) | Out-Null
+                $Scripter.EnumScript($user) | Out-Null
                 Write-ObjectProgress -ObjectName $user.Name -Current $currentItem -Total $dbUsers.Count -Success
                 $successCount++
             } catch {
@@ -2544,11 +3636,11 @@ function Export-DatabaseObjects {
             $currentItem++
             try {
                 Write-ObjectProgress -ObjectName $spec.Name -Current $currentItem -Total $auditSpecs.Count
-                $fileName = Join-Path $OutputDir '19_Security' "$($spec.Name).auditspec.sql"
+                $fileName = Join-Path $OutputDir '01_Security' "$($spec.Name).auditspec.sql"
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
                 $Scripter.Options = $opts
-                $spec.Script($opts) | Out-Null
+                $Scripter.EnumScript($spec) | Out-Null
                 Write-ObjectProgress -ObjectName $spec.Name -Current $currentItem -Total $auditSpecs.Count -Success
                 $successCount++
             } catch {
@@ -2583,7 +3675,7 @@ function Export-DatabaseObjects {
                 $currentItem++
                 try {
                     Write-ObjectProgress -ObjectName "$($policy.Schema).$($policy.Name)" -Current $currentItem -Total $securityPolicies.Count
-                    $fileName = Join-Path $OutputDir '19_Security' "$($policy.Schema).$($policy.Name).securitypolicy.sql"
+                    $fileName = Join-Path $OutputDir '20_SecurityPolicies' "$($policy.Schema).$($policy.Name).securitypolicy.sql"
                 Ensure-DirectoryExists $fileName
                     
                     # Create file with header
@@ -2762,26 +3854,27 @@ function New-DeploymentManifest {
     [void]$sb.AppendLine("Scripts must be applied in the following order to ensure all dependencies are satisfied:")
     [void]$sb.AppendLine("")
     [void]$sb.AppendLine("0. 00_FileGroups - Create filegroups (review paths for target environment)")
-    [void]$sb.AppendLine("1. 01_DatabaseConfiguration - Apply database scoped configurations (review hardware-specific settings)")
-    [void]$sb.AppendLine("2. 02_Schemas - Create database schemas")
-    [void]$sb.AppendLine("3. 03_Sequences - Create sequences")
-    [void]$sb.AppendLine("4. 04_PartitionFunctions - Create partition functions")
-    [void]$sb.AppendLine("5. 05_PartitionSchemes - Create partition schemes")
-    [void]$sb.AppendLine("6. 06_Types - Create user-defined types")
-    [void]$sb.AppendLine("7. 07_XmlSchemaCollections - Create XML schema collections")
-    [void]$sb.AppendLine("8. 08_Tables_PrimaryKey - Create tables with primary keys (no foreign keys)")
-    [void]$sb.AppendLine("9. 09_Tables_ForeignKeys - Add foreign key constraints")
-    [void]$sb.AppendLine("10. 10_Indexes - Create indexes")
-    [void]$sb.AppendLine("11. 11_Defaults - Create default constraints")
-    [void]$sb.AppendLine("12. 12_Rules - Create rules")
-    [void]$sb.AppendLine("13. 13_Programmability - Create assemblies, functions, procedures, triggers, views (in subfolder order)")
-    [void]$sb.AppendLine("14. 14_Synonyms - Create synonyms")
-    [void]$sb.AppendLine("15. 15_FullTextSearch - Create full-text search objects")
-    [void]$sb.AppendLine("16. 16_ExternalData - Create external data sources and file formats (review connection strings)")
-    [void]$sb.AppendLine("17. 17_SearchPropertyLists - Create search property lists")
-    [void]$sb.AppendLine("18. 18_PlanGuides - Create plan guides")
-    [void]$sb.AppendLine("19. 19_Security - Create security objects (keys, certificates, roles, users, audit, Row-Level Security)")
-    [void]$sb.AppendLine("20. 20_Data - Load data")
+    [void]$sb.AppendLine("1. 01_Security - Create security objects (keys, certificates, roles, users, audit)")
+    [void]$sb.AppendLine("2. 02_DatabaseConfiguration - Apply database scoped configurations (review hardware-specific settings)")
+    [void]$sb.AppendLine("3. 03_Schemas - Create database schemas")
+    [void]$sb.AppendLine("4. 04_Sequences - Create sequences")
+    [void]$sb.AppendLine("5. 05_PartitionFunctions - Create partition functions")
+    [void]$sb.AppendLine("6. 06_PartitionSchemes - Create partition schemes")
+    [void]$sb.AppendLine("7. 07_Types - Create user-defined types")
+    [void]$sb.AppendLine("8. 08_XmlSchemaCollections - Create XML schema collections")
+    [void]$sb.AppendLine("9. 09_Tables_PrimaryKey - Create tables with primary keys (no foreign keys)")
+    [void]$sb.AppendLine("10. 10_Tables_ForeignKeys - Add foreign key constraints")
+    [void]$sb.AppendLine("11. 11_Indexes - Create indexes")
+    [void]$sb.AppendLine("12. 12_Defaults - Create default constraints")
+    [void]$sb.AppendLine("13. 13_Rules - Create rules")
+    [void]$sb.AppendLine("14. 14_Programmability - Create assemblies, functions, procedures, triggers, views (in subfolder order)")
+    [void]$sb.AppendLine("15. 15_Synonyms - Create synonyms")
+    [void]$sb.AppendLine("16. 16_FullTextSearch - Create full-text search objects")
+    [void]$sb.AppendLine("17. 17_ExternalData - Create external data sources and file formats (review connection strings)")
+    [void]$sb.AppendLine("18. 18_SearchPropertyLists - Create search property lists")
+    [void]$sb.AppendLine("19. 19_PlanGuides - Create plan guides")
+    [void]$sb.AppendLine("20. 20_SecurityPolicies - Create Row-Level Security policies (requires schemas and predicate functions)")
+    [void]$sb.AppendLine("21. 21_Data - Load data")
     [void]$sb.AppendLine("")
     [void]$sb.AppendLine("## Important Notes")
     [void]$sb.AppendLine("")
@@ -2879,12 +3972,12 @@ function Show-ExportSummary {
     $manualActions = @()
     
     # Check for Database Scoped Credentials
-    $credsPath = Join-Path $OutputDir '01_DatabaseConfiguration' '002_DatabaseScopedCredentials.sql'
+    $credsPath = Join-Path $OutputDir '02_DatabaseConfiguration' '002_DatabaseScopedCredentials.sql'
     if (Test-Path $credsPath) {
         $credsContent = Get-Content $credsPath -Raw
         if ($credsContent -match 'CREATE DATABASE SCOPED CREDENTIAL') {
             $manualActions += "[ACTION REQUIRED] Database Scoped Credentials"
-            $manualActions += "  Location: 01_DatabaseConfiguration\002_DatabaseScopedCredentials.sql"
+            $manualActions += "  Location: 02_DatabaseConfiguration\002_DatabaseScopedCredentials.sql"
             $manualActions += "  Action: Uncomment credential definitions and provide SECRET values"
             $manualActions += "  Note: Secrets cannot be exported - must be manually configured"
         }
@@ -2903,32 +3996,32 @@ function Show-ExportSummary {
     }
     
     # Check for Database Configurations
-    $dbConfigPath = Join-Path $OutputDir '01_DatabaseConfiguration' '001_DatabaseScopedConfigurations.sql'
+    $dbConfigPath = Join-Path $OutputDir '02_DatabaseConfiguration' '001_DatabaseScopedConfigurations.sql'
     if (Test-Path $dbConfigPath) {
         $manualActions += "[REVIEW RECOMMENDED] Database Scoped Configurations"
-        $manualActions += "  Location: 01_DatabaseConfiguration\001_DatabaseScopedConfigurations.sql"
+        $manualActions += "  Location: 02_DatabaseConfiguration\001_DatabaseScopedConfigurations.sql"
         $manualActions += "  Action: Review MAXDOP and other hardware-specific settings for target server"
     }
     
     # Check for External Data
-    $extDataPath = Join-Path $OutputDir '16_ExternalData'
+    $extDataPath = Join-Path $OutputDir '17_ExternalData'
     if (Test-Path $extDataPath) {
         $extFiles = @(Get-ChildItem -Path $extDataPath -Filter '*.sql' -Recurse)
         if ($extFiles.Count -gt 0) {
             $manualActions += "[ACTION REQUIRED] External Data Sources"
-            $manualActions += "  Location: 16_ExternalData\"
+            $manualActions += "  Location: 17_ExternalData\"
             $manualActions += "  Action: Review connection strings and URLs for target environment"
             $manualActions += "  Note: External data sources are environment-specific"
         }
     }
     
     # Check for Security Policies (RLS)
-    $rlsPath = Join-Path $OutputDir '19_Security' '008_SecurityPolicies.sql'
+    $rlsPath = Join-Path $OutputDir '20_SecurityPolicies' '001_SecurityPolicies.sql'
     if (Test-Path $rlsPath) {
         $rlsContent = Get-Content $rlsPath -Raw
         if ($rlsContent -match 'CREATE SECURITY POLICY') {
             $manualActions += "[INFO] Row-Level Security Policies"
-            $manualActions += "  Location: 19_Security\008_SecurityPolicies.sql"
+            $manualActions += "  Location: 20_SecurityPolicies\001_SecurityPolicies.sql"
             $manualActions += "  Note: Ensure predicate functions are deployed before applying RLS policies"
         }
     }
@@ -2964,7 +4057,7 @@ try {
     }
     
     # Load configuration if provided
-    $config = @{ export = @{ excludeObjectTypes = @(); includeData = $false; excludeObjects = @() } }
+    $config = @{ export = @{ includeObjectTypes = @(); excludeObjectTypes = @(); includeData = $false; excludeObjects = @() } }
     $configSource = "None (using defaults)"
     
     if ($ConfigFile) {
@@ -2981,6 +4074,17 @@ try {
             Write-Warning "Config file not found: $ConfigFile"
             Write-Warning "Continuing with default settings..."
         }
+    }
+    
+    # Apply command-line overrides for object type filtering (when no config file or to override config)
+    if ($IncludeObjectTypes -and $IncludeObjectTypes.Count -gt 0) {
+        $config.export.includeObjectTypes = $IncludeObjectTypes
+        Write-Verbose "Command-line override: IncludeObjectTypes = $($IncludeObjectTypes -join ', ')"
+    }
+    
+    if ($ExcludeObjectTypes -and $ExcludeObjectTypes.Count -gt 0) {
+        $config.export.excludeObjectTypes = $ExcludeObjectTypes
+        Write-Verbose "Command-line override: ExcludeObjectTypes = $($ExcludeObjectTypes -join ', ')"
     }
     
     # Apply timeout settings from config or use defaults
@@ -3126,39 +4230,56 @@ For more details, see: https://go.microsoft.com/fwlink/?linkid=2226722
     # PHASE 2 OPTIMIZATION: SMO Prefetch with SetDefaultInitFields
     # ═══════════════════════════════════════════════════════════════════════════
     # By default, SMO uses lazy loading - each property access triggers a query.
-    # SetDefaultInitFields tells SMO to prefetch all properties in bulk
+    # SetDefaultInitFields tells SMO to prefetch specific properties in bulk
     # when collections are first accessed, eliminating N+1 query problems.
+    # 
+    # IMPORTANT: We only prefetch properties that don't require VIEW DATABASE STATE
+    # privilege to avoid permission errors. Properties like IndexSpaceUsed, RowCount,
+    # and DataSpaceUsed require elevated permissions and are excluded.
     # ═══════════════════════════════════════════════════════════════════════════
     Write-Output "Initializing SMO property prefetch..."
     
-    # Prefetch ALL properties for commonly used types - more aggressive but simpler
-    # This trades slightly more memory for significantly fewer SQL round-trips
-    $typesToPrefetch = @(
-        [Microsoft.SqlServer.Management.Smo.Table],
-        [Microsoft.SqlServer.Management.Smo.Column],
-        [Microsoft.SqlServer.Management.Smo.Index],
-        [Microsoft.SqlServer.Management.Smo.ForeignKey],
-        [Microsoft.SqlServer.Management.Smo.StoredProcedure],
-        [Microsoft.SqlServer.Management.Smo.View],
-        [Microsoft.SqlServer.Management.Smo.UserDefinedFunction],
-        [Microsoft.SqlServer.Management.Smo.Trigger],
-        [Microsoft.SqlServer.Management.Smo.Schema],
-        [Microsoft.SqlServer.Management.Smo.UserDefinedType],
-        [Microsoft.SqlServer.Management.Smo.UserDefinedTableType],
-        [Microsoft.SqlServer.Management.Smo.Synonym],
-        [Microsoft.SqlServer.Management.Smo.Sequence]
-    )
+    # Prefetch ONLY safe properties that don't require VIEW DATABASE STATE privilege
+    # This avoids permission errors while still significantly reducing round-trips
+    $prefetchConfig = @{
+        [Microsoft.SqlServer.Management.Smo.Table] = @('Schema', 'Name', 'Owner', 'CreateDate', 'DateLastModified', 'IsSystemObject', 'FileGroup', 'TextFileGroup')
+        [Microsoft.SqlServer.Management.Smo.Column] = @('Name', 'DataType', 'Nullable', 'Identity', 'Computed', 'Default', 'DefaultConstraint')
+        [Microsoft.SqlServer.Management.Smo.Index] = @('Name', 'IndexKeyType', 'IsClustered', 'IsUnique', 'IndexType', 'FileGroup')
+        [Microsoft.SqlServer.Management.Smo.ForeignKey] = @('Name', 'ReferencedTable', 'ReferencedTableSchema', 'IsEnabled', 'IsChecked')
+        [Microsoft.SqlServer.Management.Smo.StoredProcedure] = @('Schema', 'Name', 'Owner', 'CreateDate', 'DateLastModified', 'IsSystemObject', 'IsEncrypted')
+        [Microsoft.SqlServer.Management.Smo.View] = @('Schema', 'Name', 'Owner', 'CreateDate', 'DateLastModified', 'IsSystemObject', 'IsEncrypted', 'IsIndexed')
+        [Microsoft.SqlServer.Management.Smo.UserDefinedFunction] = @('Schema', 'Name', 'Owner', 'CreateDate', 'DateLastModified', 'IsSystemObject', 'IsEncrypted', 'FunctionType')
+        [Microsoft.SqlServer.Management.Smo.Trigger] = @('Name', 'CreateDate', 'DateLastModified', 'IsSystemObject', 'IsEnabled', 'IsEncrypted')
+        [Microsoft.SqlServer.Management.Smo.Schema] = @('Name', 'Owner', 'ID')
+        [Microsoft.SqlServer.Management.Smo.UserDefinedType] = @('Schema', 'Name', 'Owner', 'CreateDate', 'IsSystemObject')
+        [Microsoft.SqlServer.Management.Smo.UserDefinedTableType] = @('Schema', 'Name', 'Owner', 'CreateDate', 'IsSystemObject')
+        [Microsoft.SqlServer.Management.Smo.Synonym] = @('Schema', 'Name', 'Owner', 'CreateDate', 'BaseDatabase', 'BaseSchema', 'BaseObject', 'BaseServer')
+        [Microsoft.SqlServer.Management.Smo.Sequence] = @('Schema', 'Name', 'Owner', 'CreateDate', 'DataType', 'StartValue', 'IncrementValue', 'MinValue', 'MaxValue')
+    }
     
-    foreach ($smoType in $typesToPrefetch) {
+    $prefetchedCount = 0
+    foreach ($smoType in $prefetchConfig.Keys) {
         try {
-            $smServer.SetDefaultInitFields($smoType, $true)
+            # First, reset to fetch nothing by default (SetDefaultInitFields with $false)
+            $smServer.SetDefaultInitFields($smoType, $false)
+            
+            # Then explicitly add only the safe properties we want
+            foreach ($propertyName in $prefetchConfig[$smoType]) {
+                try {
+                    $smServer.SetDefaultInitFields($smoType, $propertyName)
+                } catch {
+                    # Property may not exist on this SQL Server version - continue
+                    Write-Verbose "Could not set prefetch for $($smoType.Name).$propertyName"
+                }
+            }
+            $prefetchedCount++
         } catch {
-            # Some types may not be available on all SQL Server versions - continue
-            Write-Log "Could not set prefetch for $($smoType.Name): $_" -Severity WARNING
+            # Type may not be available on all SQL Server versions - continue
+            Write-Output "  [INFO] Could not configure prefetch for $($smoType.Name)"
         }
     }
     
-    Write-Output "[SUCCESS] SMO prefetch configured for $($typesToPrefetch.Count) object types"
+    Write-Output "[SUCCESS] SMO prefetch configured for $prefetchedCount object types (safe properties only)"
     
     # Create scripter
     # Resolve target SQL Server version

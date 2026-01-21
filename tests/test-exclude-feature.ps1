@@ -175,7 +175,7 @@ try {
     $testResults = @{}
     
     # Test 1: Views should not be exported
-    $viewsDir = Join-Path $exportDir "13_Programmability/05_Views"
+    $viewsDir = Join-Path $exportDir "14_Programmability/05_Views"
     if (Test-Path $viewsDir) {
         $viewFiles = Get-ChildItem $viewsDir -Filter "*.sql" -ErrorAction SilentlyContinue
         if ($viewFiles.Count -gt 0) {
@@ -191,7 +191,7 @@ try {
     }
     
     # Test 2: Stored Procedures should not be exported
-    $procsDir = Join-Path $exportDir "13_Programmability/03_StoredProcedures"
+    $procsDir = Join-Path $exportDir "14_Programmability/03_StoredProcedures"
     if (Test-Path $procsDir) {
         $procFiles = Get-ChildItem $procsDir -Filter "*.sql" -ErrorAction SilentlyContinue
         if ($procFiles.Count -gt 0) {
@@ -207,7 +207,7 @@ try {
     }
     
     # Test 3: Functions should not be exported
-    $funcsDir = Join-Path $exportDir "13_Programmability/02_Functions"
+    $funcsDir = Join-Path $exportDir "14_Programmability/02_Functions"
     if (Test-Path $funcsDir) {
         $funcFiles = Get-ChildItem $funcsDir -Filter "*.sql" -ErrorAction SilentlyContinue
         if ($funcFiles.Count -gt 0) {
@@ -223,7 +223,7 @@ try {
     }
     
     # Test 4: Sequences should not be exported
-    $seqDir = Join-Path $exportDir "03_Sequences"
+    $seqDir = Join-Path $exportDir "04_Sequences"
     if (Test-Path $seqDir) {
         $seqFiles = Get-ChildItem $seqDir -Filter "*.sql" -ErrorAction SilentlyContinue
         if ($seqFiles.Count -gt 0) {
@@ -239,7 +239,7 @@ try {
     }
     
     # Test 5: Synonyms should not be exported
-    $synDir = Join-Path $exportDir "14_Synonyms"
+    $synDir = Join-Path $exportDir "15_Synonyms"
     if (Test-Path $synDir) {
         $synFiles = Get-ChildItem $synDir -Filter "*.sql" -ErrorAction SilentlyContinue
         if ($synFiles.Count -gt 0) {
@@ -255,7 +255,7 @@ try {
     }
     
     # Test 6: Database Triggers should not be exported
-    $triggerDir = Join-Path $exportDir "13_Programmability/04_Triggers"
+    $triggerDir = Join-Path $exportDir "14_Programmability/04_Triggers"
     if (Test-Path $triggerDir) {
         $dbTriggerFiles = Get-ChildItem $triggerDir -Filter "Database.*.sql" -ErrorAction SilentlyContinue
         if ($dbTriggerFiles.Count -gt 0) {
@@ -287,7 +287,7 @@ try {
     }
     
     # Test 8: Partition Functions should not be exported
-    $pfDir = Join-Path $exportDir "04_PartitionFunctions"
+    $pfDir = Join-Path $exportDir "05_PartitionFunctions"
     if (Test-Path $pfDir) {
         $pfFiles = Get-ChildItem $pfDir -Filter "*.sql" -ErrorAction SilentlyContinue
         if ($pfFiles.Count -gt 0) {
@@ -303,7 +303,7 @@ try {
     }
     
     # Test 9: Partition Schemes should not be exported
-    $psDir = Join-Path $exportDir "05_PartitionSchemes"
+    $psDir = Join-Path $exportDir "06_PartitionSchemes"
     if (Test-Path $psDir) {
         $psFiles = Get-ChildItem $psDir -Filter "*.sql" -ErrorAction SilentlyContinue
         if ($psFiles.Count -gt 0) {
@@ -319,7 +319,7 @@ try {
     }
     
     # Test 10: Security Policies should not be exported
-    $spDir = Join-Path $exportDir "19_Security"
+    $spDir = Join-Path $exportDir "20_SecurityPolicies"
     if (Test-Path $spDir) {
         $spFiles = Get-ChildItem $spDir -Filter "*.securitypolicy.sql" -ErrorAction SilentlyContinue
         if ($spFiles.Count -gt 0) {
@@ -335,7 +335,7 @@ try {
     }
 
     # Test 11: XML Schema Collections should not be exported
-    $xscDir = Join-Path $exportDir "07_XmlSchemaCollections"
+    $xscDir = Join-Path $exportDir "08_XmlSchemaCollections"
     if (Test-Path $xscDir) {
         $xscFiles = Get-ChildItem $xscDir -Filter "*.sql" -ErrorAction SilentlyContinue
         if ($xscFiles.Count -gt 0) {
@@ -351,7 +351,7 @@ try {
     }
 
     # Test 12: Assemblies should not be exported
-    $asmDir = Join-Path $exportDir "13_Programmability/01_Assemblies"
+    $asmDir = Join-Path $exportDir "14_Programmability/01_Assemblies"
     if (Test-Path $asmDir) {
         $asmFiles = Get-ChildItem $asmDir -Filter "*.sql" -ErrorAction SilentlyContinue
         if ($asmFiles.Count -gt 0) {
@@ -367,7 +367,7 @@ try {
     }
 
     # Test 13: FullTextSearch should not be exported
-    $ftsDir = Join-Path $exportDir "15_FullTextSearch"
+    $ftsDir = Join-Path $exportDir "16_FullTextSearch"
     if (Test-Path $ftsDir) {
         $ftsFiles = Get-ChildItem $ftsDir -Filter "*.sql" -ErrorAction SilentlyContinue
         if ($ftsFiles.Count -gt 0) {
@@ -383,7 +383,7 @@ try {
     }
 
     # Test 14: ExternalData should not be exported
-    $extDir = Join-Path $exportDir "16_ExternalData"
+    $extDir = Join-Path $exportDir "17_ExternalData"
     if (Test-Path $extDir) {
         $extFiles = Get-ChildItem $extDir -Filter "*.sql" -ErrorAction SilentlyContinue
         if ($extFiles.Count -gt 0) {
@@ -399,7 +399,7 @@ try {
     }
 
     # Test 15: SearchPropertyLists should not be exported
-    $splDir = Join-Path $exportDir "17_SearchPropertyLists"
+    $splDir = Join-Path $exportDir "18_SearchPropertyLists"
     if (Test-Path $splDir) {
         $splFiles = Get-ChildItem $splDir -Filter "*.sql" -ErrorAction SilentlyContinue
         if ($splFiles.Count -gt 0) {
@@ -415,7 +415,7 @@ try {
     }
 
     # Test 16: PlanGuides should not be exported
-    $pgDir = Join-Path $exportDir "18_PlanGuides"
+    $pgDir = Join-Path $exportDir "19_PlanGuides"
     if (Test-Path $pgDir) {
         $pgFiles = Get-ChildItem $pgDir -Filter "*.sql" -ErrorAction SilentlyContinue
         if ($pgFiles.Count -gt 0) {
@@ -431,8 +431,9 @@ try {
     }
 
     # Test 17: Security objects should not be exported
-    if (Test-Path $spDir) {
-        $securityFiles = Get-ChildItem $spDir -Filter "*.sql" -ErrorAction SilentlyContinue | Where-Object {
+    $secDir = Join-Path $exportDir "01_Security"
+    if (Test-Path $secDir) {
+        $securityFiles = Get-ChildItem $secDir -Filter "*.sql" -ErrorAction SilentlyContinue | Where-Object {
             $_.Name -match '\.(asymmetrickey|certificate|symmetrickey|approle|role|user|auditspec)\.sql$'
         }
         if ($securityFiles.Count -gt 0) {
@@ -448,7 +449,7 @@ try {
     }
     
     # Test 18: Tables SHOULD be exported (not in exclusion list)
-    $tablesDir = Join-Path $exportDir "08_Tables_PrimaryKey"
+    $tablesDir = Join-Path $exportDir "09_Tables_PrimaryKey"
     if (Test-Path $tablesDir) {
         $tableFiles = Get-ChildItem $tablesDir -Filter "*.sql" -ErrorAction SilentlyContinue
         if ($tableFiles.Count -gt 0) {
@@ -464,7 +465,7 @@ try {
     }
     
     # Test 19: Schemas SHOULD be exported (not in exclusion list)
-    $schemasDir = Join-Path $exportDir "02_Schemas"
+    $schemasDir = Join-Path $exportDir "03_Schemas"
     if (Test-Path $schemasDir) {
         $schemaFiles = Get-ChildItem $schemasDir -Filter "*.sql" -ErrorAction SilentlyContinue
         if ($schemaFiles.Count -gt 0) {

@@ -98,6 +98,10 @@ $cred = Get-Credential
 - **Two import modes**: Dev (default) vs Prod (opt-in)
 - **Developer Mode**: Schema-only, skips infrastructure (FileGroups, DB configs)
 - **Production Mode**: Full import with FileGroups, MAXDOP, Security Policies
+- **Dependency retry logic** for programmability objects (Functions, Views, Stored Procedures)
+  - Automatically resolves cross-type dependencies (Function → View, View → Function, etc.)
+  - Multi-pass execution with configurable retry count (default: 3 attempts)
+  - Handles complex dependency chains without manual intervention
 - YAML configuration file support (simplified and full formats)
 - Cross-platform FileGroup deployment with target OS detection
 - Database-specific file naming prevents conflicts
@@ -162,6 +166,8 @@ DbScripts/
 | `-IncludeData` | No | Export table data as INSERT statements |
 | `-Credential` | No | SQL authentication credentials |
 | `-TargetSqlVersion` | No | Target SQL version (default: Sql2022) |
+| `-IncludeObjectTypes` | No | Whitelist: Only export specified types (e.g., Tables,Views) |
+| `-ExcludeObjectTypes` | No | Blacklist: Export all except specified types (e.g., Data) |
 | `-ConnectionTimeout` | No | Connection timeout in seconds (default: 0 = use config/30) |
 | `-CommandTimeout` | No | Command timeout in seconds (default: 0 = use config/300) |
 | `-MaxRetries` | No | Max retry attempts for transient failures (default: 0 = use config/3) |
@@ -179,8 +185,9 @@ DbScripts/
 | `-ConfigFile` | No | Path to YAML configuration file |
 | `-CreateDatabase` | No | Create database if it doesn't exist |
 | `-IncludeData` | No | Import data from 21_Data folder |
+| `-IncludeObjectTypes` | No | Whitelist: Only import specified types (e.g., Schemas,Tables,Views) |
 | `-Credential` | No | SQL authentication credentials |
-| `-Force` | No | Skip existing schema check |
+| `-Force` | No | Skip existing schema check (required for multi-pass imports) |
 | `-ContinueOnError` | No | Continue on script errors |
 | `-ConnectionTimeout` | No | Connection timeout in seconds (default: 0 = use config/30) |
 | `-CommandTimeout` | No | Command timeout in seconds (default: 0 = use config/300) |
@@ -207,6 +214,109 @@ DbScripts/
 - Full fidelity deployment for staging/production
 
 **Selective Overrides**: Command-line parameters override mode defaults and config file settings.
+
+## Selective Object Type Filtering
+
+Both Export and Import scripts support filtering which object types to process via command-line parameters.
+
+### Export Filtering
+
+**Whitelist mode** (`-IncludeObjectTypes`): Only export specified types
+```powershell
+# Export only Tables
+./Export-SqlServerSchema.ps1 -Server localhost -Database MyDb -IncludeObjectTypes Tables
+
+# Export Tables and Views
+./Export-SqlServerSchema.ps1 -Server localhost -Database MyDb -IncludeObjectTypes Tables,Views
+```
+
+**Blacklist mode** (`-ExcludeObjectTypes`): Export everything except specified types
+```powershell
+# Export everything except Data
+./Export-SqlServerSchema.ps1 -Server localhost -Database MyDb -ExcludeObjectTypes Data
+
+# Export everything except Security objects
+./Export-SqlServerSchema.ps1 -Server localhost -Database MyDb -ExcludeObjectTypes DatabaseRoles,DatabaseUsers
+```
+
+### Import Filtering
+
+**Whitelist mode** (`-IncludeObjectTypes`): Only import specified types
+```powershell
+# Import only Schemas and Tables (fresh database, no -Force needed)
+./Import-SqlServerSchema.ps1 -Server localhost -Database MyDb -SourcePath ./DbScripts/... `
+    -IncludeObjectTypes Schemas,Tables
+
+# Import only Views (database already has objects, -Force skips safety check)
+./Import-SqlServerSchema.ps1 -Server localhost -Database MyDb -SourcePath ./DbScripts/... `
+    -IncludeObjectTypes Views -Force
+```
+
+**Why `-Force`?** The Import script checks if the database already contains objects and stops to prevent accidental overwrites. When doing selective imports to an existing database, use `-Force` to bypass this check.
+
+### Multi-Pass Import with -Force Flag
+
+When importing in multiple passes (e.g., structure first, then programmability), the `-Force` flag is **required** for subsequent passes:
+
+```powershell
+# PASS 1: Import base structure (empty database)
+./Import-SqlServerSchema.ps1 -Server localhost -Database MyDb -SourcePath ./DbScripts/... `
+    -IncludeObjectTypes Schemas,Tables,Types -CreateDatabase
+
+# PASS 2: Import programmability (requires -Force since database now has objects)
+./Import-SqlServerSchema.ps1 -Server localhost -Database MyDb -SourcePath ./DbScripts/... `
+    -IncludeObjectTypes Functions,Views,StoredProcedures -Force
+```
+
+**Understanding -Force**: The Import script has a safety check that stops if the target database already contains objects (tables, views, etc.). This prevents accidental overwrites. After PASS 1 creates tables, PASS 2 would fail this check without `-Force`.
+
+| Scenario | Need `-Force`? |
+|----------|----------------|
+| Fresh import to empty database | No |
+| Multi-pass import (after first pass) | **Yes** |
+| Re-deploying to existing database | **Yes** |
+| Incremental updates | **Yes** |
+
+**Note**: `-Force` is unrelated to dependency retry logic, which runs automatically to resolve Function→View→Function dependencies.
+
+### Supported Object Types
+
+| Object Type | Export | Import | Notes |
+|-------------|--------|--------|-------|
+| FileGroups | Yes | Yes | |
+| DatabaseConfiguration | Yes | Yes | |
+| Schemas | Yes | Yes | |
+| Sequences | Yes | Yes | |
+| PartitionFunctions | Yes | Yes | |
+| PartitionSchemes | Yes | Yes | |
+| Types | Yes | Yes | UserDefinedTypes |
+| XmlSchemaCollections | Yes | Yes | |
+| Tables | Yes | Yes | Includes PKs and FKs |
+| ForeignKeys | Yes | Yes | |
+| Indexes | Yes | Yes | |
+| Defaults | Yes | Yes | |
+| Rules | Yes | Yes | |
+| Programmability | Yes | Yes | All programmability objects |
+| Views | Yes | Yes | Granular (subfolder of Programmability) |
+| Functions | Yes | Yes | Granular (subfolder of Programmability) |
+| StoredProcedures | Yes | Yes | Granular (subfolder of Programmability) |
+| Synonyms | Yes | Yes | |
+| SearchPropertyLists | Yes | Yes | |
+| PlanGuides | Yes | Yes | |
+| DatabaseRoles | Yes | Yes | |
+| DatabaseUsers | Yes | Yes | |
+| SecurityPolicies | Yes | Yes | |
+| Data | Yes | Yes | Requires -IncludeData for import |
+
+**Note**: When using granular types (Views, Functions, StoredProcedures), the scripts filter at the subfolder level within 14_Programmability. When using "Programmability", all programmability objects are included.
+
+### Important Considerations
+
+1. **Object Dependencies**: Selective import may fail if dependent objects are missing. For example, importing Views without their dependent Tables or Functions will fail.
+
+2. **Command-line overrides config**: `-IncludeObjectTypes` and `-ExcludeObjectTypes` parameters override any corresponding settings in the YAML config file.
+
+3. **Whitelist vs Blacklist**: You cannot use both `-IncludeObjectTypes` and `-ExcludeObjectTypes` simultaneously. Use whitelist for specific subsets, blacklist for exclusions.
 
 ### FileGroup Strategy Examples
 
@@ -275,6 +385,16 @@ connectionTimeout: 30      # Connection timeout in seconds
 commandTimeout: 300        # Command execution timeout in seconds
 maxRetries: 3              # Retry attempts for transient failures
 retryDelaySeconds: 2       # Initial delay, uses exponential backoff
+
+# Dependency retry settings (optional, defaults shown):
+import:
+  dependencyRetries:
+    enabled: true          # Enable automatic dependency retry
+    maxRetries: 10         # Max retry attempts for dependency resolution (1-10)
+    objectTypes:           # Object types to retry together
+      - Functions
+      - StoredProcedures
+      - Views
 
 # Only needed for Prod mode with FileGroups:
 fileGroupPathMapping:
@@ -356,6 +476,59 @@ commandTimeout: 600
 maxRetries: 5
 retryDelaySeconds: 3  # 3s → 6s → 12s → 24s → 48s
 ```
+
+## Dependency Resolution (Programmability Objects)
+
+**Automatic Cross-Type Dependency Handling**:
+- Functions, Views, and Stored Procedures can reference each other in complex ways
+- Traditional alphabetical import order fails when dependencies span object types
+- Dependency retry logic automatically resolves these references through multiple passes
+
+**Supported Dependency Scenarios**:
+- Function → Function (function calls another function)
+- View → Function (view uses function in SELECT statement)
+- Function → View (function queries a view)
+- Stored Procedure → Function/View (procedure uses both)
+- Complex chains (Proc → Func → View → Func multi-hop dependencies)
+
+**How It Works**:
+1. All programmability objects attempted on first pass
+2. Failed scripts (missing dependencies) collected for retry
+3. Subsequent passes retry only failed scripts (successful scripts enable others)
+4. Early exit if no progress made (prevents infinite loops on real errors)
+5. Default 10 retry attempts handles most dependency graphs
+
+**Configuration**:
+```yaml
+import:
+  dependencyRetries:
+    enabled: true          # Enable/disable (default: true)
+    maxRetries: 10         # Retry attempts (1-10, default: 10)
+    objectTypes:           # Object types to retry together
+      - Functions          # (default)
+      - StoredProcedures   # (default)
+      - Views              # (default)
+      # Optional additions:
+      # - Synonyms
+      # - TableTriggers
+      # - DatabaseTriggers
+```
+
+**Example Scenario**:
+```sql
+-- Attempt 1 (alphabetical order):
+-- ✅ fn_HelperCalculateTax      (no dependencies)
+-- ✅ fn_CalculateTotalWithTax    (calls fn_HelperCalculateTax - succeeds)
+-- ❌ fn_GetOrdersWithTax         (queries vw_OrderTotals - FAILS, view not created yet)
+-- ✅ vw_OrderTotals              (calls fn_CalculateTotalWithTax - succeeds)
+
+-- Attempt 2 (retry failed scripts):
+-- ✅ fn_GetOrdersWithTax         (queries vw_OrderTotals - NOW SUCCEEDS)
+
+-- Result: All objects imported successfully!
+```
+
+**Note**: Security Policies are automatically deferred to execute AFTER all programmability objects, ensuring functions/procedures they reference exist.
 
 ## Cross-Platform Support
 
