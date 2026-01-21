@@ -131,6 +131,31 @@ import:
   defaultMode: Dev
   
   # ─────────────────────────────────────────────────────────────
+  # DEPENDENCY RETRY SETTINGS
+  # ─────────────────────────────────────────────────────────────
+  # Handles cross-object dependencies in programmability objects
+  # Example: Function A calls Function B, View X selects from View Y
+  dependencyRetries:
+    # Enable retry logic for programmability objects (default: true)
+    enabled: true
+    
+    # Maximum retry attempts (default: 10)
+    # If objects still fail after max retries, likely due to syntax errors
+    # or missing references outside the retry group
+    maxRetries: 10
+    
+    # Object types to retry together as a group (default: Functions, StoredProcedures, Views)
+    # These are processed with multiple passes to resolve cross-type dependencies
+    # For example: Stored procedure queries a view, or function calls another function
+    objectTypes:
+      - Functions
+      - StoredProcedures
+      - Views
+      # - Synonyms              # Uncomment if synonyms reference other synonyms
+      # - TableTriggers         # Uncomment if triggers reference each other
+      # - DatabaseTriggers      # Uncomment if database triggers have dependencies
+  
+  # ─────────────────────────────────────────────────────────────
   # DEVELOPER MODE SETTINGS (Local Development)
   # ─────────────────────────────────────────────────────────────
   developerMode:

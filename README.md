@@ -98,6 +98,10 @@ $cred = Get-Credential
 - **Two import modes**: Dev (default) vs Prod (opt-in)
 - **Developer Mode**: Schema-only, skips infrastructure (FileGroups, DB configs)
 - **Production Mode**: Full import with FileGroups, MAXDOP, Security Policies
+- **Dependency retry logic** for programmability objects (Functions, Views, Stored Procedures)
+  - Automatically resolves cross-type dependencies (Function → View, View → Function, etc.)
+  - Multi-pass execution with configurable retry count (default: 3 attempts)
+  - Handles complex dependency chains without manual intervention
 - YAML configuration file support (simplified and full formats)
 - Cross-platform FileGroup deployment with target OS detection
 - Database-specific file naming prevents conflicts
@@ -276,6 +280,16 @@ commandTimeout: 300        # Command execution timeout in seconds
 maxRetries: 3              # Retry attempts for transient failures
 retryDelaySeconds: 2       # Initial delay, uses exponential backoff
 
+# Dependency retry settings (optional, defaults shown):
+import:
+  dependencyRetries:
+    enabled: true          # Enable automatic dependency retry
+    maxRetries: 10         # Max retry attempts for dependency resolution (1-10)
+    objectTypes:           # Object types to retry together
+      - Functions
+      - StoredProcedures
+      - Views
+
 # Only needed for Prod mode with FileGroups:
 fileGroupPathMapping:
   FG_CURRENT: "E:\\SQLData\\Current"
@@ -356,6 +370,59 @@ commandTimeout: 600
 maxRetries: 5
 retryDelaySeconds: 3  # 3s → 6s → 12s → 24s → 48s
 ```
+
+## Dependency Resolution (Programmability Objects)
+
+**Automatic Cross-Type Dependency Handling**:
+- Functions, Views, and Stored Procedures can reference each other in complex ways
+- Traditional alphabetical import order fails when dependencies span object types
+- Dependency retry logic automatically resolves these references through multiple passes
+
+**Supported Dependency Scenarios**:
+- Function → Function (function calls another function)
+- View → Function (view uses function in SELECT statement)
+- Function → View (function queries a view)
+- Stored Procedure → Function/View (procedure uses both)
+- Complex chains (Proc → Func → View → Func multi-hop dependencies)
+
+**How It Works**:
+1. All programmability objects attempted on first pass
+2. Failed scripts (missing dependencies) collected for retry
+3. Subsequent passes retry only failed scripts (successful scripts enable others)
+4. Early exit if no progress made (prevents infinite loops on real errors)
+5. Default 10 retry attempts handles most dependency graphs
+
+**Configuration**:
+```yaml
+import:
+  dependencyRetries:
+    enabled: true          # Enable/disable (default: true)
+    maxRetries: 10         # Retry attempts (1-10, default: 10)
+    objectTypes:           # Object types to retry together
+      - Functions          # (default)
+      - StoredProcedures   # (default)
+      - Views              # (default)
+      # Optional additions:
+      # - Synonyms
+      # - TableTriggers
+      # - DatabaseTriggers
+```
+
+**Example Scenario**:
+```sql
+-- Attempt 1 (alphabetical order):
+-- ✅ fn_HelperCalculateTax      (no dependencies)
+-- ✅ fn_CalculateTotalWithTax    (calls fn_HelperCalculateTax - succeeds)
+-- ❌ fn_GetOrdersWithTax         (queries vw_OrderTotals - FAILS, view not created yet)
+-- ✅ vw_OrderTotals              (calls fn_CalculateTotalWithTax - succeeds)
+
+-- Attempt 2 (retry failed scripts):
+-- ✅ fn_GetOrdersWithTax         (queries vw_OrderTotals - NOW SUCCEEDS)
+
+-- Result: All objects imported successfully!
+```
+
+**Note**: Security Policies are automatically deferred to execute AFTER all programmability objects, ensuring functions/procedures they reference exist.
 
 ## Cross-Platform Support
 

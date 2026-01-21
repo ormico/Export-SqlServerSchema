@@ -8,6 +8,16 @@ trustServerCertificate: true
 importMode: Prod
 includeData: true
 
+# Dependency retry settings
+import:
+  dependencyRetries:
+    enabled: true
+    maxRetries: 10
+    objectTypes:
+      - Functions
+      - StoredProcedures
+      - Views
+
 # FileGroup path mapping for target environment
 # Base directory paths (without trailing separator) for each FileGroup
 # Script will automatically add correct path separator based on target OS

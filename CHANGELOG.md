@@ -6,6 +6,118 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [2.0.0] - 2026-01-21
+
+### Added
+
+**Dependency Retry Logic for Programmability Objects**
+- Automatic handling of cross-type dependencies in Functions, StoredProcedures, and Views
+- Multi-pass retry algorithm executes programmability objects up to 10 times (configurable) to resolve dependencies
+- Handles complex dependency scenarios:
+  - Function → Function (e.g., function calls another function)
+  - View → Function (e.g., view uses function in SELECT)
+  - Function → View (e.g., function queries view)
+  - Procedure → Function/View (e.g., procedure uses both)
+  - Cross-chain dependencies (e.g., Proc → Func → View → Func)
+- New `import.dependencyRetries` configuration section in YAML:
+  - `enabled`: Enable/disable retry logic (default: `true`)
+  - `maxRetries`: Maximum retry attempts (default: `10`, range: 1-10)
+  - `objectTypes`: Array of object types to retry together (default: `[Functions, StoredProcedures, Views]`)
+  - Optional support for `Synonyms`, `TableTriggers`, `DatabaseTriggers`
+- Early exit optimization: stops retrying if no progress made (prevents infinite loops on real errors)
+- Security policies deferred to execute AFTER programmability objects (ensures dependencies exist)
+- Enhanced error reporting with verbose logging shows which scripts failed and why
+- JSON schema validation for new configuration section
+
+**Per-Object-Type File Grouping Feature**
+- New `groupByObjectTypes` configuration section in YAML config for fine-grained control over file organization
+- Three grouping modes per object type:
+  - `single`: One file per object (default, best for Git version control)
+  - `schema`: Group objects by schema into numbered files (e.g., 001_dbo.sql, 002_Sales.sql)
+  - `all`: All objects of a type in one consolidated file (e.g., 001_AllTables.sql)
+- Supports 26 object types with full grouping control:
+  - Schema-based objects: Sequences, UserDefinedTypes, XmlSchemaCollections, Tables, ForeignKeys, Indexes, Defaults, Rules, Functions, UserDefinedAggregates, StoredProcedures, Views, Synonyms, TableTriggers
+  - Database-level objects: Assemblies, DatabaseTriggers, PartitionFunctions, PartitionSchemes, Schemas, FullTextCatalogs, FullTextStopLists, ExternalDataSources, ExternalFileFormats, SearchPropertyLists, PlanGuides
+  - Security objects: DatabaseRoles, DatabaseUsers
+- FileGroups remain single consolidated file due to custom scripting requirements (documented limitation)
+- New `Get-ObjectGroupingMode` helper function for configuration lookup with defaults
+- Import script handles all grouping modes transparently (no changes needed to import logic)
+- File organization improves Git workflows while maintaining dependency-ordered import
+
+**SMO Prefetch Security Hardening**
+- Updated SMO prefetch to use selective property loading instead of loading all properties
+- Avoids `VIEW DATABASE STATE` permission requirement by excluding protected properties:
+  - Excluded: IndexSpaceUsed, RowCount, DataSpaceUsed (require elevated permissions)
+  - Included: Schema, Name, Owner, CreateDate, DateLastModified, IsSystemObject, FileGroup, etc.
+- Maintains performance optimization by prefetching safe metadata properties
+- Graceful fallback for properties that don't exist on older SQL Server versions
+- Works for users with standard database permissions (no elevated privileges needed)
+
+### Changed
+
+**Export Folder Structure**
+- Re-ordered object type folders for improved dependency handling and logical grouping
+- Folder numbering updated to accommodate new object types and grouping features
+- Import script processes folders alphabetically by number prefix (ensures correct deployment order)
+
+**Configuration Examples**
+- Updated `export-import-config.example.yml` with comprehensive grouping examples and dependency retry settings
+- Documented FileGroups limitation (always single file due to custom scripting)
+- Added examples for all 26 grouping-supported object types with dependency retry configuration
+- Explained cross-type dependency scenarios (Function calls View, Proc queries Function, etc.)
+
+**Test Coverage**
+- Created dedicated grouping test configs: `test-groupby-single.yml`, `test-groupby-schema.yml`, `test-groupby-all.yml`
+- Updated test configs to validate all 26 object types with grouping feature
+- Integration tests verify all three grouping modes work correctly
+- **Added cross-dependency test cases** to validate retry logic:
+  - 8 new test objects with intentional cross-type dependencies
+  - Function → Function: `fn_CalculateTotalWithTax` calls `fn_HelperCalculateTax`
+  - View → Function: `vw_OrderTotalsWithTax` uses `fn_CalculateTotalWithTax`
+  - Function → View: `fn_GetCustomerOrdersWithTax` queries `vw_OrderTotalsWithTax`
+  - Procedure → Function/View: `usp_GetCustomerSummary` uses both
+  - View → View: `vw_RecentOrderSummary` queries `vw_OrderTotalsWithTax`
+  - Function → View (chained): `fn_GetTopCustomers` queries `vw_RecentOrderSummary`
+  - Procedure → Procedure: `usp_ProcessCustomerOrder` calls other procedures
+  - Synonym → View: `OrderSummaries` references `vw_RecentOrderSummary`
+- All integration tests pass with retry logic validating multi-pass dependency resolution
+
+### Fixed
+- SMO prefetch no longer triggers permission errors for users without `VIEW DATABASE STATE` privilege
+- **Programmability objects with cross-type dependencies now import successfully** without manual intervention
+- **Security policies execute after functions/procedures** they depend on, preventing import failures
+- Error messages during dependency retry are now logged verbosely instead of terminating import prematurely
+
+### Breaking Changes
+
+**IMPORTANT: Folder Order Change**
+- **Folder numbering has changed** in v2.0.0 to support new object types and grouping features
+- **Old exports (v1.x) may not import correctly** with the new import script due to different folder processing order
+- **Action Required**: Re-export databases using v2.0.0 Export-SqlServerSchema.ps1 before importing
+- Import script processes folders by alphabetical order of their number prefix (00_, 01_, 02_, etc.)
+- If folder numbers changed between versions, dependency ordering may be incorrect
+
+**Migration from v1.x**
+
+```powershell
+# 1. Re-export your database with v2.0.0
+./Export-SqlServerSchema.ps1 -Server localhost -Database MyDb
+
+# 2. Optional: Configure grouping modes in YAML config
+# See export-import-config.example.yml for examples
+
+# 3. Import using new export
+./Import-SqlServerSchema.ps1 -Server prod -Database MyDb `
+    -SourcePath ./exports/MyDb -ImportMode Prod
+```
+
+**Backward Compatibility Note**
+- Import script can still process v1.x exports if folder numbers didn't change
+- Safest approach: Always re-export with matching version of Export-SqlServerSchema.ps1
+- File grouping is a new feature (defaults to `single` mode = same behavior as v1.x)
+
+---
+
 ## [1.5.0] - 2026-01-21
 
 Re-ordered Security roles for dependency ordering.

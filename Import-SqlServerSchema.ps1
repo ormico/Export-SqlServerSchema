@@ -910,8 +910,189 @@ For more details, see: https://go.microsoft.com/fwlink/?linkid=2226722
             $level++
         }
         
-        Write-Error "  [ERROR] Failed: $scriptName`n$errorMessage"
+        # Use Write-Verbose for retry attempts (failure may be temporary due to dependencies)
+        # The calling code will use Write-Error if all retries fail
+        Write-Verbose "  [FAILED] $scriptName - will retry if dependency retry enabled`n$errorMessage"
         return -1
+    }
+}
+
+function Invoke-ScriptsWithDependencyRetries {
+    <#
+    .SYNOPSIS
+        Executes scripts with retry logic to handle cross-object dependencies.
+    
+    .DESCRIPTION
+        Processes programmability objects (Functions, StoredProcedures, Views) that may have
+        cross-type dependencies. Retries failed scripts multiple times, as successful scripts
+        may enable previously failing scripts to succeed.
+    
+    .PARAMETER Scripts
+        Array of script file objects to execute.
+    
+    .PARAMETER MaxRetries
+        Maximum number of retry attempts (default 3).
+    
+    .PARAMETER Server
+        SQL Server instance name.
+    
+    .PARAMETER Database
+        Database name.
+    
+    .PARAMETER Credential
+        SQL Server credentials.
+    
+    .PARAMETER Timeout
+        Command timeout in seconds.
+    
+    .PARAMETER ShowSQL
+        Display SQL statements being executed.
+    
+    .PARAMETER SqlCmdVariables
+        SQLCMD variables for script substitution.
+    
+    .PARAMETER Config
+        Configuration object.
+    
+    .PARAMETER Connection
+        Shared SMO connection object.
+    
+    .PARAMETER ContinueOnError
+        Continue processing even if scripts fail.
+    
+    .PARAMETER MaxAttempts
+        Maximum retry attempts for transient failures.
+    
+    .PARAMETER InitialDelaySeconds
+        Initial retry delay for transient failures.
+    
+    .OUTPUTS
+        Hashtable with success, failure, and skip counts.
+    #>
+    param(
+        [Parameter(Mandatory=$true)]
+        [array]$Scripts,
+        
+        [int]$MaxRetries = 3,
+        
+        [Parameter(Mandatory=$true)]
+        [string]$Server,
+        
+        [Parameter(Mandatory=$true)]
+        [string]$Database,
+        
+        $Credential,
+        [int]$Timeout,
+        [switch]$ShowSQL,
+        [hashtable]$SqlCmdVariables,
+        $Config,
+        $Connection,
+        [switch]$ContinueOnError,
+        [int]$MaxAttempts,
+        [int]$InitialDelaySeconds
+    )
+    
+    if ($Scripts.Count -eq 0) {
+        return @{ Success = 0; Failure = 0; Skip = 0 }
+    }
+    
+    Write-Output ''
+    Write-Output "[INFO] Processing $($Scripts.Count) programmability object(s) with dependency retry logic (max $MaxRetries retries)..."
+    Write-Verbose "[RETRY] Dependency retry enabled for $($Scripts.Count) scripts"
+    
+    $successCount = 0
+    $failureCount = 0
+    $skipCount = 0
+    
+    # Start with all scripts as "failed" (pending)
+    $pendingScripts = @($Scripts)
+    $attempt = 1
+    $failedScriptErrors = @{}  # Track last error for each failed script
+    
+    while ($pendingScripts.Count -gt 0 -and $attempt -le $MaxRetries) {
+        if ($attempt -gt 1) {
+            Write-Output "[INFO] Retry attempt $attempt of $MaxRetries - $($pendingScripts.Count) script(s) remaining..."
+            Write-Verbose "[RETRY] Attempt $attempt - retrying $($pendingScripts.Count) scripts"
+        }
+        
+        $stillFailing = @()
+        $attemptSuccessCount = 0
+        
+        foreach ($scriptFile in $pendingScripts) {
+            # Capture errors from script execution
+            $ErrorActionPreference = 'Continue'  # Allow retry loop to continue on error
+            $scriptError = $null
+            
+            try {
+                $result = Invoke-WithRetry -MaxAttempts $MaxAttempts -InitialDelaySeconds $InitialDelaySeconds `
+                    -OperationName "Script: $($scriptFile.Name)" -ScriptBlock {
+                    Invoke-SqlScript -FilePath $scriptFile.FullName -ServerName $Server `
+                        -DatabaseName $Database -Cred $Credential -Timeout $Timeout -Show:$ShowSQL `
+                        -SqlCmdVariables $SqlCmdVariables -Config $Config -Connection $Connection
+                } -ErrorVariable scriptError
+            } catch {
+                $result = -1
+                $scriptError = $_
+            }
+            
+            $ErrorActionPreference = 'Stop'  # Restore default
+            
+            if ($result -eq $true) {
+                $successCount++
+                $attemptSuccessCount++
+                # Remove from error tracking if it succeeded
+                if ($failedScriptErrors.ContainsKey($scriptFile.Name)) {
+                    $failedScriptErrors.Remove($scriptFile.Name)
+                }
+            } elseif ($result -eq -1) {
+                # Script failed - add to retry list and track error
+                $stillFailing += $scriptFile
+                if ($scriptError) {
+                    $failedScriptErrors[$scriptFile.Name] = $scriptError
+                }
+            } else {
+                $skipCount++
+            }
+        }
+        
+        Write-Verbose "[RETRY] Attempt $attempt results: $attemptSuccessCount succeeded, $($stillFailing.Count) failed"
+        
+        # Check if we made progress
+        if ($attemptSuccessCount -eq 0 -and $stillFailing.Count -gt 0) {
+            Write-Warning "[WARNING] No progress in retry attempt $attempt - no scripts succeeded"
+            Write-Warning "  Remaining failures likely due to syntax errors, missing references, or permissions"
+            break
+        }
+        
+        $pendingScripts = $stillFailing
+        $attempt++
+    }
+    
+    # Final results
+    if ($pendingScripts.Count -gt 0) {
+        $failureCount = $pendingScripts.Count
+        Write-Output ''
+        Write-Host "[WARNING] $failureCount script(s) failed after $MaxRetries retry attempt(s):" -ForegroundColor Yellow
+        foreach ($failedScript in $pendingScripts) {
+            Write-Host "  - $($failedScript.Name)" -ForegroundColor Yellow
+            # Show last captured error if available
+            if ($failedScriptErrors.ContainsKey($failedScript.Name)) {
+                $lastError = $failedScriptErrors[$failedScript.Name]
+                Write-Verbose "    Last error: $lastError"
+            }
+        }
+        
+        if (-not $ContinueOnError) {
+            Write-Error "[ERROR] Dependency retry limit reached with $failureCount failed script(s). Enable -Verbose for error details."
+        }
+    } else {
+        Write-Output "[SUCCESS] All programmability objects imported successfully"
+    }
+    
+    return @{
+        Success = $successCount
+        Failure = $failureCount
+        Skip = $skipCount
     }
 }
 
@@ -1725,8 +1906,98 @@ try {
     }
     Write-Verbose "Reusing shared SMO connection for script execution"
     
-    # Process non-data scripts first
-    foreach ($scriptFile in $nonDataScripts) {
+    # Get dependency retry settings from config
+    $retryEnabled = $true  # Default enabled
+    $retryMaxAttempts = 10  # Default 10 retries
+    $retryObjectTypes = @('Functions', 'StoredProcedures', 'Views')  # Default types
+    
+    if ($config -and $config.import -and $config.import.dependencyRetries) {
+        $retryConfig = $config.import.dependencyRetries
+        if ($retryConfig.ContainsKey('enabled')) {
+            $retryEnabled = $retryConfig.enabled
+        }
+        if ($retryConfig.ContainsKey('maxRetries')) {
+            $retryMaxAttempts = $retryConfig.maxRetries
+        }
+        if ($retryConfig.ContainsKey('objectTypes') -and $retryConfig.objectTypes.Count -gt 0) {
+            $retryObjectTypes = $retryConfig.objectTypes
+        }
+    }
+    
+    Write-Verbose "[RETRY] Dependency retry enabled: $retryEnabled"
+    Write-Verbose "[RETRY] Max retry attempts: $retryMaxAttempts"
+    Write-Verbose "[RETRY] Retry object types: $($retryObjectTypes -join ', ')"
+    
+    # Identify programmability scripts that need dependency retry logic
+    # These scripts are from folders: 14_Programmability/02_Functions, etc.
+    # Match folder patterns to retry object types
+    $folderPatternMap = @{
+        'Functions' = '14_Programmability[\\/]02_Functions'
+        'StoredProcedures' = '14_Programmability[\\/]03_StoredProcedures'
+        'Views' = '14_Programmability[\\/]05_Views'
+        'Synonyms' = '14_Programmability[\\/]06_Synonyms'
+        'TableTriggers' = '14_Programmability[\\/]04_TableTriggers'
+        'DatabaseTriggers' = '14_Programmability[\\/]01_DatabaseTriggers'
+    }
+    
+    # Build regex pattern to match programmability folders
+    $retryFolderPatterns = @()
+    foreach ($objectType in $retryObjectTypes) {
+        if ($folderPatternMap.ContainsKey($objectType)) {
+            $retryFolderPatterns += $folderPatternMap[$objectType]
+        }
+    }
+    
+    # If no specific patterns, match all programmability subfolder scripts
+    if ($retryFolderPatterns.Count -eq 0 -and $retryEnabled) {
+        $retryFolderPatterns += '14_Programmability'
+    }
+    
+    $retryFolderRegex = if ($retryFolderPatterns.Count -gt 0) {
+        "($($retryFolderPatterns -join '|'))"
+    } else {
+        '^$'  # Match nothing if no retry types configured
+    }
+    
+    Write-Verbose "[RETRY] Folder pattern regex: $retryFolderRegex"
+    
+    # Split scripts into programmability (needs retry), security policies (after programmability), and structural (no retry)
+    # Security policies depend on programmability objects (functions, etc.) so must be processed last
+    $programmabilityScripts = @()
+    $securityPolicyScripts = @()
+    $structuralScripts = @()
+    
+    if ($retryEnabled) {
+        foreach ($script in $nonDataScripts) {
+            # Check if script is in a programmability folder
+            $relativePath = $script.FullName.Substring($SourcePath.Length).TrimStart('\', '/')
+            if ($relativePath -match '20_SecurityPolicies') {
+                # Security policies depend on programmability objects - process after retry
+                $securityPolicyScripts += $script
+                Write-Verbose "[RETRY] Deferred security policy (depends on programmability): $($script.Name)"
+            } elseif ($relativePath -match $retryFolderRegex) {
+                $programmabilityScripts += $script
+                Write-Verbose "[RETRY] Marked for retry: $($script.Name)"
+            } else {
+                $structuralScripts += $script
+            }
+        }
+    } else {
+        # Retry disabled - treat all as structural (no retry), but still defer security policies to end
+        foreach ($script in $nonDataScripts) {
+            $relativePath = $script.FullName.Substring($SourcePath.Length).TrimStart('\', '/')
+            if ($relativePath -match '20_SecurityPolicies') {
+                $securityPolicyScripts += $script
+            } else {
+                $structuralScripts += $script
+            }
+        }
+    }
+    
+    Write-Verbose "[RETRY] Found $($programmabilityScripts.Count) programmability scripts, $($securityPolicyScripts.Count) security policy scripts, $($structuralScripts.Count) structural scripts"
+    
+    # Process structural scripts first (no retry logic - these define structure)
+    foreach ($scriptFile in $structuralScripts) {
         $result = Invoke-WithRetry -MaxAttempts $effectiveMaxRetries -InitialDelaySeconds $effectiveRetryDelay -OperationName "Script: $($scriptFile.Name)" -ScriptBlock {
             Invoke-SqlScript -FilePath $scriptFile.FullName -ServerName $Server `
                 -DatabaseName $Database -Cred $Credential -Timeout $effectiveCommandTimeout -Show:$ShowSQL `
@@ -1738,11 +2009,66 @@ try {
         } elseif ($result -eq -1) {
             $failureCount++
             if (-not $ContinueOnError) {
+                # Don't process programmability scripts if structural scripts failed
+                Write-Error "[ERROR] Structural script failed. Aborting import."
                 break
             }
         } else {
             $skipCount++
         }
+    }
+    
+    # Process programmability scripts with dependency retry logic (only if no structural failures)
+    if ($programmabilityScripts.Count -gt 0 -and ($failureCount -eq 0 -or $ContinueOnError)) {
+        $retryResults = Invoke-ScriptsWithDependencyRetries `
+            -Scripts $programmabilityScripts `
+            -MaxRetries $retryMaxAttempts `
+            -Server $Server `
+            -Database $Database `
+            -Credential $Credential `
+            -Timeout $effectiveCommandTimeout `
+            -ShowSQL:$ShowSQL `
+            -SqlCmdVariables $sqlCmdVars `
+            -Config $config `
+            -Connection $script:SharedConnection `
+            -ContinueOnError:$ContinueOnError `
+            -MaxAttempts $effectiveMaxRetries `
+            -InitialDelaySeconds $effectiveRetryDelay
+        
+        $successCount += $retryResults.Success
+        $failureCount += $retryResults.Failure
+        $skipCount += $retryResults.Skip
+    } elseif ($programmabilityScripts.Count -gt 0) {
+        Write-Warning "[WARNING] Skipping $($programmabilityScripts.Count) programmability script(s) due to earlier failures"
+        $skipCount += $programmabilityScripts.Count
+    }
+    
+    # Process security policy scripts AFTER programmability objects (they depend on functions/procedures)
+    if ($securityPolicyScripts.Count -gt 0 -and ($failureCount -eq 0 -or $ContinueOnError)) {
+        Write-Output ''
+        Write-Output "[INFO] Processing $($securityPolicyScripts.Count) security policy script(s)..."
+        foreach ($scriptFile in $securityPolicyScripts) {
+            $result = Invoke-WithRetry -MaxAttempts $effectiveMaxRetries -InitialDelaySeconds $effectiveRetryDelay -OperationName "Script: $($scriptFile.Name)" -ScriptBlock {
+                Invoke-SqlScript -FilePath $scriptFile.FullName -ServerName $Server `
+                    -DatabaseName $Database -Cred $Credential -Timeout $effectiveCommandTimeout -Show:$ShowSQL `
+                    -SqlCmdVariables $sqlCmdVars -Config $config -Connection $script:SharedConnection
+            }
+            
+            if ($result -eq $true) {
+                $successCount++
+            } elseif ($result -eq -1) {
+                $failureCount++
+                if (-not $ContinueOnError) {
+                    Write-Error "[ERROR] Security policy script failed. Aborting import."
+                    break
+                }
+            } else {
+                $skipCount++
+            }
+        }
+    } elseif ($securityPolicyScripts.Count -gt 0) {
+        Write-Warning "[WARNING] Skipping $($securityPolicyScripts.Count) security policy script(s) due to earlier failures"
+        $skipCount += $securityPolicyScripts.Count
     }
     
     # If we have data scripts and no failures so far, handle them with FK constraints disabled

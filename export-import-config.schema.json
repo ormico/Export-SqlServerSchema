@@ -157,6 +157,35 @@
           "description": "Default import mode (Dev or Prod)",
           "default": "Dev"
         },
+        "dependencyRetries": {
+          "type": "object",
+          "description": "Retry settings for handling cross-object dependencies in programmability objects",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Enable dependency retry logic for programmability objects (Functions, StoredProcedures, Views)",
+              "default": true
+            },
+            "maxRetries": {
+              "type": "integer",
+              "description": "Maximum retry attempts for resolving object dependencies",
+              "default": 10,
+              "minimum": 1,
+              "maximum": 10
+            },
+            "objectTypes": {
+              "type": "array",
+              "description": "Object types to include in dependency retry group (retried together to resolve cross-type dependencies)",
+              "items": {
+                "type": "string",
+                "enum": ["Functions", "StoredProcedures", "Views", "Synonyms", "TableTriggers", "DatabaseTriggers"]
+              },
+              "default": ["Functions", "StoredProcedures", "Views"],
+              "uniqueItems": true
+            }
+          },
+          "additionalProperties": false
+        },
         "developerMode": {
           "$ref": "#/definitions/importSettings",
           "description": "Settings for developer mode imports"

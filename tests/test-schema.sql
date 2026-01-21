@@ -560,6 +560,136 @@ GO
 -- END;
 -- GO
 
+-- ═══════════════════════════════════════════════════════════════
+-- CROSS-DEPENDENCY TEST OBJECTS
+-- ═══════════════════════════════════════════════════════════════
+-- These objects test the dependency retry logic by creating cross-type dependencies
+-- that cannot be resolved with simple alphabetical ordering
+
+PRINT '';
+PRINT '═══════════════════════════════════════════════════════════════';
+PRINT 'Adding cross-dependency test objects...';
+PRINT '═══════════════════════════════════════════════════════════════';
+GO
+
+-- Function that calls another function (within-type dependency)
+CREATE FUNCTION dbo.fn_HelperCalculateTax(@Amount DECIMAL(18,2))
+RETURNS DECIMAL(18,2)
+AS
+BEGIN
+    RETURN @Amount * 0.08;  -- 8% tax
+END;
+GO
+
+CREATE FUNCTION dbo.fn_CalculateTotalWithTax(@Amount DECIMAL(18,2))
+RETURNS DECIMAL(18,2)
+AS
+BEGIN
+    -- Calls fn_HelperCalculateTax - dependency within Functions
+    RETURN @Amount + dbo.fn_HelperCalculateTax(@Amount);
+END;
+GO
+
+-- View that calls a function (cross-type: View -> Function)
+CREATE VIEW Sales.vw_OrderTotalsWithTax
+AS
+    SELECT 
+        OrderId,
+        CustomerId,
+        OrderDate,
+        TotalAmount,
+        dbo.fn_CalculateTotalWithTax(TotalAmount) AS TotalWithTax
+    FROM Sales.Orders;
+GO
+
+-- Function that queries a view (cross-type: Function -> View)
+CREATE FUNCTION dbo.fn_GetCustomerOrdersWithTax(@CustomerId INT)
+RETURNS TABLE
+AS
+RETURN (
+    SELECT OrderId, OrderDate, TotalAmount, TotalWithTax
+    FROM Sales.vw_OrderTotalsWithTax
+    WHERE CustomerId = @CustomerId
+);
+GO
+
+-- Stored procedure that calls a function and queries a view (cross-type: Proc -> Function, Proc -> View)
+CREATE PROCEDURE Sales.usp_GetCustomerSummary
+    @CustomerId INT
+AS
+BEGIN
+    SET NOCOUNT ON;
+    
+    -- Query the function (which queries the view)
+    SELECT 
+        @CustomerId AS CustomerId,
+        COUNT(*) AS OrderCount,
+        SUM(TotalWithTax) AS TotalSpent
+    FROM dbo.fn_GetCustomerOrdersWithTax(@CustomerId);
+    
+    -- Also query the view directly
+    SELECT OrderId, OrderDate, TotalAmount, TotalWithTax
+    FROM Sales.vw_OrderTotalsWithTax
+    WHERE CustomerId = @CustomerId
+    ORDER BY OrderDate DESC;
+END;
+GO
+
+-- View that queries another view (within-type dependency)
+CREATE VIEW Sales.vw_RecentOrderSummary
+AS
+    SELECT 
+        CustomerId,
+        COUNT(*) AS OrderCount,
+        SUM(TotalWithTax) AS TotalRevenue,
+        MAX(OrderDate) AS LastOrderDate
+    FROM Sales.vw_OrderTotalsWithTax
+    WHERE OrderDate >= DATEADD(YEAR, -1, GETDATE())
+    GROUP BY CustomerId;
+GO
+
+-- Function that queries a view which queries another view (chained dependencies)
+CREATE FUNCTION dbo.fn_GetTopCustomers(@MinOrderCount INT)
+RETURNS TABLE
+AS
+RETURN (
+    SELECT CustomerId, OrderCount, TotalRevenue, LastOrderDate
+    FROM Sales.vw_RecentOrderSummary
+    WHERE OrderCount >= @MinOrderCount
+);
+GO
+
+-- Stored procedure that calls another stored procedure (within-type dependency)
+CREATE PROCEDURE Sales.usp_ProcessCustomerOrder
+    @CustomerId INT,
+    @ProductId INT,
+    @Quantity INT
+AS
+BEGIN
+    SET NOCOUNT ON;
+    
+    -- First call the existing procedure to create an order
+    EXEC Sales.usp_CreateOrder 
+        @CustomerId = @CustomerId,
+        @ProductId = @ProductId,
+        @Quantity = @Quantity;
+    
+    -- Then get the customer summary
+    EXEC Sales.usp_GetCustomerSummary @CustomerId = @CustomerId;
+END;
+GO
+
+-- Synonym that references a view (cross-type: Synonym -> View)
+CREATE SYNONYM dbo.OrderSummaries FOR Sales.vw_RecentOrderSummary;
+GO
+
+PRINT 'Cross-dependency test objects created successfully';
+PRINT '  - 3 Functions with dependencies: fn_HelperCalculateTax, fn_CalculateTotalWithTax, fn_GetCustomerOrdersWithTax, fn_GetTopCustomers';
+PRINT '  - 2 Views with dependencies: vw_OrderTotalsWithTax, vw_RecentOrderSummary';
+PRINT '  - 2 Stored Procedures with dependencies: usp_GetCustomerSummary, usp_ProcessCustomerOrder';
+PRINT '  - 1 Synonym: OrderSummaries';
+GO
+
 PRINT '';
 PRINT '═══════════════════════════════════════════════════════════════';
 PRINT 'TEST DATABASE CREATED SUCCESSFULLY';
@@ -581,9 +711,9 @@ PRINT '';
 PRINT 'SCHEMA OBJECTS';
 PRINT '  - Tables: 6 (Customers, Products, Orders on FG_CURRENT, OrderDetails, Inventory on FG_ARCHIVE, OrderHistory partitioned)';
 PRINT '  - Indexes: 4 (including IX_Orders_OrderDate on FG_CURRENT)';
-PRINT '  - Views: 1';
-PRINT '  - Functions: 3 (2 scalar + 1 table-valued for RLS)';
-PRINT '  - Stored Procedures: 2';
+PRINT '  - Views: 3 (including 2 with cross-dependencies)';
+PRINT '  - Functions: 7 (including 4 with cross-dependencies)';
+PRINT '  - Stored Procedures: 4 (including 2 with cross-dependencies)';
 PRINT '  - Triggers: 2';
 PRINT '  - Sequences: 1';
 PRINT '  - User-Defined Types: 2 (table type + alias type)';
@@ -595,10 +725,20 @@ PRINT '  - Indexes: 4 non-clustered';
 PRINT '';
 PRINT 'ADVANCED FEATURES';
 PRINT '  - Security Policies: 1 (Row-Level Security - DISABLED for testing)';
-PRINT '  - Synonyms: 2';
+PRINT '  - Synonyms: 3 (including 1 with cross-dependency)';
 PRINT '  - Search Property Lists: 1 (2 custom properties)';
 PRINT '  - Plan Guides: 1';
 PRINT '  - Full-Text Search: 1 catalog, 1 stoplist (if installed)';
+PRINT '';
+PRINT 'CROSS-DEPENDENCY TEST OBJECTS';
+PRINT '  - Function -> Function: fn_CalculateTotalWithTax calls fn_HelperCalculateTax';
+PRINT '  - View -> Function: vw_OrderTotalsWithTax calls fn_CalculateTotalWithTax';
+PRINT '  - Function -> View: fn_GetCustomerOrdersWithTax queries vw_OrderTotalsWithTax';
+PRINT '  - Procedure -> Function/View: usp_GetCustomerSummary calls fn_GetCustomerOrdersWithTax and queries vw_OrderTotalsWithTax';
+PRINT '  - View -> View: vw_RecentOrderSummary queries vw_OrderTotalsWithTax';
+PRINT '  - Function -> View: fn_GetTopCustomers queries vw_RecentOrderSummary';
+PRINT '  - Procedure -> Procedure: usp_ProcessCustomerOrder calls usp_CreateOrder and usp_GetCustomerSummary';
+PRINT '  - Synonym -> View: OrderSummaries references vw_RecentOrderSummary';
 PRINT '';
 PRINT 'SAMPLE DATA';
 PRINT '  - Customers: 5 rows';
