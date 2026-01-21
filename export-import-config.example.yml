@@ -97,18 +97,29 @@ export:
   # - single: One file per object (best for Git tracking)
   # - schema: Group by schema into numbered files (reduces file count)
   # - all: All objects of type in one file (minimal files)
+  #
+  # NOTE: FileGroups do not support grouping modes - they always export to a single
+  # consolidated file (001_FileGroups.sql)
   groupByObjectTypes: {}
-    # FileGroups: single               # One file per filegroup
-    # DatabaseScopedConfigurations: all # All configs in one file
-    # Schemas: single                  # One file per schema
     # Sequences: schema                # Group sequences by schema
+    # PartitionFunctions: all          # All partition functions in one file
+    # PartitionSchemes: all            # All partition schemes in one file
+    # UserDefinedTypes: schema         # Group UDTs by schema
+    # XmlSchemaCollections: schema     # Group XML schemas by schema
     # Tables: single                   # One file per table (default, best for Git)
-    # ForeignKeys: schema              # Group FKs by schema
-    # Indexes: schema                  # Group indexes by schema
+    # ForeignKeys: schema              # Group FKs by parent table's schema
+    # Indexes: schema                  # Group indexes by parent table's schema
+    # Defaults: schema                 # Group defaults by schema
+    # Rules: schema                    # Group rules by schema
+    # Assemblies: all                  # All assemblies in one file (no schema property)
     # Functions: schema                # Group functions by schema
+    # UserDefinedAggregates: schema    # Group CLR aggregates by schema
     # StoredProcedures: schema         # Group stored procs by schema
+    # DatabaseTriggers: all            # All database triggers in one file (no schema)
+    # TableTriggers: schema            # Group table triggers by parent table's schema
     # Views: schema                    # Group views by schema
-    # SecurityObjects: all             # All security objects in one file
+    # Synonyms: schema                 # Group synonyms by schema
+    # PlanGuides: all                  # All plan guides in one file
 
 # ═══════════════════════════════════════════════════════════════
 # IMPORT CONFIGURATION
