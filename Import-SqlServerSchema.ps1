@@ -350,7 +350,7 @@ function Test-Dependencies {
     }
   }
   catch {
-    Write-Output 'ℹ SMO not found, will attempt to use sqlcmd'
+    Write-Output '[INFO] SMO not found, will attempt to use sqlcmd'
 
     try {
       $sqlcmdPath = Get-Command sqlcmd -ErrorAction Stop
@@ -368,7 +368,9 @@ function Get-TargetServerOS {
     .SYNOPSIS
         Detects the target SQL Server's operating system (Windows or Linux).
     .PARAMETER Connection
-        Optional existing SMO Server connection to reuse. If not provided, uses sqlcmd.
+        Optional existing SMO Server connection to reuse. If not provided, creates a temporary SMO connection.
+    .NOTES
+        Uses SMO connections exclusively to avoid exposing credentials on command line.
     #>
   param(
     [string]$ServerName,
@@ -378,6 +380,7 @@ function Get-TargetServerOS {
   )
 
   $query = "SELECT CASE WHEN host_platform = 'Windows' THEN 'Windows' ELSE 'Linux' END AS OS FROM sys.dm_os_host_info"
+  $tempConnection = $null
 
   try {
     # If we have an open SMO connection, use it
@@ -387,27 +390,30 @@ function Get-TargetServerOS {
       return $result
     }
 
-    # Fallback to sqlcmd if no connection provided
-    $sqlcmdParams = @("-S", $ServerName, "-Q", $query, "-h", "-1", "-W")
-
+    # Create temporary SMO connection (avoids exposing password on command line)
+    $tempConnection = [Microsoft.SqlServer.Management.Smo.Server]::new($ServerName)
     if ($Cred) {
-      $sqlcmdParams += @("-U", $Cred.UserName, "-P", $Cred.GetNetworkCredential().Password)
+      $tempConnection.ConnectionContext.set_LoginSecure($false)
+      $tempConnection.ConnectionContext.set_Login($Cred.UserName)
+      $tempConnection.ConnectionContext.set_SecurePassword($Cred.Password)
     }
-
-    # Add -C flag if trustServerCertificate is enabled in config
     if ($Config -and $Config.ContainsKey('trustServerCertificate') -and $Config.trustServerCertificate) {
-      $sqlcmdParams += "-C"
+      $tempConnection.ConnectionContext.TrustServerCertificate = $true
     }
+    $tempConnection.ConnectionContext.Connect()
 
-    $result = sqlcmd @sqlcmdParams
-
-    $os = ($result | Select-String -Pattern '(Windows|Linux)').Matches[0].Value
-    Write-Verbose "Target server OS detected: $os"
-    return $os
+    $result = $tempConnection.ConnectionContext.ExecuteScalar($query)
+    Write-Verbose "Target server OS detected via temporary SMO connection: $result"
+    return $result
   }
   catch {
     Write-Verbose "Could not detect target OS, assuming Windows: $_"
     return 'Windows'
+  }
+  finally {
+    if ($tempConnection -and $tempConnection.ConnectionContext.IsOpen) {
+      $tempConnection.ConnectionContext.Disconnect()
+    }
   }
 }
 
@@ -2406,7 +2412,7 @@ try {
         Write-Output "[SUCCESS] Re-enabled and validated $fkCount foreign key constraint(s)"
       }
       else {
-        Write-Output 'ℹ No foreign key constraints to re-enable'
+        Write-Output '[INFO] No foreign key constraints to re-enable'
       }
     }
     catch {
