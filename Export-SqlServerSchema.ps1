@@ -4087,39 +4087,56 @@ For more details, see: https://go.microsoft.com/fwlink/?linkid=2226722
     # PHASE 2 OPTIMIZATION: SMO Prefetch with SetDefaultInitFields
     # ═══════════════════════════════════════════════════════════════════════════
     # By default, SMO uses lazy loading - each property access triggers a query.
-    # SetDefaultInitFields tells SMO to prefetch all properties in bulk
+    # SetDefaultInitFields tells SMO to prefetch specific properties in bulk
     # when collections are first accessed, eliminating N+1 query problems.
+    # 
+    # IMPORTANT: We only prefetch properties that don't require VIEW DATABASE STATE
+    # privilege to avoid permission errors. Properties like IndexSpaceUsed, RowCount,
+    # and DataSpaceUsed require elevated permissions and are excluded.
     # ═══════════════════════════════════════════════════════════════════════════
     Write-Output "Initializing SMO property prefetch..."
     
-    # Prefetch ALL properties for commonly used types - more aggressive but simpler
-    # This trades slightly more memory for significantly fewer SQL round-trips
-    $typesToPrefetch = @(
-        [Microsoft.SqlServer.Management.Smo.Table],
-        [Microsoft.SqlServer.Management.Smo.Column],
-        [Microsoft.SqlServer.Management.Smo.Index],
-        [Microsoft.SqlServer.Management.Smo.ForeignKey],
-        [Microsoft.SqlServer.Management.Smo.StoredProcedure],
-        [Microsoft.SqlServer.Management.Smo.View],
-        [Microsoft.SqlServer.Management.Smo.UserDefinedFunction],
-        [Microsoft.SqlServer.Management.Smo.Trigger],
-        [Microsoft.SqlServer.Management.Smo.Schema],
-        [Microsoft.SqlServer.Management.Smo.UserDefinedType],
-        [Microsoft.SqlServer.Management.Smo.UserDefinedTableType],
-        [Microsoft.SqlServer.Management.Smo.Synonym],
-        [Microsoft.SqlServer.Management.Smo.Sequence]
-    )
+    # Prefetch ONLY safe properties that don't require VIEW DATABASE STATE privilege
+    # This avoids permission errors while still significantly reducing round-trips
+    $prefetchConfig = @{
+        [Microsoft.SqlServer.Management.Smo.Table] = @('Schema', 'Name', 'Owner', 'CreateDate', 'DateLastModified', 'IsSystemObject', 'FileGroup', 'TextFileGroup')
+        [Microsoft.SqlServer.Management.Smo.Column] = @('Name', 'DataType', 'Nullable', 'Identity', 'Computed', 'Default', 'DefaultConstraint')
+        [Microsoft.SqlServer.Management.Smo.Index] = @('Name', 'IndexKeyType', 'IsClustered', 'IsUnique', 'IndexType', 'FileGroup')
+        [Microsoft.SqlServer.Management.Smo.ForeignKey] = @('Name', 'ReferencedTable', 'ReferencedTableSchema', 'IsEnabled', 'IsChecked')
+        [Microsoft.SqlServer.Management.Smo.StoredProcedure] = @('Schema', 'Name', 'Owner', 'CreateDate', 'DateLastModified', 'IsSystemObject', 'IsEncrypted')
+        [Microsoft.SqlServer.Management.Smo.View] = @('Schema', 'Name', 'Owner', 'CreateDate', 'DateLastModified', 'IsSystemObject', 'IsEncrypted', 'IsIndexed')
+        [Microsoft.SqlServer.Management.Smo.UserDefinedFunction] = @('Schema', 'Name', 'Owner', 'CreateDate', 'DateLastModified', 'IsSystemObject', 'IsEncrypted', 'FunctionType')
+        [Microsoft.SqlServer.Management.Smo.Trigger] = @('Name', 'CreateDate', 'DateLastModified', 'IsSystemObject', 'IsEnabled', 'IsEncrypted')
+        [Microsoft.SqlServer.Management.Smo.Schema] = @('Name', 'Owner', 'ID')
+        [Microsoft.SqlServer.Management.Smo.UserDefinedType] = @('Schema', 'Name', 'Owner', 'CreateDate', 'IsSystemObject')
+        [Microsoft.SqlServer.Management.Smo.UserDefinedTableType] = @('Schema', 'Name', 'Owner', 'CreateDate', 'IsSystemObject')
+        [Microsoft.SqlServer.Management.Smo.Synonym] = @('Schema', 'Name', 'Owner', 'CreateDate', 'BaseDatabase', 'BaseSchema', 'BaseObject', 'BaseServer')
+        [Microsoft.SqlServer.Management.Smo.Sequence] = @('Schema', 'Name', 'Owner', 'CreateDate', 'DataType', 'StartValue', 'IncrementValue', 'MinValue', 'MaxValue')
+    }
     
-    foreach ($smoType in $typesToPrefetch) {
+    $prefetchedCount = 0
+    foreach ($smoType in $prefetchConfig.Keys) {
         try {
-            $smServer.SetDefaultInitFields($smoType, $true)
+            # First, reset to fetch nothing by default (SetDefaultInitFields with $false)
+            $smServer.SetDefaultInitFields($smoType, $false)
+            
+            # Then explicitly add only the safe properties we want
+            foreach ($propertyName in $prefetchConfig[$smoType]) {
+                try {
+                    $smServer.SetDefaultInitFields($smoType, $propertyName)
+                } catch {
+                    # Property may not exist on this SQL Server version - continue
+                    Write-Verbose "Could not set prefetch for $($smoType.Name).$propertyName"
+                }
+            }
+            $prefetchedCount++
         } catch {
-            # Some types may not be available on all SQL Server versions - continue
-            Write-Log "Could not set prefetch for $($smoType.Name): $_" -Severity WARNING
+            # Type may not be available on all SQL Server versions - continue
+            Write-Output "  [INFO] Could not configure prefetch for $($smoType.Name)"
         }
     }
     
-    Write-Output "[SUCCESS] SMO prefetch configured for $($typesToPrefetch.Count) object types"
+    Write-Output "[SUCCESS] SMO prefetch configured for $prefetchedCount object types (safe properties only)"
     
     # Create scripter
     # Resolve target SQL Server version

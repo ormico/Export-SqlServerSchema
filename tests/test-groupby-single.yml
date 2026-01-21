@@ -4,9 +4,36 @@ export:
   excludeObjects: []
   excludeSchemas: []
   groupByObjectTypes:
+    # Schema-based objects
+    Sequences: single
+    UserDefinedTypes: single
+    XmlSchemaCollections: single
     Tables: single
+    ForeignKeys: single
+    Indexes: single
+    Defaults: single
+    Rules: single
     Functions: single
+    UserDefinedAggregates: single
     StoredProcedures: single
+    Views: single
+    Synonyms: single
+    TableTriggers: single
+    # Database-level objects (no schema)
+    Assemblies: single
+    DatabaseTriggers: single
+    PartitionFunctions: single
+    PartitionSchemes: single
+    Schemas: single
+    FullTextCatalogs: single
+    FullTextStopLists: single
+    ExternalDataSources: single
+    ExternalFileFormats: single
+    SearchPropertyLists: single
+    PlanGuides: single
+    # Security objects
+    DatabaseRoles: single
+    DatabaseUsers: single
 
 import:
   defaultMode: Dev
