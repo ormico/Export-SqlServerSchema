@@ -111,7 +111,7 @@ function Write-TestStep {
     }
     
     if ($Duration) {
-        Write-Host "$($prefixes[$Type]) $Message (${Duration}s)" -ForegroundColor $colors[$Type]
+        Write-Host "$($prefixes[$Type]) $Message ($($Duration.TotalSeconds)s)" -ForegroundColor $colors[$Type]
     } else {
         Write-Host "$($prefixes[$Type]) $Message" -ForegroundColor $colors[$Type]
     }
