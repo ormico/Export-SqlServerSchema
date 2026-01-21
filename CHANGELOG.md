@@ -75,6 +75,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 **Export Folder Structure**
 - Re-ordered object type folders for improved dependency handling and logical grouping
+- Moved Security export folder to run first in dependency order (`19_Security` → `01_Security`) so security objects (roles, users, certificates) are created before schemas and other objects that require permissions
+- All remaining export folders were renumbered accordingly
 - Folder numbering updated to accommodate new object types and grouping features
 - Import script processes folders alphabetically by number prefix (ensures correct deployment order)
 
@@ -133,14 +135,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Import script can still process v1.x exports if folder numbers didn't change
 - Safest approach: Always re-export with matching version of Export-SqlServerSchema.ps1
 - File grouping is a new feature (defaults to `single` mode = same behavior as v1.x)
-
----
-
-## [1.5.0] - 2026-01-21
-
-Re-ordered the Security export folder to run first in dependency order: moved `19_Security` to `01_Security` so security objects (roles, users, certificates) are created before schemas and other objects that require permissions; all remaining export folders were renumbered accordingly.
-
-Expanded performance test database.
 
 ---
 
