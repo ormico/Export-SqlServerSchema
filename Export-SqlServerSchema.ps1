@@ -3898,7 +3898,7 @@ function Show-ExportSummary {
         $credsContent = Get-Content $credsPath -Raw
         if ($credsContent -match 'CREATE DATABASE SCOPED CREDENTIAL') {
             $manualActions += "[ACTION REQUIRED] Database Scoped Credentials"
-            $manualActions += "  Location: 01_DatabaseConfiguration\002_DatabaseScopedCredentials.sql"
+            $manualActions += "  Location: 02_DatabaseConfiguration\002_DatabaseScopedCredentials.sql"
             $manualActions += "  Action: Uncomment credential definitions and provide SECRET values"
             $manualActions += "  Note: Secrets cannot be exported - must be manually configured"
         }
@@ -3920,7 +3920,7 @@ function Show-ExportSummary {
     $dbConfigPath = Join-Path $OutputDir '02_DatabaseConfiguration' '001_DatabaseScopedConfigurations.sql'
     if (Test-Path $dbConfigPath) {
         $manualActions += "[REVIEW RECOMMENDED] Database Scoped Configurations"
-        $manualActions += "  Location: 01_DatabaseConfiguration\001_DatabaseScopedConfigurations.sql"
+        $manualActions += "  Location: 02_DatabaseConfiguration\001_DatabaseScopedConfigurations.sql"
         $manualActions += "  Action: Review MAXDOP and other hardware-specific settings for target server"
     }
     
@@ -3930,7 +3930,7 @@ function Show-ExportSummary {
         $extFiles = @(Get-ChildItem -Path $extDataPath -Filter '*.sql' -Recurse)
         if ($extFiles.Count -gt 0) {
             $manualActions += "[ACTION REQUIRED] External Data Sources"
-            $manualActions += "  Location: 16_ExternalData\"
+            $manualActions += "  Location: 17_ExternalData\"
             $manualActions += "  Action: Review connection strings and URLs for target environment"
             $manualActions += "  Note: External data sources are environment-specific"
         }
