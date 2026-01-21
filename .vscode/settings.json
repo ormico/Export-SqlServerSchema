@@ -25,6 +25,32 @@
             "matchCommandLine": true
         },
         "Set-Location": true,
-        "&": true
+        "&": true,
+        "/^cd d:\\\\Export-SqlServerSchema\\\\tests; pwsh -Command @\"\n`\\$env:SQLCMDTRUSTCERT = 'yes'\nStart-Sleep -Seconds 5\nWrite-Host 'Creating PerfTestDb\\.\\.\\.' -ForegroundColor Cyan\nInvoke-Sqlcmd -ServerInstance localhost -Username sa -Password 'Test@1234' -Query 'CREATE DATABASE PerfTestDb' -Encrypt Optional -TrustServerCertificate -ErrorAction Stop\nWrite-Host 'Database created successfully' -ForegroundColor Green\n\"@$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^cd d:\\\\Export-SqlServerSchema\\\\tests; pwsh -Command @\"\n& '\\.\\\\run-perf-test\\.ps1' -ConfigFile '\\.env' 2>&1 \\| Tee-Object -FilePath perf-test-results\\.log\n\"@$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "Tee-Object": true,
+        "/^cd d:\\\\Export-SqlServerSchema\\\\tests; pwsh -NoExit -Command \"& 'd:\\\\Export-SqlServerSchema\\\\tests\\\\run-perf-test\\.ps1'\" 2>&1$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^Write-Host 'Running FULL performance test suite \\(attempt final\\)\\.\\.\\.' -ForegroundColor Cyan; Write-Host 'Estimated time: 10-15 minutes' -ForegroundColor Yellow; pwsh -Command \"& 'd:\\\\Export-SqlServerSchema\\\\tests\\\\run-perf-test\\.ps1'\" 2>&1$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "d:\\Export-SqlServerSchema\\tests\\run-perf-test.ps1": true,
+        "/^cd d:\\\\Export-SqlServerSchema\\\\tests; pwsh -Command @\"\nWrite-Host 'Checking database status\\.\\.\\.' -ForegroundColor Cyan\n`\\$result = Invoke-Sqlcmd -ServerInstance localhost -Username sa -Password 'Test@1234' -Query 'SELECT COUNT\\(\\*\\) as TableCount FROM sys\\.tables' -Database 'PerfTestDb' -Encrypt Optional -TrustServerCertificate 2>&1\nWrite-Host 'Tables created: ' \\+ `\\$result\\[0\\]\\.TableCount -ForegroundColor Green\n\n`\\$result = Invoke-Sqlcmd -ServerInstance localhost -Username sa -Password 'Test@1234' -Query 'SELECT SUM\\(p\\.rows\\) as RowCount FROM sys\\.partitions p WHERE object_id IN \\(SELECT object_id FROM sys\\.tables\\) AND p\\.index_id < 2' -Database 'PerfTestDb' -Encrypt Optional -TrustServerCertificate 2>&1\nWrite-Host 'Total rows: ' \\+ `\\$result\\[0\\]\\.RowCount -ForegroundColor Green\n\"@$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^cd d:\\\\Export-SqlServerSchema\\\\tests; Write-Host \"Cleaning up previous test artifacts\\.\\.\\.\" -ForegroundColor Yellow; sqlcmd -S localhost -U sa -P Test@1234 -Q \"DROP DATABASE IF EXISTS PerfTestDb; DROP DATABASE IF EXISTS PerfTestDb_Restored;\" -b 2>&1 \\| Out-Null; Write-Host \"Starting performance test\\.\\.\\.\" -ForegroundColor Cyan; & \"d:\\\\Export-SqlServerSchema\\\\tests\\\\run-perf-test\\.ps1\"$/": {
+            "approve": true,
+            "matchCommandLine": true
+        }
     }
 }
