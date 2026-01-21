@@ -88,10 +88,10 @@ Write-Host "Import completed in $($importDuration.TotalMinutes) minutes"
 ### Tables
 
 Each table includes:
-- **Primary Key**: Identity column (Id)
-- **Unique Index**: On Code column
-- **Non-clustered Index**: On Status with included columns
-- **Filtered Index**: On CreatedDate and Category where IsActive = 1
+- **Primary Key (Clustered)**: Clustered primary key on identity column (Id)
+- **Unique Index**: Unique index on Code column
+- **Non-clustered Index**: Non-clustered index on Status with Name and Amount as included columns
+- **Filtered Index**: Filtered non-clustered index on CreatedDate where IsActive = 1
 
 Columns:
 - `Id` - Identity primary key
