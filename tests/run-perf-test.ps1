@@ -6,7 +6,7 @@
     
 .DESCRIPTION
     This script:
-    1. Creates the performance test database from create-perf-test-db.sql
+    1. Creates the performance test database from create-perf-test-db-simplified.sql
     2. Exports it using Export-SqlServerSchema.ps1 with timing metrics
     3. Imports to a new database using Import-SqlServerSchema.ps1 with timing metrics
     4. Verifies object counts match between source and target
