@@ -220,6 +220,7 @@ BEGIN
     WHILE @procNum <= 50
     BEGIN
         DECLARE @procName NVARCHAR(100) = @schemaName + '.usp_GetData' + CAST(@procNum AS NVARCHAR(10));
+        -- Map procedure to table using modulo to cycle through 50 tables per schema
         DECLARE @tableName NVARCHAR(100) = @schemaName + '.Table' + CAST((((@procNum - 1) % 50) + 1) AS NVARCHAR(10));
         DECLARE @sql NVARCHAR(MAX);
         
@@ -351,6 +352,7 @@ BEGIN
     WHILE @viewNum <= 20
     BEGIN
         DECLARE @viewName NVARCHAR(100) = @schemaName + '.vw_Summary' + CAST(@viewNum AS NVARCHAR(10));
+        -- Map view to table using modulo to cycle through 50 tables per schema
         DECLARE @tableName NVARCHAR(100) = @schemaName + '.Table' + CAST((((@viewNum - 1) % 50) + 1) AS NVARCHAR(10));
         DECLARE @sql NVARCHAR(MAX);
         
@@ -514,6 +516,7 @@ BEGIN
     WHILE @tvfNum <= 10
     BEGIN
         DECLARE @funcName NVARCHAR(100) = @schemaName + '.fn_GetTopItems' + CAST(@tvfNum AS NVARCHAR(10));
+        -- Map function to table using modulo to cycle through 50 tables per schema
         DECLARE @tableName NVARCHAR(100) = @schemaName + '.Table' + CAST((((@tvfNum - 1) % 50) + 1) AS NVARCHAR(10));
         DECLARE @sql NVARCHAR(MAX);
         
@@ -591,6 +594,7 @@ BEGIN
     WHILE @trigNum <= 10
     BEGIN
         DECLARE @triggerName NVARCHAR(100) = @schemaName + '.trg_AuditTable' + CAST(@trigNum AS NVARCHAR(10));
+        -- Map trigger to table using modulo to cycle through 50 tables per schema
         DECLARE @tableName NVARCHAR(100) = @schemaName + '.Table' + CAST((((@trigNum - 1) % 50) + 1) AS NVARCHAR(10));
         DECLARE @sql NVARCHAR(MAX);
         
@@ -624,8 +628,7 @@ BEGIN
                 -- Validate data on insert
                 IF EXISTS (SELECT 1 FROM inserted WHERE Amount < 0)
                 BEGIN
-                    RAISERROR(''Amount cannot be negative'', 16, 1);
-                    ROLLBACK TRANSACTION;
+                    THROW 50001, ''Amount cannot be negative'', 1;
                 END
             END';
         END

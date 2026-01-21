@@ -16,8 +16,10 @@ $validationErrors = @()
 $validationWarnings = @()
 
 # Check for balanced BEGIN/END blocks (only outside of string literals - approximate check)
-# This is a simplified check - a full parser would be needed for 100% accuracy
-# We'll just warn instead of error since dynamic SQL makes this complex
+# NOTE: This validation has known limitations:
+# - It counts BEGIN/END in comments and string literals (false positives)
+# - Dynamic SQL makes exact parsing difficult without a full SQL parser
+# - A mismatch is common and acceptable with heavy use of dynamic SQL
 $beginCount = ([regex]::Matches($sqlContent, '\bBEGIN\b', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)).Count
 $endCount = ([regex]::Matches($sqlContent, '\bEND\b', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)).Count
 if ($beginCount -ne $endCount) {
