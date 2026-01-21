@@ -1,9 +1,9 @@
 #!/usr/bin/env pwsh
-# Simple validation script to check SQL syntax in create-perf-test-db.sql
+# Simple validation script to check SQL syntax in create-perf-test-db-simplified.sql
 # This doesn't run the SQL but does basic parsing validation
 
 param(
-    [string]$SqlFile = "create-perf-test-db.sql"
+    [string]$SqlFile = "create-perf-test-db-simplified.sql"
 )
 
 Write-Host "[INFO] Validating SQL syntax in $SqlFile..." -ForegroundColor Cyan
