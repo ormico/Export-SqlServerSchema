@@ -166,6 +166,8 @@ DbScripts/
 | `-IncludeData` | No | Export table data as INSERT statements |
 | `-Credential` | No | SQL authentication credentials |
 | `-TargetSqlVersion` | No | Target SQL version (default: Sql2022) |
+| `-IncludeObjectTypes` | No | Whitelist: Only export specified types (e.g., Tables,Views) |
+| `-ExcludeObjectTypes` | No | Blacklist: Export all except specified types (e.g., Data) |
 | `-ConnectionTimeout` | No | Connection timeout in seconds (default: 0 = use config/30) |
 | `-CommandTimeout` | No | Command timeout in seconds (default: 0 = use config/300) |
 | `-MaxRetries` | No | Max retry attempts for transient failures (default: 0 = use config/3) |
@@ -183,8 +185,9 @@ DbScripts/
 | `-ConfigFile` | No | Path to YAML configuration file |
 | `-CreateDatabase` | No | Create database if it doesn't exist |
 | `-IncludeData` | No | Import data from 21_Data folder |
+| `-IncludeObjectTypes` | No | Whitelist: Only import specified types (e.g., Schemas,Tables,Views) |
 | `-Credential` | No | SQL authentication credentials |
-| `-Force` | No | Skip existing schema check |
+| `-Force` | No | Skip existing schema check (required for multi-pass imports) |
 | `-ContinueOnError` | No | Continue on script errors |
 | `-ConnectionTimeout` | No | Connection timeout in seconds (default: 0 = use config/30) |
 | `-CommandTimeout` | No | Command timeout in seconds (default: 0 = use config/300) |
@@ -211,6 +214,109 @@ DbScripts/
 - Full fidelity deployment for staging/production
 
 **Selective Overrides**: Command-line parameters override mode defaults and config file settings.
+
+## Selective Object Type Filtering
+
+Both Export and Import scripts support filtering which object types to process via command-line parameters.
+
+### Export Filtering
+
+**Whitelist mode** (`-IncludeObjectTypes`): Only export specified types
+```powershell
+# Export only Tables
+./Export-SqlServerSchema.ps1 -Server localhost -Database MyDb -IncludeObjectTypes Tables
+
+# Export Tables and Views
+./Export-SqlServerSchema.ps1 -Server localhost -Database MyDb -IncludeObjectTypes Tables,Views
+```
+
+**Blacklist mode** (`-ExcludeObjectTypes`): Export everything except specified types
+```powershell
+# Export everything except Data
+./Export-SqlServerSchema.ps1 -Server localhost -Database MyDb -ExcludeObjectTypes Data
+
+# Export everything except Security objects
+./Export-SqlServerSchema.ps1 -Server localhost -Database MyDb -ExcludeObjectTypes DatabaseRoles,DatabaseUsers
+```
+
+### Import Filtering
+
+**Whitelist mode** (`-IncludeObjectTypes`): Only import specified types
+```powershell
+# Import only Schemas and Tables (fresh database, no -Force needed)
+./Import-SqlServerSchema.ps1 -Server localhost -Database MyDb -SourcePath ./DbScripts/... `
+    -IncludeObjectTypes Schemas,Tables
+
+# Import only Views (database already has objects, -Force skips safety check)
+./Import-SqlServerSchema.ps1 -Server localhost -Database MyDb -SourcePath ./DbScripts/... `
+    -IncludeObjectTypes Views -Force
+```
+
+**Why `-Force`?** The Import script checks if the database already contains objects and stops to prevent accidental overwrites. When doing selective imports to an existing database, use `-Force` to bypass this check.
+
+### Multi-Pass Import with -Force Flag
+
+When importing in multiple passes (e.g., structure first, then programmability), the `-Force` flag is **required** for subsequent passes:
+
+```powershell
+# PASS 1: Import base structure (empty database)
+./Import-SqlServerSchema.ps1 -Server localhost -Database MyDb -SourcePath ./DbScripts/... `
+    -IncludeObjectTypes Schemas,Tables,Types -CreateDatabase
+
+# PASS 2: Import programmability (requires -Force since database now has objects)
+./Import-SqlServerSchema.ps1 -Server localhost -Database MyDb -SourcePath ./DbScripts/... `
+    -IncludeObjectTypes Functions,Views,StoredProcedures -Force
+```
+
+**Understanding -Force**: The Import script has a safety check that stops if the target database already contains objects (tables, views, etc.). This prevents accidental overwrites. After PASS 1 creates tables, PASS 2 would fail this check without `-Force`.
+
+| Scenario | Need `-Force`? |
+|----------|----------------|
+| Fresh import to empty database | No |
+| Multi-pass import (after first pass) | **Yes** |
+| Re-deploying to existing database | **Yes** |
+| Incremental updates | **Yes** |
+
+**Note**: `-Force` is unrelated to dependency retry logic, which runs automatically to resolve Function→View→Function dependencies.
+
+### Supported Object Types
+
+| Object Type | Export | Import | Notes |
+|-------------|--------|--------|-------|
+| FileGroups | Yes | Yes | |
+| DatabaseConfiguration | Yes | Yes | |
+| Schemas | Yes | Yes | |
+| Sequences | Yes | Yes | |
+| PartitionFunctions | Yes | Yes | |
+| PartitionSchemes | Yes | Yes | |
+| Types | Yes | Yes | UserDefinedTypes |
+| XmlSchemaCollections | Yes | Yes | |
+| Tables | Yes | Yes | Includes PKs and FKs |
+| ForeignKeys | Yes | Yes | |
+| Indexes | Yes | Yes | |
+| Defaults | Yes | Yes | |
+| Rules | Yes | Yes | |
+| Programmability | Yes | Yes | All programmability objects |
+| Views | Yes | Yes | Granular (subfolder of Programmability) |
+| Functions | Yes | Yes | Granular (subfolder of Programmability) |
+| StoredProcedures | Yes | Yes | Granular (subfolder of Programmability) |
+| Synonyms | Yes | Yes | |
+| SearchPropertyLists | Yes | Yes | |
+| PlanGuides | Yes | Yes | |
+| DatabaseRoles | Yes | Yes | |
+| DatabaseUsers | Yes | Yes | |
+| SecurityPolicies | Yes | Yes | |
+| Data | Yes | Yes | Requires -IncludeData for import |
+
+**Note**: When using granular types (Views, Functions, StoredProcedures), the scripts filter at the subfolder level within 14_Programmability. When using "Programmability", all programmability objects are included.
+
+### Important Considerations
+
+1. **Object Dependencies**: Selective import may fail if dependent objects are missing. For example, importing Views without their dependent Tables or Functions will fail.
+
+2. **Command-line overrides config**: `-IncludeObjectTypes` and `-ExcludeObjectTypes` parameters override any corresponding settings in the YAML config file.
+
+3. **Whitelist vs Blacklist**: You cannot use both `-IncludeObjectTypes` and `-ExcludeObjectTypes` simultaneously. Use whitelist for specific subsets, blacklist for exclusions.
 
 ### FileGroup Strategy Examples
 

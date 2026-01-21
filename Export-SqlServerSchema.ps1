@@ -93,7 +93,27 @@ param(
     [int]$RetryDelaySeconds = 0,
     
     [Parameter(HelpMessage = 'Collect performance metrics for analysis')]
-    [switch]$CollectMetrics
+    [switch]$CollectMetrics,
+    
+    [Parameter(HelpMessage = 'Include only specific object types (overrides config file). Example: Tables,Views,StoredProcedures')]
+    [ValidateSet('FileGroups', 'DatabaseScopedConfigurations', 'DatabaseScopedCredentials', 'Schemas', 'Sequences', 
+                 'PartitionFunctions', 'PartitionSchemes', 'UserDefinedTypes', 'XmlSchemaCollections', 'Tables', 
+                 'ForeignKeys', 'Indexes', 'Defaults', 'Rules', 'Assemblies', 'DatabaseTriggers', 'TableTriggers', 
+                 'Functions', 'UserDefinedAggregates', 'StoredProcedures', 'Views', 'Synonyms', 'FullTextCatalogs', 
+                 'FullTextStopLists', 'SearchPropertyLists', 'ExternalDataSources', 'ExternalFileFormats', 
+                 'DatabaseRoles', 'DatabaseUsers', 'Certificates', 'AsymmetricKeys', 'SymmetricKeys', 
+                 'SecurityPolicies', 'PlanGuides', 'Data')]
+    [string[]]$IncludeObjectTypes,
+    
+    [Parameter(HelpMessage = 'Exclude specific object types (overrides config file). Example: Data,SecurityPolicies')]
+    [ValidateSet('FileGroups', 'DatabaseScopedConfigurations', 'DatabaseScopedCredentials', 'Schemas', 'Sequences', 
+                 'PartitionFunctions', 'PartitionSchemes', 'UserDefinedTypes', 'XmlSchemaCollections', 'Tables', 
+                 'ForeignKeys', 'Indexes', 'Defaults', 'Rules', 'Assemblies', 'DatabaseTriggers', 'TableTriggers', 
+                 'Functions', 'UserDefinedAggregates', 'StoredProcedures', 'Views', 'Synonyms', 'FullTextCatalogs', 
+                 'FullTextStopLists', 'SearchPropertyLists', 'ExternalDataSources', 'ExternalFileFormats', 
+                 'DatabaseRoles', 'DatabaseUsers', 'Certificates', 'AsymmetricKeys', 'SymmetricKeys', 
+                 'SecurityPolicies', 'PlanGuides', 'Data')]
+    [string[]]$ExcludeObjectTypes
 )
 
 $ErrorActionPreference = 'Stop'
@@ -790,8 +810,23 @@ function Import-YamlConfig {
         if (-not $config.export) {
             $config.export = @{}
         }
+        if (-not $config.export.includeObjectTypes) {
+            $config.export.includeObjectTypes = @()
+        }
         if (-not $config.export.excludeObjectTypes) {
             $config.export.excludeObjectTypes = @()
+        }
+        
+        # Command-line IncludeObjectTypes overrides config file
+        if ($IncludeObjectTypes -and $IncludeObjectTypes.Count -gt 0) {
+            $config.export.includeObjectTypes = $IncludeObjectTypes
+            Write-Verbose "Command-line override: IncludeObjectTypes = $($IncludeObjectTypes -join ', ')"
+        }
+        
+        # Command-line ExcludeObjectTypes overrides config file
+        if ($ExcludeObjectTypes -and $ExcludeObjectTypes.Count -gt 0) {
+            $config.export.excludeObjectTypes = $ExcludeObjectTypes
+            Write-Verbose "Command-line override: ExcludeObjectTypes = $($ExcludeObjectTypes -join ', ')"
         }
         if (-not $config.export.ContainsKey('includeData')) {
             $config.export.includeData = $false
@@ -847,8 +882,11 @@ function Show-ExportConfiguration {
     Write-Host "Include Data: " -NoNewline -ForegroundColor Gray
     Write-Host $(if ($DataExport) { "Yes" } else { "No" }) -ForegroundColor White
     
-    # Show excluded object types if any
-    if ($Config.export -and $Config.export.excludeObjectTypes -and $Config.export.excludeObjectTypes.Count -gt 0) {
+    # Show included/excluded object types
+    if ($Config.export -and $Config.export.includeObjectTypes -and $Config.export.includeObjectTypes.Count -gt 0) {
+        Write-Host "Included Object Types (whitelist): " -NoNewline -ForegroundColor Gray
+        Write-Host ($Config.export.includeObjectTypes -join ", ") -ForegroundColor Cyan
+    } elseif ($Config.export -and $Config.export.excludeObjectTypes -and $Config.export.excludeObjectTypes.Count -gt 0) {
         Write-Host "Excluded Object Types: " -NoNewline -ForegroundColor Gray
         Write-Host ($Config.export.excludeObjectTypes -join ", ") -ForegroundColor Yellow
     } else {
@@ -865,10 +903,14 @@ function Show-ExportConfiguration {
     Write-Host ""
     Write-Host "EXPORT STRATEGY" -ForegroundColor Yellow
     Write-Host "---------------" -ForegroundColor Yellow
-    Write-Host "[ENABLED] All object types exported by default" -ForegroundColor Green
     
-    if ($Config.export -and $Config.export.excludeObjectTypes -and $Config.export.excludeObjectTypes.Count -gt 0) {
+    if ($Config.export -and $Config.export.includeObjectTypes -and $Config.export.includeObjectTypes.Count -gt 0) {
+        Write-Host "[INCLUDE ONLY] $($Config.export.includeObjectTypes -join ', ')" -ForegroundColor Cyan
+    } elseif ($Config.export -and $Config.export.excludeObjectTypes -and $Config.export.excludeObjectTypes.Count -gt 0) {
+        Write-Host "[ENABLED] All object types exported by default" -ForegroundColor Green
         Write-Host "[EXCLUDED] $($Config.export.excludeObjectTypes -join ', ')" -ForegroundColor Yellow
+    } else {
+        Write-Host "[ENABLED] All object types exported by default" -ForegroundColor Green
     }
     
     if ($DataExport) {
@@ -945,6 +987,9 @@ function Test-ObjectTypeExcluded {
     <#
     .SYNOPSIS
         Checks if an object type should be excluded from export based on configuration.
+    .DESCRIPTION
+        If includeObjectTypes is specified, only those types are exported (whitelist).
+        Otherwise, excludeObjectTypes acts as a blacklist.
     #>
     param(
         [Parameter(Mandatory=$true)]
@@ -952,8 +997,16 @@ function Test-ObjectTypeExcluded {
     )
     
     # Use script-level $Config variable
-    if ($script:Config -and $script:Config.export -and $script:Config.export.excludeObjectTypes) {
-        return $script:Config.export.excludeObjectTypes -contains $ObjectType
+    if ($script:Config -and $script:Config.export) {
+        # If includeObjectTypes is specified, it acts as a whitelist
+        if ($script:Config.export.includeObjectTypes -and $script:Config.export.includeObjectTypes.Count -gt 0) {
+            return -not ($script:Config.export.includeObjectTypes -contains $ObjectType)
+        }
+        
+        # Otherwise, use excludeObjectTypes as a blacklist
+        if ($script:Config.export.excludeObjectTypes) {
+            return $script:Config.export.excludeObjectTypes -contains $ObjectType
+        }
     }
     
     return $false
@@ -3925,7 +3978,7 @@ try {
     }
     
     # Load configuration if provided
-    $config = @{ export = @{ excludeObjectTypes = @(); includeData = $false; excludeObjects = @() } }
+    $config = @{ export = @{ includeObjectTypes = @(); excludeObjectTypes = @(); includeData = $false; excludeObjects = @() } }
     $configSource = "None (using defaults)"
     
     if ($ConfigFile) {
@@ -3942,6 +3995,17 @@ try {
             Write-Warning "Config file not found: $ConfigFile"
             Write-Warning "Continuing with default settings..."
         }
+    }
+    
+    # Apply command-line overrides for object type filtering (when no config file or to override config)
+    if ($IncludeObjectTypes -and $IncludeObjectTypes.Count -gt 0) {
+        $config.export.includeObjectTypes = $IncludeObjectTypes
+        Write-Verbose "Command-line override: IncludeObjectTypes = $($IncludeObjectTypes -join ', ')"
+    }
+    
+    if ($ExcludeObjectTypes -and $ExcludeObjectTypes.Count -gt 0) {
+        $config.export.excludeObjectTypes = $ExcludeObjectTypes
+        Write-Verbose "Command-line override: ExcludeObjectTypes = $($ExcludeObjectTypes -join ', ')"
     }
     
     # Apply timeout settings from config or use defaults

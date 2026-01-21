@@ -129,11 +129,21 @@ param(
     [int]$RetryDelaySeconds = 0,
     
     [Parameter(HelpMessage = 'Collect performance metrics and save to JSON file')]
-    [switch]$CollectMetrics
+    [switch]$CollectMetrics,
+    
+    [Parameter(HelpMessage = 'Include only specific object types (overrides config file). Example: Tables,Views,StoredProcedures')]
+    [ValidateSet('FileGroups', 'DatabaseConfiguration', 'Schemas', 'Sequences', 'PartitionFunctions', 'PartitionSchemes', 
+                 'Types', 'XmlSchemaCollections', 'Tables', 'ForeignKeys', 'Indexes', 'Defaults', 'Rules', 
+                 'Programmability', 'Views', 'Functions', 'StoredProcedures', 'Synonyms', 'SearchPropertyLists', 
+                 'PlanGuides', 'DatabaseRoles', 'DatabaseUsers', 'SecurityPolicies', 'Data')]
+    [string[]]$IncludeObjectTypes
 )
 
 $ErrorActionPreference = if ($ContinueOnError) { 'Continue' } else { 'Stop' }
 $script:LogFile = $null  # Will be set during import
+
+# Store IncludeObjectTypes parameter at script level for use in Get-ScriptFiles
+$script:IncludeObjectTypesFilter = $IncludeObjectTypes
 
 # Performance metrics tracking (when -CollectMetrics is used)
 $script:Metrics = @{
@@ -1219,6 +1229,89 @@ function Get-ScriptFiles {
         Write-Verbose "Skipping 21_Data (IncludeData=$IncludeData)"
     }
     
+    # Initialize subfolder paths array (used when filtering granular types like Views, Functions, StoredProcedures)
+    $subfolderPaths = @()
+    
+    # Apply IncludeObjectTypes filter if specified (command-line parameter)
+    if ($script:IncludeObjectTypesFilter -and $script:IncludeObjectTypesFilter.Count -gt 0) {
+        Write-Verbose "Applying IncludeObjectTypes filter: $($script:IncludeObjectTypesFilter -join ', ')"
+        
+        # Map object type names to folder names (and subfolders for granular types)
+        $folderMap = @{
+            'FileGroups' = '00_FileGroups'
+            'DatabaseConfiguration' = '02_DatabaseConfiguration'
+            'Schemas' = '03_Schemas'
+            'Sequences' = '04_Sequences'
+            'PartitionFunctions' = '05_PartitionFunctions'
+            'PartitionSchemes' = '06_PartitionSchemes'
+            'Types' = '07_Types'
+            'XmlSchemaCollections' = '08_XmlSchemaCollections'
+            'Tables' = @('09_Tables_PrimaryKey', '10_Tables_ForeignKeys')
+            'ForeignKeys' = '10_Tables_ForeignKeys'
+            'Indexes' = '11_Indexes'
+            'Defaults' = '12_Defaults'
+            'Rules' = '13_Rules'
+            'Programmability' = '14_Programmability'
+            'Views' = '14_Programmability\05_Views'  # Subfolder path
+            'Functions' = '14_Programmability\02_Functions'  # Subfolder path
+            'StoredProcedures' = '14_Programmability\03_StoredProcedures'  # Subfolder path
+            'Synonyms' = '15_Synonyms'
+            'SearchPropertyLists' = '18_SearchPropertyLists'
+            'PlanGuides' = '19_PlanGuides'
+            'DatabaseRoles' = '01_Security'
+            'DatabaseUsers' = '01_Security'
+            'SecurityPolicies' = '20_SecurityPolicies'
+            'Data' = '21_Data'
+        }
+        
+        $filteredDirs = @()
+        # Always include Security if any security-related types are included
+        $needsSecurity = ($script:IncludeObjectTypesFilter -contains 'DatabaseRoles') -or 
+                         ($script:IncludeObjectTypesFilter -contains 'DatabaseUsers')
+        
+        foreach ($objType in $script:IncludeObjectTypesFilter) {
+            if ($folderMap.ContainsKey($objType)) {
+                $folders = $folderMap[$objType]
+                if ($folders -is [array]) {
+                    $filteredDirs += $folders
+                } else {
+                    $filteredDirs += $folders
+                }
+            }
+        }
+        
+        # Remove duplicates and separate top-level folders from subfolders
+        $filteredDirs = $filteredDirs | Select-Object -Unique
+        $topLevelDirs = @()
+        $subfolderPaths = @()
+        
+        foreach ($dir in $filteredDirs) {
+            if ($dir -match '\\') {
+                # This is a subfolder path (e.g., "14_Programmability\05_Views")
+                $subfolderPaths += $dir
+                $topLevel = $dir.Split('\')[0]
+                if ($topLevel -notin $topLevelDirs) {
+                    $topLevelDirs += $topLevel
+                }
+            } else {
+                # This is a top-level folder
+                $topLevelDirs += $dir
+            }
+        }
+        
+        # Also include 01_Security if DatabaseRoles or DatabaseUsers are included
+        if ($needsSecurity -and '01_Security' -notin $topLevelDirs) {
+            $topLevelDirs += '01_Security'
+        }
+        
+        # Filter orderedDirs to only include top-level folders that are needed
+        $orderedDirs = $orderedDirs | Where-Object { $_ -in $topLevelDirs }
+        Write-Verbose "Filtered top-level folders: $($orderedDirs -join ', ')"
+        if ($subfolderPaths.Count -gt 0) {
+            Write-Verbose "Subfolder filters: $($subfolderPaths -join ', ')"
+        }
+    }
+    
     $scripts = @()
     $skippedFolders = @()
     
@@ -1231,8 +1324,23 @@ function Get-ScriptFiles {
                 continue
             }
             
-            $scripts += @(Get-ChildItem -Path $fullPath -Filter '*.sql' -Recurse | 
-                Sort-Object FullName)
+            # Check if we have subfolder filters for this directory
+            $relevantSubfolders = @($subfolderPaths | Where-Object { $_.StartsWith("$dir\") })
+            
+            if ($relevantSubfolders.Count -gt 0) {
+                # Only get files from specific subfolders
+                foreach ($subfolderPath in $relevantSubfolders) {
+                    $subfolderFullPath = Join-Path $Path $subfolderPath
+                    if (Test-Path $subfolderFullPath) {
+                        $scripts += @(Get-ChildItem -Path $subfolderFullPath -Filter '*.sql' -Recurse | 
+                            Sort-Object FullName)
+                    }
+                }
+            } else {
+                # No subfolder filter - get all SQL files recursively from this folder
+                $scripts += @(Get-ChildItem -Path $fullPath -Filter '*.sql' -Recurse | 
+                    Sort-Object FullName)
+            }
         }
     }
     

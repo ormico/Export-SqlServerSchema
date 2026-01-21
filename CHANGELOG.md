@@ -10,6 +10,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+**Selective Object Type Filtering via Command-Line**
+- New `-IncludeObjectTypes` parameter for Export script (whitelist mode)
+- New `-ExcludeObjectTypes` parameter for Export script (blacklist mode)
+- New `-IncludeObjectTypes` parameter for Import script (whitelist mode)
+- Granular programmability type filtering: Views, Functions, StoredProcedures filter at subfolder level
+- Coarse programmability filtering: "Programmability" imports entire folder
+- Command-line parameters override YAML config file settings
+- Supports 23 object types for fine-grained control over export/import operations
+- Integration tests validate filtering for Tables, Views, Functions, StoredProcedures
+- See README.md "Selective Object Type Filtering" section for usage examples
+
+**Multi-Pass Import Support**
+- `-Force` flag enables multi-pass import workflows
+- First pass imports base structure (Schemas, Tables, Types)
+- Subsequent passes add dependent objects (Functions, Views, Procedures)
+- Required when database already contains schema objects from previous pass
+- Documented in README.md with examples
+
 **Dependency Retry Logic for Programmability Objects**
 - Automatic handling of cross-type dependencies in Functions, StoredProcedures, and Views
 - Multi-pass retry algorithm executes programmability objects up to 10 times (configurable) to resolve dependencies

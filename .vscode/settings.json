@@ -51,6 +51,7 @@
         "/^cd \\.\\\\tests; Write-Host \"Cleaning up previous test artifacts\\.\\.\\.\" -ForegroundColor Yellow; sqlcmd -S localhost -U sa -P Test@1234 -Q \"DROP DATABASE IF EXISTS PerfTestDb; DROP DATABASE IF EXISTS PerfTestDb_Restored;\" -b 2>&1 \\| Out-Null; Write-Host \"Starting performance test\\.\\.\\.\" -ForegroundColor Cyan; & \".\\\\tests\\\\run-perf-test\\.ps1\"$/": {
             "approve": true,
             "matchCommandLine": true
-        }
+        },
+        ".\\test-selective-object-types.ps1": true
     }
 }
