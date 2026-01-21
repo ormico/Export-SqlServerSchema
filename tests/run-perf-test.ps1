@@ -12,8 +12,28 @@
     4. Verifies object counts match between source and target
     5. Reports detailed performance metrics
     
+.PARAMETER ConfigFile
+    Path to .env configuration file (default: .env in script directory)
+
+.PARAMETER ExportConfigYaml
+    Path to YAML config file for export (for testing different groupBy modes)
+
+.PARAMETER SkipDatabaseSetup
+    Skip database creation/population if PerfTestDb already exists with data
+
+.PARAMETER CleanupOnly
+    Only clean up test databases without running tests
+    
 .EXAMPLE
     ./run-perf-test.ps1
+    
+.EXAMPLE
+    # Run with specific groupBy config
+    ./run-perf-test.ps1 -ExportConfigYaml ./test-groupby-all.yml
+    
+.EXAMPLE
+    # Reuse existing test database
+    ./run-perf-test.ps1 -SkipDatabaseSetup -ExportConfigYaml ./test-groupby-schema.yml
     
 .NOTES
     Prerequisites:
@@ -23,7 +43,10 @@
 #>
 
 param(
-    [string]$ConfigFile
+    [string]$ConfigFile,
+    [string]$ExportConfigYaml,
+    [switch]$SkipDatabaseSetup,
+    [switch]$CleanupOnly
 )
 
 # Determine the config file location
@@ -152,6 +175,44 @@ function Get-DatabaseStats {
     }
 }
 
+# Helper function to check if database exists and has data
+function Test-DatabaseExists {
+    param([string]$Database)
+    
+    try {
+        $result = Invoke-SqlCommand "SELECT DB_ID('$Database') AS DbId" "master"
+        return ($null -ne $result.DbId)
+    } catch {
+        return $false
+    }
+}
+
+# Helper function to force close connections and drop database
+function Remove-TestDatabase {
+    param([string]$Database)
+    
+    try {
+        # Set to single user to kill all connections, then drop
+        $sql = @"
+IF EXISTS (SELECT 1 FROM sys.databases WHERE name = '$Database')
+BEGIN
+    ALTER DATABASE [$Database] SET SINGLE_USER WITH ROLLBACK IMMEDIATE;
+    DROP DATABASE [$Database];
+END
+"@
+        $null = Invoke-SqlCommand $sql "master"
+        return $true
+    } catch {
+        # Try simple drop if alter fails
+        try {
+            $null = Invoke-SqlCommand "DROP DATABASE IF EXISTS [$Database]" "master"
+            return $true
+        } catch {
+            return $false
+        }
+    }
+}
+
 try {
     # Step 1: Wait for SQL Server
     Write-TestStep "Step 1: Checking SQL Server availability..." -Type Info
@@ -177,25 +238,49 @@ try {
         throw "Failed to connect to SQL Server after $maxAttempts attempts"
     }
     
-    # Step 2: Drop existing databases
-    Write-TestStep "Step 2: Cleaning up previous test databases..." -Type Info
-    try {
-        $null = Invoke-SqlCommand "DROP DATABASE IF EXISTS $SourceDatabase" "master"
-        Write-Host "  Dropped $SourceDatabase" -ForegroundColor Gray
-    } catch {
-        # Ignore if doesn't exist
+    # Step 2: Auto-cleanup - Check and drop existing databases
+    Write-TestStep "Step 2: Auto-cleanup - checking for existing test databases..." -Type Info
+    
+    $sourceExists = Test-DatabaseExists $SourceDatabase
+    $targetExists = Test-DatabaseExists $TargetDatabase
+    
+    if ($sourceExists) {
+        Write-Host "  Found existing $SourceDatabase - dropping..." -ForegroundColor Yellow
+        if (Remove-TestDatabase $SourceDatabase) {
+            Write-Host "  Dropped $SourceDatabase" -ForegroundColor Gray
+        } else {
+            throw "Failed to drop existing $SourceDatabase"
+        }
+    } else {
+        Write-Host "  $SourceDatabase does not exist" -ForegroundColor Gray
     }
     
-    try {
-        $null = Invoke-SqlCommand "DROP DATABASE IF EXISTS $TargetDatabase" "master"
-        Write-Host "  Dropped $TargetDatabase" -ForegroundColor Gray
-    } catch {
-        # Ignore if doesn't exist
+    if ($targetExists) {
+        Write-Host "  Found existing $TargetDatabase - dropping..." -ForegroundColor Yellow
+        if (Remove-TestDatabase $TargetDatabase) {
+            Write-Host "  Dropped $TargetDatabase" -ForegroundColor Gray
+        } else {
+            throw "Failed to drop existing $TargetDatabase"
+        }
+    } else {
+        Write-Host "  $TargetDatabase does not exist" -ForegroundColor Gray
+    }
+    
+    # Handle CleanupOnly mode
+    if ($CleanupOnly) {
+        Write-TestStep "Cleanup completed. Exiting (CleanupOnly mode)." -Type Success
+        exit 0
     }
     
     Start-Sleep -Seconds 2
     
-    # Step 3: Create source database
+    # Step 3: Create source database (skip if SkipDatabaseSetup and it exists with data)
+    $skipSetup = $false
+    if ($SkipDatabaseSetup) {
+        # Re-check after cleanup - database was dropped, so we can't skip
+        Write-TestStep "Note: -SkipDatabaseSetup specified but database was cleaned up. Creating fresh database." -Type Warning
+    }
+    
     Write-TestStep "Step 3: Creating source performance test database..." -Type Info
     $null = Invoke-SqlCommand "CREATE DATABASE $SourceDatabase" "master"
     Write-Host "  Database created" -ForegroundColor Gray
@@ -284,7 +369,22 @@ try {
     $credential = New-Object System.Management.Automation.PSCredential($Username, $securePassword)
     
     # Run export with metrics collection
-    & $ExportScript -Server $TEST_SERVER -Database $SourceDatabase -OutputPath $ExportPath -IncludeData -Credential $credential -CollectMetrics
+    $exportArgs = @{
+        Server = $TEST_SERVER
+        Database = $SourceDatabase
+        OutputPath = $ExportPath
+        IncludeData = $true
+        Credential = $credential
+        CollectMetrics = $true
+    }
+    
+    # Add config file if specified (for groupBy testing)
+    if ($ExportConfigYaml) {
+        $exportArgs.ConfigFile = $ExportConfigYaml
+        Write-Host "  Using config: $ExportConfigYaml" -ForegroundColor Cyan
+    }
+    
+    & $ExportScript @exportArgs
     
     $exportDuration = (Get-Date) - $exportStart
     
@@ -369,6 +469,12 @@ try {
     Write-Host "═══════════════════════════════════════════════" -ForegroundColor Cyan
     
     Write-Host ""
+    if ($ExportConfigYaml) {
+        $configName = Split-Path $ExportConfigYaml -Leaf
+        Write-Host "Test Configuration: $configName" -ForegroundColor Magenta
+        Write-Host ""
+    }
+    
     Write-Host "Database Setup:" -ForegroundColor Yellow
     Write-Host "  Population Time: $([math]::Round($scriptDuration.TotalSeconds, 2))s" -ForegroundColor White
     
@@ -387,6 +493,28 @@ try {
     Write-Host "Total Round-Trip Time:" -ForegroundColor Yellow
     $totalDuration = $exportDuration + $importDuration
     Write-Host "  Export + Import: $([math]::Round($totalDuration.TotalSeconds, 2))s" -ForegroundColor White
+    
+    # Save metrics to JSON for comparison
+    $metricsResult = @{
+        Timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+        ConfigFile = if ($ExportConfigYaml) { Split-Path $ExportConfigYaml -Leaf } else { "default (single)" }
+        DatabasePopulationSeconds = [math]::Round($scriptDuration.TotalSeconds, 2)
+        ExportDurationSeconds = [math]::Round($exportDuration.TotalSeconds, 2)
+        ExportFilesGenerated = $exportedFiles
+        ExportRowsPerSecond = [math]::Round($sourceStats.Rows / $exportDuration.TotalSeconds, 0)
+        ImportDurationSeconds = [math]::Round($importDuration.TotalSeconds, 2)
+        ImportRowsPerSecond = [math]::Round($targetStats.Rows / $importDuration.TotalSeconds, 0)
+        TotalRoundTripSeconds = [math]::Round($totalDuration.TotalSeconds, 2)
+        SourceStats = $sourceStats
+        TargetStats = $targetStats
+        AllObjectsMatch = $allMatch
+    }
+    
+    $metricsFileName = "perf-metrics-$(Get-Date -Format 'yyyyMMdd_HHmmss').json"
+    $metricsFilePath = Join-Path $PSScriptRoot $metricsFileName
+    $metricsResult | ConvertTo-Json -Depth 3 | Set-Content $metricsFilePath
+    Write-Host ""
+    Write-Host "Metrics saved to: $metricsFileName" -ForegroundColor Gray
     
     Write-Host ""
     Write-Host "═══════════════════════════════════════════════" -ForegroundColor Green

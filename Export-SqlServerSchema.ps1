@@ -1327,12 +1327,14 @@ function Export-DatabaseObjects {
             $fileName = Join-Path $OutputDir '03_Schemas' "001_AllSchemas.sql"
             Ensure-DirectoryExists $fileName
             $opts.FileName = $fileName
+            $opts.AppendToFile = $false  # Start fresh
             $Scripter.Options = $opts
             foreach ($schema in $schemas) {
                 $currentItem++
                 try {
                     Write-ObjectProgress -ObjectName $schema.Name -Current $currentItem -Total $schemas.Count
                     $Scripter.EnumScript($schema) | Out-Null
+                    $opts.AppendToFile = $true  # Append subsequent objects
                     Write-ObjectProgress -ObjectName $schema.Name -Current $currentItem -Total $schemas.Count -Success
                     $successCount++
                 } catch {
@@ -1394,12 +1396,14 @@ function Export-DatabaseObjects {
                 $fileName = Join-Path $OutputDir '04_Sequences' ("{0:D3}_{1}.sql" -f $schemaIndex, (Get-SafeFileName $schemaGroup.Name))
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
+                $opts.AppendToFile = $false  # Start fresh for each schema file
                 $Scripter.Options = $opts
                 foreach ($sequence in $schemaGroup.Group) {
                     $currentItem++
                     try {
                         Write-ObjectProgress -ObjectName "$($sequence.Schema).$($sequence.Name)" -Current $currentItem -Total $sequences.Count
                         $Scripter.EnumScript($sequence) | Out-Null
+                        $opts.AppendToFile = $true  # Append subsequent objects
                         Write-ObjectProgress -ObjectName "$($sequence.Schema).$($sequence.Name)" -Current $currentItem -Total $sequences.Count -Success
                         $successCount++
                     } catch {
@@ -1414,12 +1418,14 @@ function Export-DatabaseObjects {
             $fileName = Join-Path $OutputDir '04_Sequences' "001_AllSequences.sql"
             Ensure-DirectoryExists $fileName
             $opts.FileName = $fileName
+            $opts.AppendToFile = $false  # Start fresh
             $Scripter.Options = $opts
             foreach ($sequence in $sequences) {
                 $currentItem++
                 try {
                     Write-ObjectProgress -ObjectName "$($sequence.Schema).$($sequence.Name)" -Current $currentItem -Total $sequences.Count
                     $Scripter.EnumScript($sequence) | Out-Null
+                    $opts.AppendToFile = $true  # Append subsequent objects
                     Write-ObjectProgress -ObjectName "$($sequence.Schema).$($sequence.Name)" -Current $currentItem -Total $sequences.Count -Success
                     $successCount++
                 } catch {
@@ -1475,12 +1481,14 @@ function Export-DatabaseObjects {
             $fileName = Join-Path $OutputDir '05_PartitionFunctions' "001_AllPartitionFunctions.sql"
             Ensure-DirectoryExists $fileName
             $opts.FileName = $fileName
+            $opts.AppendToFile = $false  # Start fresh
             $Scripter.Options = $opts
             foreach ($pf in $partitionFunctions) {
                 $currentItem++
                 try {
                     Write-ObjectProgress -ObjectName $pf.Name -Current $currentItem -Total $partitionFunctions.Count
                     $Scripter.EnumScript($pf) | Out-Null
+                    $opts.AppendToFile = $true  # Append subsequent objects
                     Write-ObjectProgress -ObjectName $pf.Name -Current $currentItem -Total $partitionFunctions.Count -Success
                     $successCount++
                 } catch {
@@ -1536,12 +1544,14 @@ function Export-DatabaseObjects {
             $fileName = Join-Path $OutputDir '06_PartitionSchemes' "001_AllPartitionSchemes.sql"
             Ensure-DirectoryExists $fileName
             $opts.FileName = $fileName
+            $opts.AppendToFile = $false  # Start fresh
             $Scripter.Options = $opts
             foreach ($ps in $partitionSchemes) {
                 $currentItem++
                 try {
                     Write-ObjectProgress -ObjectName $ps.Name -Current $currentItem -Total $partitionSchemes.Count
                     $Scripter.EnumScript($ps) | Out-Null
+                    $opts.AppendToFile = $true  # Append subsequent objects
                     Write-ObjectProgress -ObjectName $ps.Name -Current $currentItem -Total $partitionSchemes.Count -Success
                     $successCount++
                 } catch {
@@ -1620,6 +1630,7 @@ function Export-DatabaseObjects {
                 $fileName = Join-Path $OutputDir '07_Types' ("{0:D3}_{1}.sql" -f $schemaIndex, (Get-SafeFileName $schemaGroup.Name))
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
+                $opts.AppendToFile = $false  # Start fresh for each schema file
                 $Scripter.Options = $opts
                 foreach ($type in $schemaGroup.Group) {
                     $currentItem++
@@ -1627,6 +1638,7 @@ function Export-DatabaseObjects {
                         $typeName = "$($type.Schema).$($type.Name)"
                         Write-ObjectProgress -ObjectName $typeName -Current $currentItem -Total $allTypes.Count
                         $Scripter.EnumScript($type) | Out-Null
+                        $opts.AppendToFile = $true  # Append subsequent objects
                         Write-ObjectProgress -ObjectName $typeName -Current $currentItem -Total $allTypes.Count -Success
                         $successCount++
                     } catch {
@@ -1642,6 +1654,7 @@ function Export-DatabaseObjects {
             $fileName = Join-Path $OutputDir '07_Types' "001_AllTypes.sql"
             Ensure-DirectoryExists $fileName
             $opts.FileName = $fileName
+            $opts.AppendToFile = $false  # Start fresh
             $Scripter.Options = $opts
             foreach ($type in $allTypes) {
                 $currentItem++
@@ -1649,6 +1662,7 @@ function Export-DatabaseObjects {
                     $typeName = if ($type.Schema) { "$($type.Schema).$($type.Name)" } else { $type.Name }
                     Write-ObjectProgress -ObjectName $typeName -Current $currentItem -Total $allTypes.Count
                     $Scripter.EnumScript($type) | Out-Null
+                    $opts.AppendToFile = $true  # Append subsequent objects
                     Write-ObjectProgress -ObjectName $typeName -Current $currentItem -Total $allTypes.Count -Success
                     $successCount++
                 } catch {
@@ -1716,12 +1730,14 @@ function Export-DatabaseObjects {
                 $fileName = Join-Path $OutputDir '08_XmlSchemaCollections' ("{0:D3}_{1}.sql" -f $schemaIndex, (Get-SafeFileName $schemaGroup.Name))
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
+                $opts.AppendToFile = $false  # Start fresh for each schema file
                 $Scripter.Options = $opts
                 foreach ($xsc in $schemaGroup.Group) {
                     $currentItem++
                     try {
                         Write-ObjectProgress -ObjectName "$($xsc.Schema).$($xsc.Name)" -Current $currentItem -Total $xmlSchemaCollections.Count
                         $Scripter.EnumScript($xsc) | Out-Null
+                        $opts.AppendToFile = $true  # Append subsequent objects
                         Write-ObjectProgress -ObjectName "$($xsc.Schema).$($xsc.Name)" -Current $currentItem -Total $xmlSchemaCollections.Count -Success
                         $successCount++
                     } catch {
@@ -1736,12 +1752,14 @@ function Export-DatabaseObjects {
             $fileName = Join-Path $OutputDir '08_XmlSchemaCollections' "001_AllXmlSchemaCollections.sql"
             Ensure-DirectoryExists $fileName
             $opts.FileName = $fileName
+            $opts.AppendToFile = $false  # Start fresh
             $Scripter.Options = $opts
             foreach ($xsc in $xmlSchemaCollections) {
                 $currentItem++
                 try {
                     Write-ObjectProgress -ObjectName "$($xsc.Schema).$($xsc.Name)" -Current $currentItem -Total $xmlSchemaCollections.Count
                     $Scripter.EnumScript($xsc) | Out-Null
+                    $opts.AppendToFile = $true  # Append subsequent objects
                     Write-ObjectProgress -ObjectName "$($xsc.Schema).$($xsc.Name)" -Current $currentItem -Total $xmlSchemaCollections.Count -Success
                     $successCount++
                 } catch {
@@ -1816,6 +1834,7 @@ function Export-DatabaseObjects {
                     $fileName = Join-Path $OutputDir '09_Tables_PrimaryKey' ("{0:D3}_{1}.sql" -f $schemaIndex, (Get-SafeFileName $schemaName))
                     Ensure-DirectoryExists $fileName
                     $opts.FileName = $fileName
+                    $opts.AppendToFile = $false  # Start fresh for each schema file
                     $Scripter.Options = $opts
                     
                     try {
@@ -1823,6 +1842,7 @@ function Export-DatabaseObjects {
                             $currentItem++
                             Write-ObjectProgress -ObjectName "$($table.Schema).$($table.Name)" -Current $currentItem -Total $tables.Count
                             $Scripter.EnumScript($table) | Out-Null
+                            $opts.AppendToFile = $true  # Append subsequent objects
                             Write-ObjectProgress -ObjectName "$($table.Schema).$($table.Name)" -Current $currentItem -Total $tables.Count -Success
                             $successCount++
                         }
@@ -1837,6 +1857,7 @@ function Export-DatabaseObjects {
                 $fileName = Join-Path $OutputDir '09_Tables_PrimaryKey' "001_AllTables.sql"
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
+                $opts.AppendToFile = $false  # Start fresh
                 $Scripter.Options = $opts
                 
                 $currentItem = 0
@@ -1845,6 +1866,7 @@ function Export-DatabaseObjects {
                         $currentItem++
                         Write-ObjectProgress -ObjectName "$($table.Schema).$($table.Name)" -Current $currentItem -Total $tables.Count
                         $Scripter.EnumScript($table) | Out-Null
+                        $opts.AppendToFile = $true  # Append subsequent objects
                         Write-ObjectProgress -ObjectName "$($table.Schema).$($table.Name)" -Current $currentItem -Total $tables.Count -Success
                         $successCount++
                     }
@@ -1928,12 +1950,14 @@ function Export-DatabaseObjects {
                     $fileName = Join-Path $OutputDir '10_Tables_ForeignKeys' ("{0:D3}_{1}.sql" -f $schemaIndex, (Get-SafeFileName $schemaGroup.Name))
                     Ensure-DirectoryExists $fileName
                     $opts.FileName = $fileName
+                    $opts.AppendToFile = $false  # Start fresh for each schema file
                     $Scripter.Options = $opts
                     foreach ($fk in $schemaGroup.Group) {
                         $currentItem++
                         try {
                             Write-ObjectProgress -ObjectName "$($fk.Parent.Schema).$($fk.Parent.Name).$($fk.Name)" -Current $currentItem -Total $foreignKeys.Count
                             $Scripter.EnumScript($fk) | Out-Null
+                            $opts.AppendToFile = $true  # Append subsequent objects
                             Write-ObjectProgress -ObjectName "$($fk.Parent.Schema).$($fk.Parent.Name).$($fk.Name)" -Current $currentItem -Total $foreignKeys.Count -Success
                             $successCount++
                         } catch {
@@ -1948,12 +1972,14 @@ function Export-DatabaseObjects {
                 $fileName = Join-Path $OutputDir '10_Tables_ForeignKeys' "001_AllForeignKeys.sql"
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
+                $opts.AppendToFile = $false  # Start fresh
                 $Scripter.Options = $opts
                 foreach ($fk in $foreignKeys) {
                     $currentItem++
                     try {
                         Write-ObjectProgress -ObjectName "$($fk.Parent.Schema).$($fk.Parent.Name).$($fk.Name)" -Current $currentItem -Total $foreignKeys.Count
                         $Scripter.EnumScript($fk) | Out-Null
+                        $opts.AppendToFile = $true  # Append subsequent objects
                         Write-ObjectProgress -ObjectName "$($fk.Parent.Schema).$($fk.Parent.Name).$($fk.Name)" -Current $currentItem -Total $foreignKeys.Count -Success
                         $successCount++
                     } catch {
@@ -2042,12 +2068,14 @@ function Export-DatabaseObjects {
                     $fileName = Join-Path $OutputDir '11_Indexes' ("{0:D3}_{1}.sql" -f $schemaIndex, (Get-SafeFileName $schemaGroup.Name))
                     Ensure-DirectoryExists $fileName
                     $opts.FileName = $fileName
+                    $opts.AppendToFile = $false  # Start fresh for each schema file
                     $Scripter.Options = $opts
                     foreach ($index in $schemaGroup.Group) {
                         $currentItem++
                         try {
                             Write-ObjectProgress -ObjectName "$($index.Parent.Schema).$($index.Parent.Name).$($index.Name)" -Current $currentItem -Total $indexes.Count
                             $Scripter.EnumScript($index) | Out-Null
+                            $opts.AppendToFile = $true  # Append subsequent objects
                             Write-ObjectProgress -ObjectName "$($index.Parent.Schema).$($index.Parent.Name).$($index.Name)" -Current $currentItem -Total $indexes.Count -Success
                             $successCount++
                         } catch {
@@ -2062,12 +2090,14 @@ function Export-DatabaseObjects {
                 $fileName = Join-Path $OutputDir '11_Indexes' "001_AllIndexes.sql"
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
+                $opts.AppendToFile = $false  # Start fresh
                 $Scripter.Options = $opts
                 foreach ($index in $indexes) {
                     $currentItem++
                     try {
                         Write-ObjectProgress -ObjectName "$($index.Parent.Schema).$($index.Parent.Name).$($index.Name)" -Current $currentItem -Total $indexes.Count
                         $Scripter.EnumScript($index) | Out-Null
+                        $opts.AppendToFile = $true  # Append subsequent objects
                         Write-ObjectProgress -ObjectName "$($index.Parent.Schema).$($index.Parent.Name).$($index.Name)" -Current $currentItem -Total $indexes.Count -Success
                         $successCount++
                     } catch {
@@ -2132,12 +2162,14 @@ function Export-DatabaseObjects {
                 $fileName = Join-Path $OutputDir '12_Defaults' ("{0:D3}_{1}.sql" -f $schemaIndex, (Get-SafeFileName $schemaGroup.Name))
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
+                $opts.AppendToFile = $false  # Start fresh for each schema file
                 $Scripter.Options = $opts
                 foreach ($default in $schemaGroup.Group) {
                     $currentItem++
                     try {
                         Write-ObjectProgress -ObjectName "$($default.Schema).$($default.Name)" -Current $currentItem -Total $defaults.Count
                         $Scripter.EnumScript($default) | Out-Null
+                        $opts.AppendToFile = $true  # Append subsequent objects
                         Write-ObjectProgress -ObjectName "$($default.Schema).$($default.Name)" -Current $currentItem -Total $defaults.Count -Success
                         $successCount++
                     } catch {
@@ -2152,12 +2184,14 @@ function Export-DatabaseObjects {
             $fileName = Join-Path $OutputDir '12_Defaults' "001_AllDefaults.sql"
             Ensure-DirectoryExists $fileName
             $opts.FileName = $fileName
+            $opts.AppendToFile = $false  # Start fresh
             $Scripter.Options = $opts
             foreach ($default in $defaults) {
                 $currentItem++
                 try {
                     Write-ObjectProgress -ObjectName "$($default.Schema).$($default.Name)" -Current $currentItem -Total $defaults.Count
                     $Scripter.EnumScript($default) | Out-Null
+                    $opts.AppendToFile = $true  # Append subsequent objects
                     Write-ObjectProgress -ObjectName "$($default.Schema).$($default.Name)" -Current $currentItem -Total $defaults.Count -Success
                     $successCount++
                 } catch {
@@ -2217,12 +2251,14 @@ function Export-DatabaseObjects {
                 $fileName = Join-Path $OutputDir '13_Rules' ("{0:D3}_{1}.sql" -f $schemaIndex, (Get-SafeFileName $schemaGroup.Name))
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
+                $opts.AppendToFile = $false  # Start fresh for each schema file
                 $Scripter.Options = $opts
                 foreach ($rule in $schemaGroup.Group) {
                     $currentItem++
                     try {
                         Write-ObjectProgress -ObjectName "$($rule.Schema).$($rule.Name)" -Current $currentItem -Total $rules.Count
                         $Scripter.EnumScript($rule) | Out-Null
+                        $opts.AppendToFile = $true  # Append subsequent objects
                         Write-ObjectProgress -ObjectName "$($rule.Schema).$($rule.Name)" -Current $currentItem -Total $rules.Count -Success
                         $successCount++
                     } catch {
@@ -2237,12 +2273,14 @@ function Export-DatabaseObjects {
             $fileName = Join-Path $OutputDir '13_Rules' "001_AllRules.sql"
             Ensure-DirectoryExists $fileName
             $opts.FileName = $fileName
+            $opts.AppendToFile = $false  # Start fresh
             $Scripter.Options = $opts
             foreach ($rule in $rules) {
                 $currentItem++
                 try {
                     Write-ObjectProgress -ObjectName "$($rule.Schema).$($rule.Name)" -Current $currentItem -Total $rules.Count
                     $Scripter.EnumScript($rule) | Out-Null
+                    $opts.AppendToFile = $true  # Append subsequent objects
                     Write-ObjectProgress -ObjectName "$($rule.Schema).$($rule.Name)" -Current $currentItem -Total $rules.Count -Success
                     $successCount++
                 } catch {
@@ -2298,12 +2336,14 @@ function Export-DatabaseObjects {
             $fileName = Join-Path $OutputDir '14_Programmability/01_Assemblies' "001_AllAssemblies.sql"
             Ensure-DirectoryExists $fileName
             $opts.FileName = $fileName
+            $opts.AppendToFile = $false  # Start fresh
             $Scripter.Options = $opts
             foreach ($assembly in $assemblies) {
                 $currentItem++
                 try {
                     Write-ObjectProgress -ObjectName $assembly.Name -Current $currentItem -Total $assemblies.Count
                     $Scripter.EnumScript($assembly) | Out-Null
+                    $opts.AppendToFile = $true  # Append subsequent objects
                     Write-ObjectProgress -ObjectName $assembly.Name -Current $currentItem -Total $assemblies.Count -Success
                     $successCount++
                 } catch {
@@ -2367,6 +2407,7 @@ function Export-DatabaseObjects {
                 $fileName = Join-Path $OutputDir '14_Programmability/02_Functions' ("{0:D3}_{1}.sql" -f $schemaIndex, (Get-SafeFileName $schemaName))
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
+                $opts.AppendToFile = $false  # Start fresh for each schema file
                 $Scripter.Options = $opts
                 
                 try {
@@ -2374,6 +2415,7 @@ function Export-DatabaseObjects {
                         $currentItem++
                         Write-ObjectProgress -ObjectName "$($function.Schema).$($function.Name)" -Current $currentItem -Total $functions.Count
                         $Scripter.EnumScript($function) | Out-Null
+                        $opts.AppendToFile = $true  # Append subsequent objects
                         Write-ObjectProgress -ObjectName "$($function.Schema).$($function.Name)" -Current $currentItem -Total $functions.Count -Success
                         $successCount++
                     }
@@ -2387,6 +2429,7 @@ function Export-DatabaseObjects {
             $fileName = Join-Path $OutputDir '14_Programmability/02_Functions' "001_AllFunctions.sql"
             Ensure-DirectoryExists $fileName
             $opts.FileName = $fileName
+            $opts.AppendToFile = $false  # Start fresh
             $Scripter.Options = $opts
             
             $currentItem = 0
@@ -2395,6 +2438,7 @@ function Export-DatabaseObjects {
                     $currentItem++
                     Write-ObjectProgress -ObjectName "$($function.Schema).$($function.Name)" -Current $currentItem -Total $functions.Count
                     $Scripter.EnumScript($function) | Out-Null
+                    $opts.AppendToFile = $true  # Append subsequent objects
                     Write-ObjectProgress -ObjectName "$($function.Schema).$($function.Name)" -Current $currentItem -Total $functions.Count -Success
                     $successCount++
                 }
@@ -2455,12 +2499,14 @@ function Export-DatabaseObjects {
                 $fileName = Join-Path $OutputDir '14_Programmability/02_Functions' ("{0:D3}_{1}.aggregates.sql" -f $schemaIndex, (Get-SafeFileName $schemaGroup.Name))
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
+                $opts.AppendToFile = $false  # Start fresh for each schema file
                 $Scripter.Options = $opts
                 foreach ($aggregate in $schemaGroup.Group) {
                     $currentItem++
                     try {
                         Write-ObjectProgress -ObjectName "$($aggregate.Schema).$($aggregate.Name)" -Current $currentItem -Total $aggregates.Count
                         $Scripter.EnumScript($aggregate) | Out-Null
+                        $opts.AppendToFile = $true  # Append subsequent objects
                         Write-ObjectProgress -ObjectName "$($aggregate.Schema).$($aggregate.Name)" -Current $currentItem -Total $aggregates.Count -Success
                         $successCount++
                     } catch {
@@ -2475,12 +2521,14 @@ function Export-DatabaseObjects {
             $fileName = Join-Path $OutputDir '14_Programmability/02_Functions' "001_AllAggregates.sql"
             Ensure-DirectoryExists $fileName
             $opts.FileName = $fileName
+            $opts.AppendToFile = $false  # Start fresh
             $Scripter.Options = $opts
             foreach ($aggregate in $aggregates) {
                 $currentItem++
                 try {
                     Write-ObjectProgress -ObjectName "$($aggregate.Schema).$($aggregate.Name)" -Current $currentItem -Total $aggregates.Count
                     $Scripter.EnumScript($aggregate) | Out-Null
+                    $opts.AppendToFile = $true  # Append subsequent objects
                     Write-ObjectProgress -ObjectName "$($aggregate.Schema).$($aggregate.Name)" -Current $currentItem -Total $aggregates.Count -Success
                     $successCount++
                 } catch {
@@ -2566,6 +2614,7 @@ function Export-DatabaseObjects {
                 $fileName = Join-Path $OutputDir '14_Programmability/03_StoredProcedures' ("{0:D3}_{1}.sql" -f $schemaIndex, (Get-SafeFileName $schemaName))
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
+                $opts.AppendToFile = $false  # Start fresh for each schema file
                 $Scripter.Options = $opts
                 
                 try {
@@ -2573,6 +2622,7 @@ function Export-DatabaseObjects {
                         $currentItem++
                         Write-ObjectProgress -ObjectName "$($proc.Schema).$($proc.Name)" -Current $currentItem -Total $totalProcs
                         $Scripter.EnumScript($proc) | Out-Null
+                        $opts.AppendToFile = $true  # Append subsequent objects
                         Write-ObjectProgress -ObjectName "$($proc.Schema).$($proc.Name)" -Current $currentItem -Total $totalProcs -Success
                         $successCount++
                     }
@@ -2586,6 +2636,7 @@ function Export-DatabaseObjects {
             $fileName = Join-Path $OutputDir '14_Programmability/03_StoredProcedures' "001_AllProcedures.sql"
             Ensure-DirectoryExists $fileName
             $opts.FileName = $fileName
+            $opts.AppendToFile = $false  # Start fresh
             $Scripter.Options = $opts
             
             $currentItem = 0
@@ -2594,6 +2645,7 @@ function Export-DatabaseObjects {
                     $currentItem++
                     Write-ObjectProgress -ObjectName "$($proc.Schema).$($proc.Name)" -Current $currentItem -Total $totalProcs
                     $Scripter.EnumScript($proc) | Out-Null
+                    $opts.AppendToFile = $true  # Append subsequent objects
                     Write-ObjectProgress -ObjectName "$($proc.Schema).$($proc.Name)" -Current $currentItem -Total $totalProcs -Success
                     $successCount++
                 }
@@ -2602,6 +2654,7 @@ function Export-DatabaseObjects {
                     $currentItem++
                     Write-ObjectProgress -ObjectName "$($extProc.Schema).$($extProc.Name)" -Current $currentItem -Total $totalProcs
                     $Scripter.EnumScript($extProc) | Out-Null
+                    $opts.AppendToFile = $true  # Append subsequent objects
                     Write-ObjectProgress -ObjectName "$($extProc.Schema).$($extProc.Name)" -Current $currentItem -Total $totalProcs -Success
                     $successCount++
                 }
@@ -2666,12 +2719,14 @@ function Export-DatabaseObjects {
             $fileName = Join-Path $OutputDir '14_Programmability/04_Triggers' "001_AllDatabaseTriggers.sql"
             Ensure-DirectoryExists $fileName
             $opts.FileName = $fileName
+            $opts.AppendToFile = $false  # Start fresh
             $Scripter.Options = $opts
             foreach ($trigger in $dbTriggers) {
                 $currentItem++
                 try {
                     Write-ObjectProgress -ObjectName $trigger.Name -Current $currentItem -Total $dbTriggers.Count
                     $Scripter.EnumScript($trigger) | Out-Null
+                    $opts.AppendToFile = $true  # Append subsequent objects
                     Write-ObjectProgress -ObjectName $trigger.Name -Current $currentItem -Total $dbTriggers.Count -Success
                     $successCount++
                 } catch {
@@ -2755,12 +2810,14 @@ function Export-DatabaseObjects {
                 $fileName = Join-Path $OutputDir '14_Programmability/04_Triggers' ("{0:D3}_{1}.triggers.sql" -f $schemaIndex, (Get-SafeFileName $schemaGroup.Name))
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
+                $opts.AppendToFile = $false  # Start fresh for each schema file
                 $Scripter.Options = $opts
                 foreach ($trigger in $schemaGroup.Group) {
                     $currentItem++
                     try {
                         Write-ObjectProgress -ObjectName "$($trigger.Parent.Schema).$($trigger.Parent.Name).$($trigger.Name)" -Current $currentItem -Total $tableTriggers.Count
                         $Scripter.EnumScript($trigger) | Out-Null
+                        $opts.AppendToFile = $true  # Append subsequent objects
                         Write-ObjectProgress -ObjectName "$($trigger.Parent.Schema).$($trigger.Parent.Name).$($trigger.Name)" -Current $currentItem -Total $tableTriggers.Count -Success
                         $successCount++
                     } catch {
@@ -2775,12 +2832,14 @@ function Export-DatabaseObjects {
             $fileName = Join-Path $OutputDir '14_Programmability/04_Triggers' "001_AllTableTriggers.sql"
             Ensure-DirectoryExists $fileName
             $opts.FileName = $fileName
+            $opts.AppendToFile = $false  # Start fresh
             $Scripter.Options = $opts
             foreach ($trigger in $tableTriggers) {
                 $currentItem++
                 try {
                     Write-ObjectProgress -ObjectName "$($trigger.Parent.Schema).$($trigger.Parent.Name).$($trigger.Name)" -Current $currentItem -Total $tableTriggers.Count
                     $Scripter.EnumScript($trigger) | Out-Null
+                    $opts.AppendToFile = $true  # Append subsequent objects
                     Write-ObjectProgress -ObjectName "$($trigger.Parent.Schema).$($trigger.Parent.Name).$($trigger.Name)" -Current $currentItem -Total $tableTriggers.Count -Success
                     $successCount++
                 } catch {
@@ -2840,12 +2899,14 @@ function Export-DatabaseObjects {
                 $fileName = Join-Path $OutputDir '14_Programmability/05_Views' ("{0:D3}_{1}.sql" -f $schemaIndex, (Get-SafeFileName $schemaGroup.Name))
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
+                $opts.AppendToFile = $false  # Start fresh for each schema file
                 $Scripter.Options = $opts
                 foreach ($view in $schemaGroup.Group) {
                     $currentItem++
                     try {
                         Write-ObjectProgress -ObjectName "$($view.Schema).$($view.Name)" -Current $currentItem -Total $views.Count
                         $Scripter.EnumScript($view) | Out-Null
+                        $opts.AppendToFile = $true  # Append subsequent objects
                         Write-ObjectProgress -ObjectName "$($view.Schema).$($view.Name)" -Current $currentItem -Total $views.Count -Success
                         $successCount++
                     } catch {
@@ -2860,12 +2921,14 @@ function Export-DatabaseObjects {
             $fileName = Join-Path $OutputDir '14_Programmability/05_Views' "001_AllViews.sql"
             Ensure-DirectoryExists $fileName
             $opts.FileName = $fileName
+            $opts.AppendToFile = $false  # Start fresh
             $Scripter.Options = $opts
             foreach ($view in $views) {
                 $currentItem++
                 try {
                     Write-ObjectProgress -ObjectName "$($view.Schema).$($view.Name)" -Current $currentItem -Total $views.Count
                     $Scripter.EnumScript($view) | Out-Null
+                    $opts.AppendToFile = $true  # Append subsequent objects
                     Write-ObjectProgress -ObjectName "$($view.Schema).$($view.Name)" -Current $currentItem -Total $views.Count -Success
                     $successCount++
                 } catch {
@@ -2925,12 +2988,14 @@ function Export-DatabaseObjects {
                 $fileName = Join-Path $OutputDir '15_Synonyms' ("{0:D3}_{1}.sql" -f $schemaIndex, (Get-SafeFileName $schemaGroup.Name))
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
+                $opts.AppendToFile = $false  # Start fresh for each schema file
                 $Scripter.Options = $opts
                 foreach ($synonym in $schemaGroup.Group) {
                     $currentItem++
                     try {
                         Write-ObjectProgress -ObjectName "$($synonym.Schema).$($synonym.Name)" -Current $currentItem -Total $synonyms.Count
                         $Scripter.EnumScript($synonym) | Out-Null
+                        $opts.AppendToFile = $true  # Append subsequent objects
                         Write-ObjectProgress -ObjectName "$($synonym.Schema).$($synonym.Name)" -Current $currentItem -Total $synonyms.Count -Success
                         $successCount++
                     } catch {
@@ -2945,12 +3010,14 @@ function Export-DatabaseObjects {
             $fileName = Join-Path $OutputDir '15_Synonyms' "001_AllSynonyms.sql"
             Ensure-DirectoryExists $fileName
             $opts.FileName = $fileName
+            $opts.AppendToFile = $false  # Start fresh
             $Scripter.Options = $opts
             foreach ($synonym in $synonyms) {
                 $currentItem++
                 try {
                     Write-ObjectProgress -ObjectName "$($synonym.Schema).$($synonym.Name)" -Current $currentItem -Total $synonyms.Count
                     $Scripter.EnumScript($synonym) | Out-Null
+                    $opts.AppendToFile = $true  # Append subsequent objects
                     Write-ObjectProgress -ObjectName "$($synonym.Schema).$($synonym.Name)" -Current $currentItem -Total $synonyms.Count -Success
                     $successCount++
                 } catch {
@@ -3008,12 +3075,14 @@ function Export-DatabaseObjects {
             $fileName = Join-Path $OutputDir '16_FullTextSearch' "001_AllFullTextCatalogs.sql"
             Ensure-DirectoryExists $fileName
             $opts.FileName = $fileName
+            $opts.AppendToFile = $false  # Start fresh
             $Scripter.Options = $opts
             foreach ($ftc in $ftCatalogs) {
                 $currentItem++
                 try {
                     Write-ObjectProgress -ObjectName $ftc.Name -Current $currentItem -Total $ftCatalogs.Count
                     $Scripter.EnumScript($ftc) | Out-Null
+                    $opts.AppendToFile = $true  # Append subsequent objects
                     Write-ObjectProgress -ObjectName $ftc.Name -Current $currentItem -Total $ftCatalogs.Count -Success
                     $successCount++
                 } catch {
@@ -3061,12 +3130,14 @@ function Export-DatabaseObjects {
             $fileName = Join-Path $OutputDir '16_FullTextSearch' "002_AllFullTextStopLists.sql"
             Ensure-DirectoryExists $fileName
             $opts.FileName = $fileName
+            $opts.AppendToFile = $false  # Start fresh
             $Scripter.Options = $opts
             foreach ($ftsl in $ftStopLists) {
                 $currentItem++
                 try {
                     Write-ObjectProgress -ObjectName $ftsl.Name -Current $currentItem -Total $ftStopLists.Count
                     $Scripter.EnumScript($ftsl) | Out-Null
+                    $opts.AppendToFile = $true  # Append subsequent objects
                     Write-ObjectProgress -ObjectName $ftsl.Name -Current $currentItem -Total $ftStopLists.Count -Success
                     $successCount++
                 } catch {
@@ -3131,12 +3202,14 @@ function Export-DatabaseObjects {
                 $fileName = Join-Path $OutputDir '17_ExternalData' "001_AllExternalDataSources.sql"
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
+                $opts.AppendToFile = $false  # Start fresh
                 $Scripter.Options = $opts
                 foreach ($eds in $externalDataSources) {
                     $currentItem++
                     try {
                         Write-ObjectProgress -ObjectName $eds.Name -Current $currentItem -Total $externalDataSources.Count
                         $Scripter.EnumScript($eds) | Out-Null
+                        $opts.AppendToFile = $true  # Append subsequent objects
                         Write-ObjectProgress -ObjectName $eds.Name -Current $currentItem -Total $externalDataSources.Count -Success
                         $successCount++
                     } catch {
@@ -3185,12 +3258,14 @@ function Export-DatabaseObjects {
                 $fileName = Join-Path $OutputDir '17_ExternalData' "002_AllExternalFileFormats.sql"
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
+                $opts.AppendToFile = $false  # Start fresh
                 $Scripter.Options = $opts
                 foreach ($eff in $externalFileFormats) {
                     $currentItem++
                     try {
                         Write-ObjectProgress -ObjectName $eff.Name -Current $currentItem -Total $externalFileFormats.Count
                         $Scripter.EnumScript($eff) | Out-Null
+                        $opts.AppendToFile = $true  # Append subsequent objects
                         Write-ObjectProgress -ObjectName $eff.Name -Current $currentItem -Total $externalFileFormats.Count -Success
                         $successCount++
                     } catch {
@@ -3257,12 +3332,14 @@ function Export-DatabaseObjects {
                 $fileName = Join-Path $OutputDir '18_SearchPropertyLists' "001_AllSearchPropertyLists.sql"
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
+                $opts.AppendToFile = $false  # Start fresh
                 $Scripter.Options = $opts
                 foreach ($spl in $searchPropertyLists) {
                     $currentItem++
                     try {
                         Write-ObjectProgress -ObjectName $spl.Name -Current $currentItem -Total $searchPropertyLists.Count
                         $Scripter.EnumScript($spl) | Out-Null
+                        $opts.AppendToFile = $true  # Append subsequent objects
                         Write-ObjectProgress -ObjectName $spl.Name -Current $currentItem -Total $searchPropertyLists.Count -Success
                         $successCount++
                     } catch {
@@ -3324,12 +3401,14 @@ function Export-DatabaseObjects {
                 $fileName = Join-Path $OutputDir '19_PlanGuides' "001_AllPlanGuides.sql"
                 Ensure-DirectoryExists $fileName
                 $opts.FileName = $fileName
+                $opts.AppendToFile = $false  # Start fresh
                 $Scripter.Options = $opts
                 foreach ($pg in $planGuides) {
                     $currentItem++
                     try {
                         Write-ObjectProgress -ObjectName $pg.Name -Current $currentItem -Total $planGuides.Count
                         $Scripter.EnumScript($pg) | Out-Null
+                        $opts.AppendToFile = $true  # Append subsequent objects
                         Write-ObjectProgress -ObjectName $pg.Name -Current $currentItem -Total $planGuides.Count -Success
                         $successCount++
                     } catch {

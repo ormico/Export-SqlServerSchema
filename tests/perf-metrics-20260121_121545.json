@@ -1,0 +1,30 @@
+{
+  "TotalRoundTripSeconds": 253.95,
+  "SourceStats": {
+    "Indexes": 2000,
+    "Rows": 50000,
+    "Procedures": 500,
+    "Views": 100,
+    "Functions": 100,
+    "Triggers": 100,
+    "Tables": 500
+  },
+  "TargetStats": {
+    "Indexes": 2000,
+    "Rows": 0,
+    "Procedures": 500,
+    "Views": 100,
+    "Functions": 100,
+    "Triggers": 100,
+    "Tables": 500
+  },
+  "DatabasePopulationSeconds": 12.02,
+  "ConfigFile": "test-groupby-single.yml",
+  "AllObjectsMatch": false,
+  "Timestamp": "2026-01-21 12:15:45",
+  "ExportRowsPerSecond": 216.0,
+  "ImportDurationSeconds": 22.62,
+  "ImportRowsPerSecond": 0.0,
+  "ExportDurationSeconds": 231.33,
+  "ExportFilesGenerated": 2900
+}

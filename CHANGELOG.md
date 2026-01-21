@@ -89,7 +89,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 **Test Coverage**
 - Created dedicated grouping test configs: `test-groupby-single.yml`, `test-groupby-schema.yml`, `test-groupby-all.yml`
 - Updated test configs to validate all 26 object types with grouping feature
-- Integration tests verify all three grouping modes work correctly
+- Performance test script (`run-perf-test.ps1`) now supports `-ExportConfigYaml` parameter for testing different groupBy modes
+- Performance test script auto-cleans existing PerfTestDb before each run
+- **Note**: Integration tests (`run-integration-test.ps1`) use default `single` grouping mode via `test-export-config.yml`
+- GroupBy `schema` and `all` modes are validated through performance testing with dedicated configs
 - **Added cross-dependency test cases** to validate retry logic:
   - 8 new test objects with intentional cross-type dependencies
   - Function → Function: `fn_CalculateTotalWithTax` calls `fn_HelperCalculateTax`
@@ -107,6 +110,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Programmability objects with cross-type dependencies now import successfully** without manual intervention
 - **Security policies execute after functions/procedures** they depend on, preventing import failures
 - Error messages during dependency retry are now logged verbosely instead of terminating import prematurely
+- **Critical: AppendToFile bug in schema/all grouping modes** - SMO's `EnumScript()` method defaults to `AppendToFile=false`, causing files to be overwritten on each call. Fixed 39 code sections to properly append objects when using `groupBy: schema` or `groupBy: all` modes. Without this fix, only the last object in each group was saved to the output file.
+
+### Performance
+
+**GroupBy Mode Performance Comparison** (500 tables, 100 views, 500 procs, 100 funcs, 100 triggers, 2000 indexes, 50K rows)
+
+| GroupBy Mode | Export (s) | Files | Import (s) | Total (s) | vs Baseline |
+|--------------|------------|-------|------------|-----------|-------------|
+| single       | 231.33     | 2900  | 22.62      | 253.95    | 19% faster  |
+| schema       | 224.78     | 601   | 14.34      | 239.13    | 23% faster  |
+| all          | 215.42     | 529   | 11.29      | 226.72    | 27% faster  |
+| *Baseline*   | *207.86*   | *2897*| *104.23*   | *312.09*  | --          |
+
+*Baseline: Previous version with unoptimized import, single mode only*
+
+**Key Findings**:
+- **Import time improved 78-89%** due to dependency retry optimization and fewer files to process
+- **`groupBy: all` is 50% faster import** than `single` mode (11s vs 23s)
+- Export time slightly increased due to additional grouping logic, but import gains far outweigh this
+- Fewer files = faster import due to reduced file I/O overhead
 
 ### Breaking Changes
 
