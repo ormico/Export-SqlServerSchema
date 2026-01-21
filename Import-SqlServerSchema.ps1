@@ -987,6 +987,9 @@ function Get-ScriptFiles {
         $orderedDirs += '00_FileGroups'
     }
     
+    # Security - MUST come before schemas since schemas may have GRANT statements referencing roles/users
+    $orderedDirs += '01_Security'
+    
     # Database Configuration - skip in Dev mode unless explicitly enabled
     if ($modeSettings.includeConfigurations) {
         $orderedDirs += '02_DatabaseConfiguration'
@@ -1020,9 +1023,6 @@ function Get-ScriptFiles {
         '18_SearchPropertyLists',
         '19_PlanGuides'
     )
-    
-    # Security - always include keys/certs/roles/users
-    $orderedDirs += '01_Security'
     
     # Data - only if requested
     Write-Verbose "Get-ScriptFiles: IncludeData parameter = $IncludeData"
