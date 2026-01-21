@@ -225,7 +225,7 @@ This variety ensures comprehensive test coverage while maintaining fast, reliabl
 | Views | 100 | 10 per schema |
 | Functions | 100 | 10 per schema |
 | Data Rows | 50,000 | 100 rows per table |
-| Total Objects | ~3,200 | Sufficient for performance testing |
+| Total Schema Objects (excluding data rows) | 3,210 | Sufficient for performance testing |
 
 ## Future Enhancements
 
