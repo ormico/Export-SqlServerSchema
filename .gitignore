@@ -2,3 +2,5 @@ DbScripts/**
 # Environment files with secrets
 .env
 *.log
+
+.local/

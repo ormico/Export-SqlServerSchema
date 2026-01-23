@@ -1,33 +1,32 @@
 ---
+description: PowerShell coding standards, best practices, and AI behavior rules for the Export-SqlServerSchema project.
 applyTo: "**/*.ps1"
 ---
 
-# PowerShell Coding Standards
+# PowerShell Coding Standards & AI Instructions
 
 **Project**: Export-SqlServerSchema  
-**Applies to**: All `.ps1` files in this repository
+**Context**: These instructions apply to all PowerShell script generation and modification in this repository.
+
+## 1. AI Code Generation Rules
+
+When generating or editing PowerShell code, you **MUST** follow these rules:
+
+1.  **No Aliases**: Always use full cmdlet names (`Get-ChildItem` not `ls`, `Where-Object` not `?`, `ForEach-Object` not `%`).
+2.  **Named Parameters**: Always use named parameters (`Get-Content -Path $x`) instead of positional ones.
+3.  **Strict Typing**: Type all parameters and critical variables (`[string]$Path`, `[int]$Count`).
+4.  **Error Handling**: Wrap logical blocks in `try/catch` with `$ErrorActionPreference = 'Stop'`.
+5.  **Path Handling**: Always use `Join-Path` for constructing file paths. **NEVER** use string concatenation for paths.
+6.  **Pipeline Preservation**: In pure utility functions, output objects to the pipeline. In main control scripts, `Write-Host` is permitted for status updates.
+7.  **Linting**: Ensure code passes standard PSScriptAnalyzer rules.
 
 ---
 
-## Quick Reference
+## 2. Script Structure
 
-| Convention | Example |
-|------------|---------|
-| Version requirement | `#Requires -Version 7.0` |
-| Parameters | `[CmdletBinding()] param(...)` at script level |
-| Function names | `Verb-Noun` (approved verbs only) |
-| Output to user | `Write-Host` with `[LEVEL]` prefixes |
-| Section headers | `Write-ProgressHeader "Section Name"` |
-| Script-scoped state | `$script:VariableName` |
-| Error handling | `$ErrorActionPreference = 'Stop'` + try/catch |
+### 2.1 Required Header
 
----
-
-## 1. Script Structure
-
-### 1.1 Required Header
-
-Every script must start with:
+Every script file must begin with standard metadata to ensure traceability and copyright compliance.
 
 ```powershell
 #Requires -Version 7.0
@@ -52,72 +51,54 @@ Every script must start with:
     # Comment explaining what this example does
     ./Script-Name.ps1 -Param1 value -Param2 value
 
-.EXAMPLE
-    # Another usage scenario
-    ./Script-Name.ps1 -Param1 value -OtherSwitch
-
 .NOTES
     Requires: List dependencies (SQL Server SMO, etc.)
-    Author: Author Name
-    Supports: Windows, Linux, macOS
 #>
 ```
 
-### 1.2 CmdletBinding and Parameters
+### 2.2 CmdletBinding and Parameters
 
-Always use `[CmdletBinding()]` at the script level:
+Always use `[CmdletBinding()]` to enable common parameters like `-Verbose` and `-ErrorAction`.
 
 ```powershell
 [CmdletBinding()]
 param(
-  [Parameter(Mandatory = $true, HelpMessage = 'Description for Get-Help')]
-  [string]$RequiredParam,
+    [Parameter(Mandatory = $true, HelpMessage = 'Description for Get-Help')]
+    [string]$RequiredParam,
 
-  [Parameter(HelpMessage = 'Description')]
-  [ValidateSet('Option1', 'Option2', 'Option3')]
-  [string]$EnumParam = 'Option1',
+    [Parameter(HelpMessage = 'Description')]
+    [ValidateSet('Option1', 'Option2')]
+    [string]$EnumParam = 'Option1',
 
-  [Parameter(HelpMessage = 'SQL Server credentials')]
-  [System.Management.Automation.PSCredential]$Credential,
-
-  [Parameter(HelpMessage = 'Enable optional feature')]
-  [switch]$EnableFeature,
-
-  [Parameter(HelpMessage = 'Timeout in seconds (overrides config file)')]
-  [int]$Timeout = 0
+    [Parameter(HelpMessage = 'SQL Server credentials')]
+    [System.Management.Automation.PSCredential]$Credential,
+    
+    [Parameter(HelpMessage = 'Target Database Name')]
+    [string]$Database
 )
 ```
 
-**Rules**:
-- One parameter per line
-- Include `HelpMessage` for all parameters
-- Use `ValidateSet` for enumerated values
-- Use `ValidateScript` for path validation: `[ValidateScript({ Test-Path $_ -PathType Container })]`
-- Provide sensible defaults where appropriate
-- Document override behavior in HelpMessage (e.g., "overrides config file")
+### 2.3 Script Initialization
 
-### 1.3 Script-Level Initialization
-
-After parameters, set up error handling and script-scoped state:
+After parameters, set up error handling and script-scoped state.
 
 ```powershell
 $ErrorActionPreference = 'Stop'
-$script:LogFile = $null  # Will be set during initialization
+Set-StrictMode -Version 3.0
 
 # Script-scoped state for cross-function access
-$script:Metrics = @{
-  timestamp = $null
-  duration  = $null
+$script:Configuration = @{
+    LogFile = $null
 }
 ```
 
 ---
 
-## 2. Function Conventions
+## 3. Function Conventions
 
-### 2.1 Naming
+### 3.1 Naming
 
-Use PowerShell approved verbs. Common patterns in this project:
+Use the `Verb-Noun` format with [Approved Verbs](https://learn.microsoft.com/en-us/powershell/scripting/developer/cmdlet/approved-verbs-for-windows-powershell-commands).
 
 | Verb | Usage | Example |
 |------|-------|---------|
@@ -128,63 +109,35 @@ Use PowerShell approved verbs. Common patterns in this project:
 | `Initialize-` | Set up state/directories | `Initialize-OutputDirectory` |
 | `Invoke-` | Execute actions | `Invoke-WithRetry` |
 | `New-` | Create objects | `New-ScriptingOptions` |
-| `Save-` | Persist to storage | `Save-PerformanceMetrics` |
-| `Start-`/`Stop-` | Timer/process control | `Start-MetricsTimer` |
 
-**Avoid**: `Ensure-`, `Do-`, `Run-`, `Process-` (use approved alternatives)
+**Avoid**: `Ensure-`, `Do-`, `Run-`, `Process-`.
 
-### 2.2 Function Structure
+### 3.2 Function Definition
 
 ```powershell
-function Verb-Noun {
-  <#
+function Get-DatabaseObject {
+    <#
     .SYNOPSIS
-        One-line description.
-    .DESCRIPTION
-        Detailed explanation if needed.
+        Retrieves database objects securely.
     #>
-  param(
-    [Parameter(Mandatory = $true)]
-    [string]$RequiredParam,
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [Microsoft.SqlServer.Management.Smo.Database]$Database,
 
-    [Parameter()]
-    [string]$OptionalParam = 'default'
-  )
+        [Parameter()]
+        [string]$Filter
+    )
 
-  # Implementation
-}
-```
-
-**Rules**:
-- Comment-based help with `.SYNOPSIS` minimum
-- Parameters in `param()` block, not inline
-- Two spaces for indentation
-- Braces on same line as function declaration
-
-### 2.3 Private/Internal Functions
-
-Prefix with underscore for truly internal helpers (rare):
-
-```powershell
-function _GetInternalValue {
-  # Internal implementation detail
+    # Implementation
 }
 ```
 
 ---
 
-## 3. Console Output
+## 4. Console Output & Logging
 
-### 3.1 Status Prefixes
-
-Always prefix user-visible output with status level:
-
-```powershell
-Write-Host "[SUCCESS] Exported 15 tables" -ForegroundColor Green
-Write-Host "[WARNING] Skipped unsupported object type" -ForegroundColor Yellow
-Write-Host "[ERROR] Failed to connect to server" -ForegroundColor Red
-Write-Host "[INFO] Processing schemas..." -ForegroundColor Cyan
-```
+This project uses specific visual cues for the operator. **Do not use emojis** (✅, ❌) as they may not render in all terminals/logs properly.
 
 | Prefix | Color | Usage |
 |--------|-------|-------|
@@ -193,359 +146,127 @@ Write-Host "[INFO] Processing schemas..." -ForegroundColor Cyan
 | `[ERROR]` | Red | Failures |
 | `[INFO]` | Cyan/None | Status updates |
 
-### 3.2 Section Headers
+**Pattern**:
+```powershell
+Write-Host "[SUCCESS] Exported 15 tables" -ForegroundColor Green
+Write-Host "[WARNING] Skipped unsupported object type" -ForegroundColor Yellow
+Write-Host "[ERROR] Connection failed" -ForegroundColor Red
+```
 
-Use `Write-ProgressHeader` for major sections:
-
+**Section Headers**:
 ```powershell
 function Write-ProgressHeader {
-  param([string]$Label)
-  Write-Host ""
-  Write-Host "== $Label ==" -ForegroundColor Cyan
-}
-
-# Usage
-Write-ProgressHeader "Exporting Tables"
-```
-
-### 3.3 Progress Reporting
-
-For operations with many items, use milestone-based progress:
-
-```powershell
-function Write-ObjectProgress {
-  param(
-    [int]$Current,
-    [int]$Total,
-    [string]$ObjectType,
-    [int]$MilestonePercent = 10
-  )
-
-  if ($Total -eq 0) { return }
-
-  $percent = [Math]::Floor(($Current / $Total) * 100)
-  $lastPercent = [Math]::Floor((($Current - 1) / $Total) * 100)
-
-  # Report at 0% and every milestone
-  if ($Current -eq 1 -or 
-      [Math]::Floor($percent / $MilestonePercent) -gt [Math]::Floor($lastPercent / $MilestonePercent)) {
-    Write-Host "  $ObjectType progress: $percent% ($Current of $Total)" -ForegroundColor DarkGray
-  }
+    param([string]$Label)
+    Write-Host ""
+    Write-Host "== $Label ==" -ForegroundColor Cyan
 }
 ```
 
-### 3.4 Write-Host vs Write-Output
-
-**Use `Write-Host`** for:
-- User-facing status messages
-- Progress indicators
-- Colored output
-- Section headers
-
-**Use `Write-Output`** only when:
-- Returning data that should be capturable in variables
-- Piping to other commands
-
-**Important**: `Write-Output` is captured when script output is assigned to a variable. For user feedback, always use `Write-Host`.
-
-### 3.5 No Unicode or Emojis
-
-**Never use** Unicode glyphs, emojis, or decorative symbols:
-
-```powershell
-# WRONG
-Write-Host "✅ Export complete"
-Write-Host "❌ Failed to connect"
-
-# CORRECT
-Write-Host "[SUCCESS] Export complete" -ForegroundColor Green
-Write-Host "[ERROR] Failed to connect" -ForegroundColor Red
-```
+**Write-Host vs Write-Output**:
+- Use `Write-Host` for **user feedback** (color possible).
+- Use `Write-Output` (or implicit output) **ONLY** for returning data to the pipeline content.
 
 ---
 
-## 4. Error Handling
+## 5. Error Handling
 
-### 4.1 Standard Pattern
+### 5.1 Standard Pattern
 
 ```powershell
 $ErrorActionPreference = 'Stop'
 
 try {
-  # Main logic
-  $result = Do-Something
+    # Main logic
+    $result = Invoke-Something
 }
 catch {
-  Write-Host "[ERROR] Operation failed: $_" -ForegroundColor Red
-  exit 1
+    $msg = "[ERROR] Operation failed: $_"
+    Write-Host $msg -ForegroundColor Red
+    
+    # Log details if verbose
+    Write-Verbose $_.Exception.ToString()
+    
+    exit 1
 }
 ```
 
-### 4.2 Detailed Error Logging
+### 5.2 Retry Logic
 
-For operations that may fail with complex errors:
-
-```powershell
-function Write-ExportError {
-  param(
-    [string]$ObjectType,
-    [string]$ObjectName,
-    [System.Management.Automation.ErrorRecord]$ErrorRecord,
-    [string]$AdditionalContext = ''
-  )
-
-  $errorMsg = "Failed to export $ObjectType$(if ($ObjectName) { ": $ObjectName" })"
-  Write-Host "[ERROR] $errorMsg" -ForegroundColor Red
-
-  if ($AdditionalContext) {
-    Write-Host "  Context: $AdditionalContext" -ForegroundColor Yellow
-  }
-
-  # Walk exception chain for debugging
-  $currentException = $ErrorRecord.Exception
-  while ($null -ne $currentException) {
-    Write-Host "  Exception: $($currentException.Message)" -ForegroundColor Yellow
-    $currentException = $currentException.InnerException
-  }
-}
-```
-
-### 4.3 Retry Logic
-
-For transient failures (network, Azure throttling):
+For network or transient operations (Azure, SQL Connections), implement retry logic.
 
 ```powershell
 function Invoke-WithRetry {
-  param(
-    [Parameter(Mandatory = $true)]
-    [scriptblock]$ScriptBlock,
-    [int]$MaxAttempts = 3,
-    [int]$InitialDelaySeconds = 2,
-    [string]$OperationName = 'Operation'
-  )
-
-  $attempt = 0
-  $delay = $InitialDelaySeconds
-
-  while ($attempt -lt $MaxAttempts) {
-    $attempt++
-    try {
-      return & $ScriptBlock
-    }
-    catch {
-      if ($attempt -lt $MaxAttempts -and (Test-TransientError $_)) {
-        Write-Warning "[$OperationName] Attempt $attempt failed, retrying in $delay seconds..."
-        Start-Sleep -Seconds $delay
-        $delay = $delay * 2  # Exponential backoff
-      }
-      else {
-        throw
-      }
-    }
-  }
+    param(
+        [Parameter(Mandatory = $true)]
+        [scriptblock]$ScriptBlock,
+        [int]$MaxAttempts = 3,
+        [int]$DelaySeconds = 2
+    )
+    # ... Implementation of exponential backoff ...
 }
 ```
 
 ---
 
-## 5. Configuration and State
-
-### 5.1 Script-Scoped Variables
-
-Use `$script:` for state shared across functions:
-
-```powershell
-$script:LogFile = $null
-$script:Metrics = @{}
-$script:Config = @{}
-
-function Set-LogFile {
-  param([string]$Path)
-  $script:LogFile = $Path
-}
-```
-
-### 5.2 YAML Configuration
-
-Support YAML config files with JSON schema validation:
-
-```powershell
-function Import-YamlConfig {
-  param([string]$ConfigPath)
-
-  if (-not (Get-Module -ListAvailable -Name powershell-yaml)) {
-    Write-Warning "powershell-yaml module not installed. Using defaults."
-    return @{}
-  }
-
-  $content = Get-Content $ConfigPath -Raw
-  return ConvertFrom-Yaml $content
-}
-```
-
----
-
-## 6. SMO-Specific Patterns
+## 6. Project-Specific Patterns (SMO)
 
 ### 6.1 Connection Setup
+
+Always handle both Windows Authentication and SQL Authentication.
 
 ```powershell
 $serverConn = [Microsoft.SqlServer.Management.Common.ServerConnection]::new($Server)
 
 if ($Credential) {
-  $serverConn.LoginSecure = $false
-  $serverConn.Login = $Credential.UserName
-  $serverConn.SecurePassword = $Credential.Password
+    $serverConn.LoginSecure = $false
+    $serverConn.Login = $Credential.UserName
+    $serverConn.SecurePassword = $Credential.Password
 }
 
 $serverConn.Connect()
 $smoServer = [Microsoft.SqlServer.Management.Smo.Server]::new($serverConn)
-$database = $smoServer.Databases[$DatabaseName]
 ```
 
 ### 6.2 Scripting Options
 
+Use `New-ScriptingOptions` (helper function in project) to ensure consistent defaults like `IncludeHeaders` and strict SMO versions.
+
 ```powershell
-function New-ScriptingOptions {
-  param(
-    [string]$TargetVersion,
-    [hashtable]$Overrides = @{}
-  )
-
-  $opts = [Microsoft.SqlServer.Management.Smo.ScriptingOptions]::new()
-  $opts.AllowSystemObjects = $false
-  $opts.ScriptBatchTerminator = $true
-  $opts.IncludeHeaders = $true
-  # ... more defaults
-
-  # Apply overrides
-  foreach ($key in $Overrides.Keys) {
-    $opts.$key = $Overrides[$key]
-  }
-
-  return $opts
+$opts = New-ScriptingOptions -TargetVersion $TargetVersion -Overrides @{
+    DriAll = $false
+    DriPrimaryKey = $true
+    Indexes = $false
 }
 ```
 
-### 6.3 Collection Filtering
+### 6.3 System Object Filtering
 
-Always filter out system objects:
+**CRITICAL**: Always filter `IsSystemObject` when iterating SMO collections to avoid scripting internal tables.
 
 ```powershell
 $tables = @($Database.Tables | Where-Object { -not $_.IsSystemObject })
-$procedures = @($Database.StoredProcedures | Where-Object { -not $_.IsSystemObject })
 ```
 
 ---
 
-## 7. Testing Patterns
+## 7. Testing (Instructions)
 
-### 7.1 Integration Test Structure
+- Integration tests reside in `tests/`.
+- Use **Docker Compose** (`docker-compose.yml`) to spin up ephemeral SQL Server instances.
+- Generate unique database names per run: `"TestDb_$(Get-Date -Format 'yyyyMMdd_HHmmss')"`.
+- Clean up test databases in a `finally` block.
 
 ```powershell
-# Arrange
-$testDb = "TestDb_$(Get-Date -Format 'yyyyMMdd_HHmmss')"
-# ... setup
-
-# Act
+# Example Test Act
 ./Export-SqlServerSchema.ps1 -Server localhost -Database $testDb -OutputPath $outputPath
-
-# Assert
-$exportedFiles = Get-ChildItem $outputPath -Recurse -Filter *.sql
-if ($exportedFiles.Count -eq 0) {
-  Write-Host "[ERROR] No files exported" -ForegroundColor Red
-  exit 1
-}
-Write-Host "[SUCCESS] Exported $($exportedFiles.Count) files" -ForegroundColor Green
-```
-
-### 7.2 Docker Compose for SQL Server
-
-Tests use Docker Compose with SQL Server 2022. Credentials in `tests/.env`:
-
-```yaml
-services:
-  sqlserver:
-    image: mcr.microsoft.com/mssql/server:2022-latest
-    environment:
-      - ACCEPT_EULA=Y
-      - SA_PASSWORD=${SA_PASSWORD}
 ```
 
 ---
 
-## 8. Documentation Standards
+## 8. Anti-Patterns to Avoid
 
-### 8.1 Inline Comments
-
-Use comments sparingly for non-obvious logic:
-
-```powershell
-# Exponential backoff: double the delay for next attempt
-$delay = $delay * 2
-
-# Azure SQL throttling error codes (40501, 40613, etc.)
-if ($errorMessage -match '40501|40613|49918') {
-  $isTransient = $true
-}
-```
-
-### 8.2 Function Documentation
-
-Minimum `.SYNOPSIS`, add `.DESCRIPTION` for complex functions:
-
-```powershell
-function Export-Tables {
-  <#
-    .SYNOPSIS
-        Exports table definitions to SQL files.
-    .DESCRIPTION
-        Exports each table with its columns, constraints (except FKs), 
-        and triggers. Foreign keys are exported separately to handle
-        circular dependencies.
-    #>
-```
-
----
-
-## 9. Common Anti-Patterns to Avoid
-
-| Anti-Pattern | Correct Approach |
-|--------------|------------------|
-| `Write-Output "Status message"` | `Write-Host "[INFO] Status message"` |
-| `echo "message"` | `Write-Host "[INFO] message"` |
-| `function DoSomething` | `function Invoke-Something` |
-| `$global:Variable` | `$script:Variable` |
-| Plain `throw "error"` | `Write-Host "[ERROR] ..."; throw` |
-| Emojis in output | Text prefixes `[SUCCESS]`, `[ERROR]` |
-| Magic numbers | Named constants or parameters |
-| Long parameter lines | One parameter per line |
-
----
-
-## 10. File Organization
-
-```
-Export-SqlServerSchema/
-  Export-SqlServerSchema.ps1    # Main export script
-  Import-SqlServerSchema.ps1    # Main import script
-  export-import-config.example.yml
-  export-import-config.schema.json
-  tests/
-    run-integration-test.ps1    # Integration test runner
-    test-schema.sql             # Test fixtures
-    docker-compose.yml          # SQL Server container
-  docs/
-    *.md                        # Design documents
-  .github/
-    copilot-instructions.md     # AI assistant rules
-    powershell-style.md         # This file
-```
-
----
-
-## References
-
-- [PowerShell Approved Verbs](https://learn.microsoft.com/en-us/powershell/scripting/developer/cmdlet/approved-verbs-for-windows-powershell-commands)
-- [SMO Documentation](https://learn.microsoft.com/en-us/sql/relational-databases/server-management-objects-smo/)
-- Project README.md for usage examples
+- **Concatenating Paths**: `"$Dir\$File"` (Wrong) vs `Join-Path $Dir $File` (Right).
+- **Silent Failures**: Empty `catch {}` blocks.
+- **Global Variables**: Using `$global:Var`. Use `$script:Var` if necessary.
+- **Magic Numbers**: Hardcoding IDs or timeouts without named constants or parameters.
+- **Assumed Defaults**: Always specify `-Encoding UTF8` (or generic) when writing files if the default isn't guaranteed.
