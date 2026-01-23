@@ -61,6 +61,10 @@
         "/^pwsh -File d:\\\\Export-SqlServerSchema\\\\tests\\\\run-perf-test\\.ps1 -ExportConfigYaml d:\\\\Export-SqlServerSchema\\\\tests\\\\test-groupby-schema\\.yml -SkipDatabaseSetup$/": {
             "approve": true,
             "matchCommandLine": true
+        },
+        "/^cd tests; pwsh -Command \"docker-compose up -d\"$/": {
+            "approve": true,
+            "matchCommandLine": true
         }
     }
 }

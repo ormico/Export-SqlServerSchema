@@ -1,0 +1,7 @@
+export:
+  parallel:
+    enabled: true
+    workers: 5
+  groupBy:
+    mode: single
+  includeData: false
