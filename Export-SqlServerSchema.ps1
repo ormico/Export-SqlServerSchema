@@ -2508,15 +2508,35 @@ function Invoke-ParallelExport {
   }
 
   # Database Scoped Credentials (folder 02_DatabaseConfiguration)
+  # SECURITY: Export structure only - secrets cannot be exported safely
   if (-not (Test-ObjectTypeExcluded -ObjectType 'DatabaseScopedCredentials')) {
     try {
       if ($Database.DatabaseScopedCredentials -and $Database.DatabaseScopedCredentials.Count -gt 0) {
         $dbScopedCreds = @($Database.DatabaseScopedCredentials)
-        $opts = New-ScriptingOptions -TargetVersion $TargetVersion
-        $opts.FileName = Join-Path $OutputDir '02_DatabaseConfiguration' '002_DatabaseScopedCredentials.sql'
-        $Scripter.Options = $opts
-        $Scripter.EnumScript($dbScopedCreds) | Out-Null
-        Write-Host "  [SUCCESS] Exported $($dbScopedCreds.Count) database scoped credential(s)" -ForegroundColor Green
+        $credFilePath = Join-Path $OutputDir '02_DatabaseConfiguration' '002_DatabaseScopedCredentials.sql'
+        $credScript = New-Object System.Text.StringBuilder
+        [void]$credScript.AppendLine("-- Database Scoped Credentials (Structure Only)")
+        [void]$credScript.AppendLine("-- WARNING: Secrets cannot be exported and must be provided during import")
+        [void]$credScript.AppendLine("-- This file documents the credential names and identities for reference")
+        [void]$credScript.AppendLine("")
+
+        foreach ($cred in $dbScopedCreds) {
+          [void]$credScript.AppendLine("-- Credential: $($cred.Name)")
+          [void]$credScript.AppendLine("-- Identity: $($cred.Identity)")
+          [void]$credScript.AppendLine("-- MANUAL ACTION REQUIRED: Create this credential with appropriate secret")
+          [void]$credScript.AppendLine("-- Example:")
+          [void]$credScript.AppendLine("/*")
+          [void]$credScript.AppendLine("CREATE DATABASE SCOPED CREDENTIAL [$($cred.Name)]")
+          [void]$credScript.AppendLine("WITH IDENTITY = '$($cred.Identity)',")
+          [void]$credScript.AppendLine("SECRET = '<PROVIDE_SECRET_HERE>';")
+          [void]$credScript.AppendLine("GO")
+          [void]$credScript.AppendLine("*/")
+          [void]$credScript.AppendLine("")
+        }
+
+        $credScript.ToString() | Out-File -FilePath $credFilePath -Encoding UTF8
+        Write-Host "  [SUCCESS] Documented $($dbScopedCreds.Count) database scoped credential(s) (structure only)" -ForegroundColor Green
+        Write-Host "  [WARNING] Credentials exported as documentation only - secrets must be provided manually" -ForegroundColor Yellow
       }
     }
     catch {
