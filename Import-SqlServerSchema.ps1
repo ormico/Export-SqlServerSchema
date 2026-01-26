@@ -855,13 +855,13 @@ function Invoke-SqlScript {
           $newSizeKB = $FileGroupFileSizeDefaults.sizeKB
           # Replace SIZE = <number>KB or SIZE = <number>MB or SIZE = <number>GB
           # Pattern matches: SIZE = 8192KB, SIZE = 64MB, SIZE = 1GB (with optional surrounding whitespace)
-          $sql = $sql -replace 'SIZE\s*=\s*\d+(KB|MB|GB)', "SIZE = ${newSizeKB}KB"
+          $sql = $sql -replace '(?i)SIZE\s*=\s*\d+(KB|MB|GB)', "SIZE = ${newSizeKB}KB"
           Write-Verbose "  [INFO] FileGroup file SIZE overridden to ${newSizeKB}KB"
         }
         if ($FileGroupFileSizeDefaults.ContainsKey('fileGrowthKB')) {
           $newGrowthKB = $FileGroupFileSizeDefaults.fileGrowthKB
           # Replace FILEGROWTH = <number>KB or FILEGROWTH = <number>MB or FILEGROWTH = <number>GB
-          $sql = $sql -replace 'FILEGROWTH\s*=\s*\d+(KB|MB|GB)', "FILEGROWTH = ${newGrowthKB}KB"
+          $sql = $sql -replace '(?i)FILEGROWTH\s*=\s*\d+(KB|MB|GB)', "FILEGROWTH = ${newGrowthKB}KB"
           Write-Verbose "  [INFO] FileGroup file FILEGROWTH overridden to ${newGrowthKB}KB"
         }
       }
