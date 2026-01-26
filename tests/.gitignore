@@ -3,4 +3,3 @@ exports/
 exports_exclude_test/
 exports_perf/
 exports_parallel/
-perf-metrics-*.json
