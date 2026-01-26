@@ -4,3 +4,5 @@ DbScripts/**
 *.log
 .local/
 tests/perf-metrics-*.json
+
+tests/exports_parallel_test/
