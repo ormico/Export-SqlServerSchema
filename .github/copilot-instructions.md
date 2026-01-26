@@ -1,14 +1,45 @@
 # Copilot Instructions for Export-SqlServerSchema
 
+## Active Development Tasks
+
+**Parallel Export Feature**: If implementing parallel export, read these documents first:
+1. `docs/PARALLEL_EXPORT_DESIGN.md` - Architecture and decisions
+2. `docs/PARALLEL_EXPORT_IMPLEMENTATION.md` - Step-by-step implementation guide
+3. `.github/copilot-parallel-export.md` - Quick reference for AI assistants
+
+**Incremental Export Feature** (after parallel): See `docs/INCREMENTAL_EXPORT_FEASIBILITY.md`
+
+## CRITICAL: No Shortcuts Policy
+
+**NEVER** take shortcuts, produce "streamlined" or "condensed" versions, or compromise features without explicit user approval. This includes:
+
+- ❌ Skipping object types in implementations
+- ❌ Omitting edge cases or error handling
+- ❌ Simplifying complex logic that is required by design
+- ❌ Leaving "TODO" comments instead of implementing features
+- ❌ Creating placeholder functions without full implementation
+
+**If implementation is large:**
+- ✅ Break into smaller, well-designed helper functions
+- ✅ Implement incrementally but completely
+- ✅ Ask user for guidance on approach BEFORE starting
+- ✅ Follow design documents exactly as written
+
+**When in doubt:** Ask the user. Don't assume you can skip things.
+
+---
+
 ## Code Style Conventions
 
-**No Unicode Glyphs or Emojis**: Never use Unicode glyphs, emojis, or decorative symbols in documentation, code, or output messages. Use text-based formatting instead:
-- Use `[SUCCESS]`, `[ERROR]`, `[WARNING]`, `[INFO]` prefixes for console output (see Export-SqlServerSchema.ps1 lines 288+)
-- Use bullet points (`-`), numbered lists, and markdown headers (`###`) for structure
-- Use words like "Production", "Developer", "CI/CD" instead of colored circle emojis (🔵🟢🟡)
-- Use text labels like "ALREADY EXPORTED", "RECOMMENDED", "OPTIONAL" instead of checkmarks/crosses (✅❌⚠️)
+**Full Style Guide**: See `.github/instructions/powershell.instructions.md` for comprehensive PowerShell coding standards.
 
-**Rationale**: Text-based formatting ensures compatibility across all terminals, editors, and platforms. MISSING_OBJECTS_ANALYSIS.md currently violates this convention with emoji usage and should be refactored.
+**Key Rules**:
+- **No Unicode/Emojis**: Use `[SUCCESS]`, `[ERROR]`, `[WARNING]`, `[INFO]` prefixes instead
+- **Console Output**: Use `Write-Host` with colored prefixes, not `Write-Output`
+- **Function Names**: Use approved PowerShell verbs (`Get-`, `Set-`, `New-`, `Export-`, etc.)
+- **Parameters**: One per line with `HelpMessage`, use `ValidateSet` for enums
+- **Script State**: Use `$script:VariableName` for cross-function state
+- **Error Handling**: `$ErrorActionPreference = 'Stop'` with try/catch blocks
 
 ## Project Architecture
 

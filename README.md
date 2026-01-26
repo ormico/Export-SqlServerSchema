@@ -688,12 +688,12 @@ The Import script splits SQL files on `GO` batch separators using regex pattern 
 ## Documentation
 
 - **README.md** (this file): Quick start and parameter reference
-- **EXPORT_IMPORT_STRATEGY.md**: Comprehensive design documentation
-- **MISSING_OBJECTS_ANALYSIS.md**: SQL Server object type coverage analysis
+- **docs/USER_GUIDE.md**: Detailed usage instructions and configuration guide
+- **docs/SOFTWARE_DESIGN.md**: Internal architecture, folder structure, and design decisions
 - **tests/README.md**: Integration testing with Docker
 - **.github/copilot-instructions.md**: Code style conventions
 
-See [CHANGELOG.md](CHANGELOG.md) for complete release notes and [EXPORT_IMPORT_STRATEGY.md](EXPORT_IMPORT_STRATEGY.md) for detailed feature documentation.
+See [CHANGELOG.md](CHANGELOG.md) for complete release notes.
 
 ## Help
 
