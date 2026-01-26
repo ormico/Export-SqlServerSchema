@@ -514,6 +514,13 @@ function Wait-ParallelWorkers {
 
 
 function Build-WorkItems-Schemas {
+  <#
+  .SYNOPSIS
+  Builds work items for database schema export.
+  .DESCRIPTION
+  Creates export work items for user-defined schemas (excludes system schemas).
+  Output: 03_Schemas folder.
+  #>
   param($Database, $OutputDir)
 
   if (Test-ObjectTypeExcluded -ObjectType 'Schemas') { return @() }
@@ -554,6 +561,13 @@ function Build-WorkItems-Schemas {
 }
 
 function Build-WorkItems-Sequences {
+  <#
+  .SYNOPSIS
+  Builds work items for sequence object export.
+  .DESCRIPTION
+  Creates export work items for SQL Server sequences (auto-incrementing values).
+  Supports single/schema/all grouping modes. Output: 04_Sequences folder.
+  #>
   param($Database, $OutputDir)
 
   if (Test-ObjectTypeExcluded -ObjectType 'Sequences') { return @() }
@@ -608,6 +622,13 @@ function Build-WorkItems-Sequences {
 }
 
 function Build-WorkItems-PartitionFunctions {
+  <#
+  .SYNOPSIS
+  Builds work items for partition function export.
+  .DESCRIPTION
+  Creates export work items for partition functions that define data distribution boundaries.
+  Database-level objects (no schema). Output: 05_PartitionFunctions folder.
+  #>
   param($Database, $OutputDir)
 
   if (Test-ObjectTypeExcluded -ObjectType 'PartitionFunctions') { return @() }
@@ -648,6 +669,13 @@ function Build-WorkItems-PartitionFunctions {
 }
 
 function Build-WorkItems-PartitionSchemes {
+  <#
+  .SYNOPSIS
+  Builds work items for partition scheme export.
+  .DESCRIPTION
+  Creates export work items for partition schemes that map partition function boundaries to filegroups.
+  Must be exported after partition functions. Output: 06_PartitionSchemes folder.
+  #>
   param($Database, $OutputDir)
 
   if (Test-ObjectTypeExcluded -ObjectType 'PartitionSchemes') { return @() }
@@ -687,6 +715,13 @@ function Build-WorkItems-PartitionSchemes {
 }
 
 function Build-WorkItems-UserDefinedTypes {
+  <#
+  .SYNOPSIS
+  Builds work items for user-defined type export.
+  .DESCRIPTION
+  Creates export work items for UDTs including alias types, CLR types, and table types.
+  Must be exported before tables that use these types. Output: 07_Types folder.
+  #>
   param($Database, $OutputDir)
 
   if (Test-ObjectTypeExcluded -ObjectType 'UserDefinedTypes') { return @() }
@@ -752,6 +787,13 @@ function Build-WorkItems-UserDefinedTypes {
 }
 
 function Build-WorkItems-XmlSchemaCollections {
+  <#
+  .SYNOPSIS
+  Builds work items for XML schema collection export.
+  .DESCRIPTION
+  Creates export work items for XML schema collections used to validate XML columns.
+  Must be exported before tables with typed XML columns. Output: 08_XmlSchemaCollections folder.
+  #>
   param($Database, $OutputDir)
 
   if (Test-ObjectTypeExcluded -ObjectType 'XmlSchemaCollections') { return @() }
@@ -806,6 +848,14 @@ function Build-WorkItems-XmlSchemaCollections {
 }
 
 function Build-WorkItems-Tables {
+  <#
+  .SYNOPSIS
+  Builds work items for table export (structure with primary keys only).
+  .DESCRIPTION
+  Creates export work items for table DDL with primary keys but NOT foreign keys or indexes.
+  FKs and indexes are exported separately to handle circular dependencies.
+  Output: 09_Tables_PrimaryKey folder.
+  #>
   param($Database, $OutputDir)
 
   if (Test-ObjectTypeExcluded -ObjectType 'Tables') { return @() }
@@ -881,6 +931,14 @@ function Build-WorkItems-Tables {
 # Continuation of helper functions
 
 function Build-WorkItems-ForeignKeys {
+  <#
+  .SYNOPSIS
+  Builds work items for foreign key constraint export.
+  .DESCRIPTION
+  Creates export work items for FK constraints as ALTER TABLE ADD CONSTRAINT statements.
+  Exported separately from tables to avoid circular reference issues during import.
+  Output: 10_Tables_ForeignKeys folder.
+  #>
   param($Database, $OutputDir)
 
   if (Test-ObjectTypeExcluded -ObjectType 'ForeignKeys') { return @() }
@@ -967,6 +1025,14 @@ function Build-WorkItems-ForeignKeys {
 }
 
 function Build-WorkItems-Indexes {
+  <#
+  .SYNOPSIS
+  Builds work items for non-clustered index export.
+  .DESCRIPTION
+  Creates export work items for individual indexes (excludes primary key indexes).
+  Each index gets its own work item with TableSchema, TableName, and IndexName identifiers.
+  Output: 11_Indexes folder.
+  #>
   param($Database, $OutputDir)
 
   if (Test-ObjectTypeExcluded -ObjectType 'Indexes') { return @() }
@@ -1059,6 +1125,13 @@ function Build-WorkItems-Indexes {
 }
 
 function Build-WorkItems-Defaults {
+  <#
+  .SYNOPSIS
+  Builds work items for legacy default object export.
+  .DESCRIPTION
+  Creates export work items for standalone DEFAULT objects (deprecated, use DEFAULT constraints).
+  Included for backward compatibility with older databases. Output: 12_Defaults folder.
+  #>
   param($Database, $OutputDir)
 
   if (Test-ObjectTypeExcluded -ObjectType 'Defaults') { return @() }
@@ -1113,6 +1186,13 @@ function Build-WorkItems-Defaults {
 }
 
 function Build-WorkItems-Rules {
+  <#
+  .SYNOPSIS
+  Builds work items for legacy rule object export.
+  .DESCRIPTION
+  Creates export work items for standalone RULE objects (deprecated, use CHECK constraints).
+  Included for backward compatibility with older databases. Output: 13_Rules folder.
+  #>
   param($Database, $OutputDir)
 
   if (Test-ObjectTypeExcluded -ObjectType 'Rules') { return @() }
@@ -1167,6 +1247,14 @@ function Build-WorkItems-Rules {
 }
 
 function Build-WorkItems-Assemblies {
+  <#
+  .SYNOPSIS
+  Builds work items for CLR assembly export.
+  .DESCRIPTION
+  Creates export work items for .NET assemblies registered in the database for CLR integration.
+  Must be exported before CLR functions, procedures, or types that depend on them.
+  Output: 14_Programmability folder (subfolder).
+  #>
   param($Database, $OutputDir)
 
   if (Test-ObjectTypeExcluded -ObjectType 'Assemblies') { return @() }
@@ -1217,6 +1305,14 @@ function Build-WorkItems-Assemblies {
 # Remaining helper functions for all object types
 
 function Build-WorkItems-Functions {
+  <#
+  .SYNOPSIS
+  Builds work items for user-defined function export.
+  .DESCRIPTION
+  Creates export work items for scalar, table-valued, and CLR functions.
+  May have cross-dependencies with views and procedures (handled by import retry logic).
+  Output: 14_Programmability/Functions subfolder.
+  #>
   param($Database, $OutputDir)
 
   if (Test-ObjectTypeExcluded -ObjectType 'Functions') { return @() }
@@ -1271,6 +1367,14 @@ function Build-WorkItems-Functions {
 }
 
 function Build-WorkItems-UserDefinedAggregates {
+  <#
+  .SYNOPSIS
+  Builds work items for CLR user-defined aggregate export.
+  .DESCRIPTION
+  Creates export work items for custom aggregate functions implemented via CLR.
+  Requires corresponding CLR assembly to be loaded first.
+  Output: 14_Programmability/UserDefinedAggregates subfolder.
+  #>
   param($Database, $OutputDir)
 
   if (Test-ObjectTypeExcluded -ObjectType 'UserDefinedAggregates') { return @() }
@@ -1331,6 +1435,14 @@ function Build-WorkItems-UserDefinedAggregates {
 }
 
 function Build-WorkItems-StoredProcedures {
+  <#
+  .SYNOPSIS
+  Builds work items for stored procedure export.
+  .DESCRIPTION
+  Creates export work items for T-SQL and CLR stored procedures.
+  May have cross-dependencies with functions and views (handled by import retry logic).
+  Output: 14_Programmability/StoredProcedures subfolder.
+  #>
   param($Database, $OutputDir)
 
   if (Test-ObjectTypeExcluded -ObjectType 'StoredProcedures') { return @() }
@@ -1385,6 +1497,13 @@ function Build-WorkItems-StoredProcedures {
 }
 
 function Build-WorkItems-DatabaseTriggers {
+  <#
+  .SYNOPSIS
+  Builds work items for database-level DDL trigger export.
+  .DESCRIPTION
+  Creates export work items for DDL triggers that respond to database events (CREATE, ALTER, DROP).
+  Database-scoped, not tied to specific tables. Output: 14_Programmability/DatabaseTriggers subfolder.
+  #>
   param($Database, $OutputDir)
 
   if (Test-ObjectTypeExcluded -ObjectType 'DatabaseTriggers') { return @() }
@@ -1425,6 +1544,14 @@ function Build-WorkItems-DatabaseTriggers {
 }
 
 function Build-WorkItems-TableTriggers {
+  <#
+  .SYNOPSIS
+  Builds work items for table-level DML trigger export.
+  .DESCRIPTION
+  Creates export work items for DML triggers (INSERT, UPDATE, DELETE) attached to tables.
+  Iterates all tables and collects their triggers with parent table context.
+  Output: 14_Programmability/TableTriggers subfolder.
+  #>
   param($Database, $OutputDir)
 
   if (Test-ObjectTypeExcluded -ObjectType 'TableTriggers') { return @() }
@@ -1500,6 +1627,14 @@ function Build-WorkItems-TableTriggers {
 }
 
 function Build-WorkItems-Views {
+  <#
+  .SYNOPSIS
+  Builds work items for view export.
+  .DESCRIPTION
+  Creates export work items for database views (excludes system views).
+  May have cross-dependencies with functions and other views (handled by import retry logic).
+  Output: 14_Programmability/Views subfolder.
+  #>
   param($Database, $OutputDir)
 
   if (Test-ObjectTypeExcluded -ObjectType 'Views') { return @() }
@@ -1554,6 +1689,13 @@ function Build-WorkItems-Views {
 }
 
 function Build-WorkItems-Synonyms {
+  <#
+  .SYNOPSIS
+  Builds work items for synonym export.
+  .DESCRIPTION
+  Creates export work items for database synonyms (aliases for other database objects).
+  May reference objects in other databases or linked servers. Output: 15_Synonyms folder.
+  #>
   param($Database, $OutputDir)
 
   if (Test-ObjectTypeExcluded -ObjectType 'Synonyms') { return @() }
@@ -1608,6 +1750,13 @@ function Build-WorkItems-Synonyms {
 }
 
 function Build-WorkItems-FullTextCatalogs {
+  <#
+  .SYNOPSIS
+  Builds work items for full-text catalog export.
+  .DESCRIPTION
+  Creates export work items for full-text search catalogs (containers for full-text indexes).
+  Database-level objects. Output: 16_FullTextSearch folder.
+  #>
   param($Database, $OutputDir)
 
   if (Test-ObjectTypeExcluded -ObjectType 'FullTextCatalogs') { return @() }
@@ -1654,6 +1803,13 @@ function Build-WorkItems-FullTextCatalogs {
 }
 
 function Build-WorkItems-FullTextStopLists {
+  <#
+  .SYNOPSIS
+  Builds work items for full-text stoplist export.
+  .DESCRIPTION
+  Creates export work items for full-text stoplists (noise word exclusion lists).
+  Used by full-text indexes to filter common words. Output: 16_FullTextSearch folder.
+  #>
   param($Database, $OutputDir)
 
   if (Test-ObjectTypeExcluded -ObjectType 'FullTextStopLists') { return @() }
@@ -1699,6 +1855,13 @@ function Build-WorkItems-FullTextStopLists {
 }
 
 function Build-WorkItems-ExternalDataSources {
+  <#
+  .SYNOPSIS
+  Builds work items for external data source export.
+  .DESCRIPTION
+  Creates export work items for PolyBase external data sources (Hadoop, Azure Blob, etc.).
+  Used with external tables for data virtualization. Output: 17_ExternalData folder.
+  #>
   param($Database, $OutputDir)
 
   if (Test-ObjectTypeExcluded -ObjectType 'ExternalDataSources') { return @() }
@@ -1744,6 +1907,13 @@ function Build-WorkItems-ExternalDataSources {
 }
 
 function Build-WorkItems-ExternalFileFormats {
+  <#
+  .SYNOPSIS
+  Builds work items for external file format export.
+  .DESCRIPTION
+  Creates export work items for PolyBase external file formats (CSV, Parquet, ORC, etc.).
+  Defines structure of data in external data sources. Output: 17_ExternalData folder.
+  #>
   param($Database, $OutputDir)
 
   if (Test-ObjectTypeExcluded -ObjectType 'ExternalFileFormats') { return @() }
@@ -1789,6 +1959,13 @@ function Build-WorkItems-ExternalFileFormats {
 }
 
 function Build-WorkItems-SearchPropertyLists {
+  <#
+  .SYNOPSIS
+  Builds work items for search property list export.
+  .DESCRIPTION
+  Creates export work items for full-text search property lists (document property definitions).
+  Used for property searching in full-text indexes. Output: 18_SearchPropertyLists folder.
+  #>
   param($Database, $OutputDir)
 
   if (Test-ObjectTypeExcluded -ObjectType 'SearchPropertyLists') { return @() }
@@ -1834,6 +2011,13 @@ function Build-WorkItems-SearchPropertyLists {
 }
 
 function Build-WorkItems-PlanGuides {
+  <#
+  .SYNOPSIS
+  Builds work items for plan guide export.
+  .DESCRIPTION
+  Creates export work items for query plan guides (hints for query optimizer).
+  Used to influence execution plans without modifying application code. Output: 19_PlanGuides folder.
+  #>
   param($Database, $OutputDir)
 
   if (Test-ObjectTypeExcluded -ObjectType 'PlanGuides') { return @() }
@@ -1879,6 +2063,14 @@ function Build-WorkItems-PlanGuides {
 }
 
 function Build-WorkItems-Security {
+  <#
+  .SYNOPSIS
+  Builds work items for security object export.
+  .DESCRIPTION
+  Creates export work items for database security objects: Certificates, Asymmetric Keys,
+  Symmetric Keys, Database Roles, Application Roles, and Database Users.
+  All security objects grouped in 01_Security folder (exported first for dependency order).
+  #>
   param($Database, $OutputDir)
 
   # Security objects are grouped together: Certificates, Keys, Roles, Users
@@ -1989,6 +2181,14 @@ function Build-WorkItems-Security {
 }
 
 function Build-WorkItems-SecurityPolicies {
+  <#
+  .SYNOPSIS
+  Builds work items for Row-Level Security (RLS) policy export.
+  .DESCRIPTION
+  Creates export work items for security policies with filter and block predicates.
+  Exported AFTER programmability objects because policies reference predicate functions.
+  Output: 20_SecurityPolicies folder.
+  #>
   param($Database, $OutputDir)
 
   if (Test-ObjectTypeExcluded -ObjectType 'SecurityPolicies') { return @() }
