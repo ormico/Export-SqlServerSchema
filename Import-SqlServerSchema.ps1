@@ -846,7 +846,10 @@ function Invoke-SqlScript {
     # Pattern: NAME = N'OriginalName' (but NOT FILENAME = ...)
     # Use negative lookbehind to ensure we're not matching FILENAME
     if ($scriptName -match '(?i)filegroup') {
-      $sql = $sql -replace "(?<!FILE)NAME\s*=\s*N'([^']+)'", "NAME = N'${DatabaseName}_`$1'"
+      # Use a sanitized database name when embedding into T-SQL string literals for logical file names.
+      # This prevents quotes or other metacharacters in $DatabaseName from breaking the NAME = N'...' literal.
+      $safeDatabaseName = $DatabaseName -replace '[^A-Za-z0-9_]', '_'
+      $sql = $sql -replace "(?<!FILE)NAME\s*=\s*N'([^']+)'", "NAME = N'${safeDatabaseName}_`$1'"
 
       # Override SIZE and FILEGROWTH for FileGroup data files if defaults specified
       # This prevents large source database allocations from failing on dev systems
