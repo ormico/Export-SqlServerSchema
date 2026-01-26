@@ -232,10 +232,19 @@ $script:ParallelWorkerScriptBlock = {
     }
 
     try {
-      # Ensure output directory exists
+      # Ensure output directory exists (handle race condition with concurrent workers)
       $outputDir = Split-Path -Parent $workItem.OutputPath
       if (-not (Test-Path $outputDir)) {
-        New-Item -ItemType Directory -Path $outputDir -Force | Out-Null
+        try {
+          New-Item -ItemType Directory -Path $outputDir -Force | Out-Null
+        }
+        catch {
+          # Race condition: another worker may have created it between Test-Path and New-Item
+          if (-not (Test-Path $outputDir)) {
+            throw  # Re-throw if directory still doesn't exist (actual error)
+          }
+          # Otherwise, directory was created by another worker - continue
+        }
       }
 
       # Fetch SMO objects by identifier
@@ -621,7 +630,9 @@ function Build-WorkItems-Sequences {
   switch ($groupBy) {
     'single' {
       foreach ($seq in $sequences) {
-        $fileName = "$($seq.Schema).$(Get-SafeFileName $($seq.Name)).sql"
+        $safeSchema = Get-SafeFileName $seq.Schema
+        $safeName = Get-SafeFileName $seq.Name
+        $fileName = "$safeSchema.$safeName.sql"
         $workItems += New-ExportWorkItem `
           -ObjectType 'Sequence' `
           -GroupingMode 'single' `
@@ -634,7 +645,8 @@ function Build-WorkItems-Sequences {
       $bySchema = $sequences | Group-Object Schema
       $schemaNum = 1
       foreach ($group in $bySchema | Sort-Object Name) {
-        $fileName = "{0:D3}_{1}_Sequences.sql" -f $schemaNum, $group.Name
+        $safeSchema = Get-SafeFileName $group.Name
+        $fileName = "{0:D3}_{1}_Sequences.sql" -f $schemaNum, $safeSchema
         $objects = @($group.Group | ForEach-Object { @{ Schema = $_.Schema; Name = $_.Name } })
         $workItems += New-ExportWorkItem `
           -ObjectType 'Sequence' `
@@ -780,7 +792,9 @@ function Build-WorkItems-UserDefinedTypes {
   switch ($groupBy) {
     'single' {
       foreach ($type in $allTypes) {
-        $fileName = "$($type.Schema).$(Get-SafeFileName $($type.Name)).sql"
+        $safeSchema = Get-SafeFileName $type.Schema
+        $safeName = Get-SafeFileName $type.Name
+        $fileName = "$safeSchema.$safeName.sql"
         # Determine specific type for worker lookup
         $objectType = if ($type.GetType().Name -eq 'UserDefinedDataType') { 'UserDefinedDataType' }
         elseif ($type.GetType().Name -eq 'UserDefinedTableType') { 'UserDefinedTableType' }
@@ -798,7 +812,8 @@ function Build-WorkItems-UserDefinedTypes {
       $bySchema = $allTypes | Group-Object Schema
       $schemaNum = 1
       foreach ($group in $bySchema | Sort-Object Name) {
-        $fileName = "{0:D3}_{1}_Types.sql" -f $schemaNum, $group.Name
+        $safeSchema = Get-SafeFileName $group.Name
+        $fileName = "{0:D3}_{1}_Types.sql" -f $schemaNum, $safeSchema
         # Mix of type variations - worker will handle lookup
         $objects = @($group.Group | ForEach-Object { @{ Schema = $_.Schema; Name = $_.Name } })
         $workItems += New-ExportWorkItem `
@@ -847,7 +862,9 @@ function Build-WorkItems-XmlSchemaCollections {
   switch ($groupBy) {
     'single' {
       foreach ($xml in $xmlSchemas) {
-        $fileName = "$($xml.Schema).$(Get-SafeFileName $($xml.Name)).sql"
+        $safeSchema = Get-SafeFileName $xml.Schema
+        $safeName = Get-SafeFileName $xml.Name
+        $fileName = "$safeSchema.$safeName.sql"
         $workItems += New-ExportWorkItem `
           -ObjectType 'XmlSchemaCollection' `
           -GroupingMode 'single' `
@@ -860,7 +877,8 @@ function Build-WorkItems-XmlSchemaCollections {
       $bySchema = $xmlSchemas | Group-Object Schema
       $schemaNum = 1
       foreach ($group in $bySchema | Sort-Object Name) {
-        $fileName = "{0:D3}_{1}_XmlSchemas.sql" -f $schemaNum, $group.Name
+        $safeSchema = Get-SafeFileName $group.Name
+        $fileName = "{0:D3}_{1}_XmlSchemas.sql" -f $schemaNum, $safeSchema
         $objects = @($group.Group | ForEach-Object { @{ Schema = $_.Schema; Name = $_.Name } })
         $workItems += New-ExportWorkItem `
           -ObjectType 'XmlSchemaCollection' `
@@ -1031,7 +1049,8 @@ function Build-WorkItems-ForeignKeys {
       $bySchema = $fkList | Group-Object { $_.TableSchema }
       $schemaNum = 1
       foreach ($group in $bySchema | Sort-Object Name) {
-        $fileName = "{0:D3}_{1}_ForeignKeys.sql" -f $schemaNum, $group.Name
+        $safeSchema = Get-SafeFileName $group.Name
+        $fileName = "{0:D3}_{1}_ForeignKeys.sql" -f $schemaNum, $safeSchema
         $tableNames = $group.Group | Select-Object -Property TableSchema, TableName -Unique
         $objects = @($tableNames | ForEach-Object { @{ Schema = $_.TableSchema; Name = $_.TableName } })
         $workItems += New-ExportWorkItem `
@@ -1127,7 +1146,8 @@ function Build-WorkItems-Indexes {
       $bySchema = $indexList | Group-Object { $_.TableSchema }
       $schemaNum = 1
       foreach ($group in $bySchema | Sort-Object Name) {
-        $fileName = "{0:D3}_{1}_Indexes.sql" -f $schemaNum, $group.Name
+        $safeSchema = Get-SafeFileName $group.Name
+        $fileName = "{0:D3}_{1}_Indexes.sql" -f $schemaNum, $safeSchema
         # Pass individual index identifiers
         $indexObjects = @($group.Group | ForEach-Object { @{ TableSchema = $_.TableSchema; TableName = $_.TableName; IndexName = $_.IndexName } })
         $workItems += New-ExportWorkItem `
@@ -1179,7 +1199,9 @@ function Build-WorkItems-Defaults {
   switch ($groupBy) {
     'single' {
       foreach ($def in $defaults) {
-        $fileName = "$($def.Schema).$(Get-SafeFileName $($def.Name)).sql"
+        $safeSchema = Get-SafeFileName $def.Schema
+        $safeName = Get-SafeFileName $def.Name
+        $fileName = "$safeSchema.$safeName.sql"
         $workItems += New-ExportWorkItem `
           -ObjectType 'Default' `
           -GroupingMode 'single' `
@@ -1192,7 +1214,8 @@ function Build-WorkItems-Defaults {
       $bySchema = $defaults | Group-Object Schema
       $schemaNum = 1
       foreach ($group in $bySchema | Sort-Object Name) {
-        $fileName = "{0:D3}_{1}_Defaults.sql" -f $schemaNum, $group.Name
+        $safeSchema = Get-SafeFileName $group.Name
+        $fileName = "{0:D3}_{1}_Defaults.sql" -f $schemaNum, $safeSchema
         $objects = @($group.Group | ForEach-Object { @{ Schema = $_.Schema; Name = $_.Name } })
         $workItems += New-ExportWorkItem `
           -ObjectType 'Default' `
@@ -1240,7 +1263,9 @@ function Build-WorkItems-Rules {
   switch ($groupBy) {
     'single' {
       foreach ($rule in $rules) {
-        $fileName = "$($rule.Schema).$(Get-SafeFileName $($rule.Name)).sql"
+        $safeSchema = Get-SafeFileName $rule.Schema
+        $safeName = Get-SafeFileName $rule.Name
+        $fileName = "$safeSchema.$safeName.sql"
         $workItems += New-ExportWorkItem `
           -ObjectType 'Rule' `
           -GroupingMode 'single' `
@@ -1253,7 +1278,8 @@ function Build-WorkItems-Rules {
       $bySchema = $rules | Group-Object Schema
       $schemaNum = 1
       foreach ($group in $bySchema | Sort-Object Name) {
-        $fileName = "{0:D3}_{1}_Rules.sql" -f $schemaNum, $group.Name
+        $safeSchema = Get-SafeFileName $group.Name
+        $fileName = "{0:D3}_{1}_Rules.sql" -f $schemaNum, $safeSchema
         $objects = @($group.Group | ForEach-Object { @{ Schema = $_.Schema; Name = $_.Name } })
         $workItems += New-ExportWorkItem `
           -ObjectType 'Rule' `
@@ -1360,7 +1386,9 @@ function Build-WorkItems-Functions {
   switch ($groupBy) {
     'single' {
       foreach ($func in $functions) {
-        $fileName = "$($func.Schema).$(Get-SafeFileName $($func.Name)).sql"
+        $safeSchema = Get-SafeFileName $func.Schema
+        $safeName = Get-SafeFileName $func.Name
+        $fileName = "$safeSchema.$safeName.sql"
         $workItems += New-ExportWorkItem `
           -ObjectType 'UserDefinedFunction' `
           -GroupingMode 'single' `
@@ -1373,7 +1401,8 @@ function Build-WorkItems-Functions {
       $bySchema = $functions | Group-Object Schema
       $schemaNum = 1
       foreach ($group in $bySchema | Sort-Object Name) {
-        $fileName = "{0:D3}_{1}_Functions.sql" -f $schemaNum, $group.Name
+        $safeSchema = Get-SafeFileName $group.Name
+        $fileName = "{0:D3}_{1}_Functions.sql" -f $schemaNum, $safeSchema
         $objects = @($group.Group | ForEach-Object { @{ Schema = $_.Schema; Name = $_.Name } })
         $workItems += New-ExportWorkItem `
           -ObjectType 'UserDefinedFunction' `
@@ -1428,7 +1457,9 @@ function Build-WorkItems-UserDefinedAggregates {
   switch ($groupBy) {
     'single' {
       foreach ($agg in $aggregates) {
-        $fileName = "$($agg.Schema).$(Get-SafeFileName $($agg.Name)).sql"
+        $safeSchema = Get-SafeFileName $agg.Schema
+        $safeName = Get-SafeFileName $agg.Name
+        $fileName = "$safeSchema.$safeName.sql"
         $workItems += New-ExportWorkItem `
           -ObjectType 'UserDefinedAggregate' `
           -GroupingMode 'single' `
@@ -1441,7 +1472,8 @@ function Build-WorkItems-UserDefinedAggregates {
       $bySchema = $aggregates | Group-Object Schema
       $schemaNum = 1
       foreach ($group in $bySchema | Sort-Object Name) {
-        $fileName = "{0:D3}_{1}_Aggregates.sql" -f $schemaNum, $group.Name
+        $safeSchema = Get-SafeFileName $group.Name
+        $fileName = "{0:D3}_{1}_Aggregates.sql" -f $schemaNum, $safeSchema
         $objects = @($group.Group | ForEach-Object { @{ Schema = $_.Schema; Name = $_.Name } })
         $workItems += New-ExportWorkItem `
           -ObjectType 'UserDefinedAggregate' `
@@ -1490,7 +1522,9 @@ function Build-WorkItems-StoredProcedures {
   switch ($groupBy) {
     'single' {
       foreach ($proc in $procs) {
-        $fileName = "$($proc.Schema).$(Get-SafeFileName $($proc.Name)).sql"
+        $safeSchema = Get-SafeFileName $proc.Schema
+        $safeName = Get-SafeFileName $proc.Name
+        $fileName = "$safeSchema.$safeName.sql"
         $workItems += New-ExportWorkItem `
           -ObjectType 'StoredProcedure' `
           -GroupingMode 'single' `
@@ -1503,7 +1537,8 @@ function Build-WorkItems-StoredProcedures {
       $bySchema = $procs | Group-Object Schema
       $schemaNum = 1
       foreach ($group in $bySchema | Sort-Object Name) {
-        $fileName = "{0:D3}_{1}_StoredProcedures.sql" -f $schemaNum, $group.Name
+        $safeSchema = Get-SafeFileName $group.Name
+        $fileName = "{0:D3}_{1}_StoredProcedures.sql" -f $schemaNum, $safeSchema
         $objects = @($group.Group | ForEach-Object { @{ Schema = $_.Schema; Name = $_.Name } })
         $workItems += New-ExportWorkItem `
           -ObjectType 'StoredProcedure' `
@@ -1628,7 +1663,8 @@ function Build-WorkItems-TableTriggers {
       $bySchema = $triggerList | Group-Object { $_.TableSchema }
       $schemaNum = 1
       foreach ($group in $bySchema | Sort-Object Name) {
-        $fileName = "{0:D3}_{1}_TableTriggers.sql" -f $schemaNum, $group.Name
+        $safeSchema = Get-SafeFileName $group.Name
+        $fileName = "{0:D3}_{1}_TableTriggers.sql" -f $schemaNum, $safeSchema
         $tableNames = $group.Group | Select-Object -Property TableSchema, TableName -Unique
         $objects = @($tableNames | ForEach-Object { @{ Schema = $_.TableSchema; Name = $_.TableName } })
         $workItems += New-ExportWorkItem `
@@ -1681,7 +1717,9 @@ function Build-WorkItems-Views {
   switch ($groupBy) {
     'single' {
       foreach ($view in $views) {
-        $fileName = "$($view.Schema).$(Get-SafeFileName $($view.Name)).sql"
+        $safeSchema = Get-SafeFileName $view.Schema
+        $safeName = Get-SafeFileName $view.Name
+        $fileName = "$safeSchema.$safeName.sql"
         $workItems += New-ExportWorkItem `
           -ObjectType 'View' `
           -GroupingMode 'single' `
@@ -1694,7 +1732,8 @@ function Build-WorkItems-Views {
       $bySchema = $views | Group-Object Schema
       $schemaNum = 1
       foreach ($group in $bySchema | Sort-Object Name) {
-        $fileName = "{0:D3}_{1}_Views.sql" -f $schemaNum, $group.Name
+        $safeSchema = Get-SafeFileName $group.Name
+        $fileName = "{0:D3}_{1}_Views.sql" -f $schemaNum, $safeSchema
         $objects = @($group.Group | ForEach-Object { @{ Schema = $_.Schema; Name = $_.Name } })
         $workItems += New-ExportWorkItem `
           -ObjectType 'View' `
@@ -1742,7 +1781,9 @@ function Build-WorkItems-Synonyms {
   switch ($groupBy) {
     'single' {
       foreach ($syn in $synonyms) {
-        $fileName = "$($syn.Schema).$(Get-SafeFileName $($syn.Name)).sql"
+        $safeSchema = Get-SafeFileName $syn.Schema
+        $safeName = Get-SafeFileName $syn.Name
+        $fileName = "$safeSchema.$safeName.sql"
         $workItems += New-ExportWorkItem `
           -ObjectType 'Synonym' `
           -GroupingMode 'single' `
@@ -1755,7 +1796,8 @@ function Build-WorkItems-Synonyms {
       $bySchema = $synonyms | Group-Object Schema
       $schemaNum = 1
       foreach ($group in $bySchema | Sort-Object Name) {
-        $fileName = "{0:D3}_{1}_Synonyms.sql" -f $schemaNum, $group.Name
+        $safeSchema = Get-SafeFileName $group.Name
+        $fileName = "{0:D3}_{1}_Synonyms.sql" -f $schemaNum, $safeSchema
         $objects = @($group.Group | ForEach-Object { @{ Schema = $_.Schema; Name = $_.Name } })
         $workItems += New-ExportWorkItem `
           -ObjectType 'Synonym' `
@@ -2169,7 +2211,8 @@ function Build-WorkItems-Security {
           'single' {
             # One file per role: RoleName.role.sql (matches sequential export)
             foreach ($role in $dbRoles) {
-              $fileName = "$($role.Name).role.sql"
+              $safeName = Get-SafeFileName $role.Name
+              $fileName = "$safeName.role.sql"
               $workItems += New-ExportWorkItem `
                 -ObjectType 'DatabaseRole' `
                 -GroupingMode 'single' `
@@ -2200,7 +2243,8 @@ function Build-WorkItems-Security {
         switch ($groupBy) {
           'single' {
             foreach ($role in $appRoles) {
-              $fileName = "$($role.Name).approle.sql"
+              $safeName = Get-SafeFileName $role.Name
+              $fileName = "$safeName.approle.sql"
               $workItems += New-ExportWorkItem `
                 -ObjectType 'ApplicationRole' `
                 -GroupingMode 'single' `
@@ -2234,7 +2278,8 @@ function Build-WorkItems-Security {
           'single' {
             # One file per user: UserName.user.sql (matches sequential export)
             foreach ($user in $users) {
-              $fileName = "$($user.Name).user.sql"
+              $safeName = Get-SafeFileName $user.Name
+              $fileName = "$safeName.user.sql"
               $workItems += New-ExportWorkItem `
                 -ObjectType 'User' `
                 -GroupingMode 'single' `
@@ -2292,7 +2337,9 @@ function Build-WorkItems-SecurityPolicies {
   switch ($groupBy) {
     'single' {
       foreach ($policy in $secPolicies) {
-        $fileName = "$($policy.Schema).$(Get-SafeFileName $($policy.Name)).securitypolicy.sql"
+        $safeSchema = Get-SafeFileName $policy.Schema
+        $safeName = Get-SafeFileName $policy.Name
+        $fileName = "$safeSchema.$safeName.securitypolicy.sql"
         $workItems += New-ExportWorkItem `
           -ObjectType 'SecurityPolicy' `
           -GroupingMode 'single' `
@@ -2306,7 +2353,8 @@ function Build-WorkItems-SecurityPolicies {
       $bySchema = $secPolicies | Group-Object Schema
       $schemaNum = 1
       foreach ($group in $bySchema | Sort-Object Name) {
-        $fileName = "{0:D3}_{1}_SecurityPolicies.sql" -f $schemaNum, $group.Name
+        $safeSchema = Get-SafeFileName $group.Name
+        $fileName = "{0:D3}_{1}_SecurityPolicies.sql" -f $schemaNum, $safeSchema
         $objects = @($group.Group | ForEach-Object { @{ Schema = $_.Schema; Name = $_.Name } })
         $workItems += New-ExportWorkItem `
           -ObjectType 'SecurityPolicy' `
@@ -2364,7 +2412,9 @@ function Build-WorkItems-Data {
   switch ($groupBy) {
     'single' {
       foreach ($table in $tables) {
-        $fileName = "Data.$($table.Schema).$(Get-SafeFileName $($table.Name)).sql"
+        $safeSchema = Get-SafeFileName $table.Schema
+        $safeName = Get-SafeFileName $table.Name
+        $fileName = "Data.$safeSchema.$safeName.sql"
         $workItems += New-ExportWorkItem `
           -ObjectType 'TableData' `
           -GroupingMode 'single' `
@@ -2377,7 +2427,8 @@ function Build-WorkItems-Data {
       $bySchema = $tables | Group-Object Schema
       $schemaNum = 1
       foreach ($group in $bySchema | Sort-Object Name) {
-        $fileName = "{0:D3}_{1}_Data.sql" -f $schemaNum, $group.Name
+        $safeSchema = Get-SafeFileName $group.Name
+        $fileName = "{0:D3}_{1}_Data.sql" -f $schemaNum, $safeSchema
         $objects = @($group.Group | ForEach-Object { @{ Schema = $_.Schema; Name = $_.Name } })
         $workItems += New-ExportWorkItem `
           -ObjectType 'TableData' `
@@ -2698,9 +2749,21 @@ function Invoke-ParallelExport {
   $exportEndTime = Get-Date
   $duration = $exportEndTime - $exportStartTime
 
+  # Separate successful and failed items from completedItems
+  # Worker errors are stored in completedItems with Success=false flag
+  $successCount = 0
+  foreach ($item in $completedItems) {
+    if ($item.Success -eq $false) {
+      $errorItems.Add($item)
+    }
+    else {
+      $successCount++
+    }
+  }
+
   $summary = @{
     TotalItems = $workQueue.Count
-    SuccessCount = $completedItems.Count
+    SuccessCount = $successCount
     ErrorCount = $errorItems.Count
     Errors = @($errorItems | ForEach-Object { $_ })
     Duration = $duration
