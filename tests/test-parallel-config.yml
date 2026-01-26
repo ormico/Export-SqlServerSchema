@@ -1,0 +1,35 @@
+# Parallel Export Test Configuration
+# Tests parallel export with 3 workers for speed while maintaining reliability
+
+export:
+  parallel:
+    enabled: true
+    maxWorkers: 3
+    progressInterval: 10
+
+  # Use single grouping for most objects to maximize parallelization
+  groupByObjectTypes:
+    Tables: single
+    Views: single
+    Functions: single
+    StoredProcedures: single
+    Indexes: single
+    ForeignKeys: single
+    TableTriggers: single
+    Synonyms: single
+
+  # Test with data export enabled
+  includeData: false  # Disable for faster testing
+
+# Dev mode for testing
+import:
+  mode: Dev
+  createDatabase: true
+  includeData: false
+
+  # Dev mode skips
+  devMode:
+    skipFileGroups: true
+    skipDatabaseScopedConfigurations: true
+    skipExternalDataSources: true
+    enableSecurityPolicies: false

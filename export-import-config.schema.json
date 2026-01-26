@@ -143,6 +143,31 @@
             "SecurityPolicies": {"type": "string", "enum": ["single", "schema", "all"], "default": "single"}
           },
           "additionalProperties": false
+        },
+        "parallel": {
+          "type": "object",
+          "description": "Parallel export configuration",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": false,
+              "description": "Enable parallel export processing"
+            },
+            "maxWorkers": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 20,
+              "default": 5,
+              "description": "Maximum number of parallel worker threads"
+            },
+            "progressInterval": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 50,
+              "description": "Report progress every N work items completed"
+            }
+          },
+          "additionalProperties": false
         }
       },
       "additionalProperties": false

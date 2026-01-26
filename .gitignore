@@ -1,15 +1,8 @@
 DbScripts/**
-
 # Environment files with secrets
 .env
-tests/.env
-
-# Test outputs
-tests/exports/
-
-
-tests/exports_exclude_test/
-
-tests/exports_perf/
-
 *.log
+.local/
+tests/perf-metrics-*.json
+
+tests/exports_parallel_test/

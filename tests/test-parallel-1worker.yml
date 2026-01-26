@@ -1,0 +1,10 @@
+# Parallel Export Test Configuration - 1 Worker
+# Tests that parallel export with single worker matches sequential export
+
+trustServerCertificate: true
+
+export:
+  parallel:
+    enabled: true
+    maxWorkers: 1
+    progressInterval: 10

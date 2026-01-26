@@ -39,6 +39,15 @@
 .PARAMETER ConfigFile
     Path to YAML configuration file for advanced export settings. Optional.
 
+.PARAMETER Parallel
+    Enable parallel export processing using multiple worker threads. Can also be enabled via
+    YAML config (export.parallel.enabled: true). Command-line switch overrides config file.
+
+.PARAMETER MaxWorkers
+    Maximum number of parallel workers (1-20, default: 5). Only applies when -Parallel is enabled.
+    Overrides YAML config setting (export.parallel.maxWorkers). Higher values may improve performance
+    on large databases but increase memory usage.
+
 .EXAMPLE
     # Export with Windows auth
     ./Export-SqlServerSchema.ps1 -Server localhost -Database TestDb
@@ -49,6 +58,9 @@
 
     # Export with data
     ./Export-SqlServerSchema.ps1 -Server localhost -Database TestDb -IncludeData -OutputPath ./exports
+
+    # Export with parallel processing
+    ./Export-SqlServerSchema.ps1 -Server localhost -Database TestDb -Parallel -MaxWorkers 8
 
 .NOTES
     Requires: SQL Server Management Objects (SMO)
@@ -113,7 +125,14 @@ param(
     'FullTextStopLists', 'SearchPropertyLists', 'ExternalDataSources', 'ExternalFileFormats',
     'DatabaseRoles', 'DatabaseUsers', 'Certificates', 'AsymmetricKeys', 'SymmetricKeys',
     'SecurityPolicies', 'PlanGuides', 'Data')]
-  [string[]]$ExcludeObjectTypes
+  [string[]]$ExcludeObjectTypes,
+
+  [Parameter(HelpMessage = 'Enable parallel export processing for improved performance')]
+  [switch]$Parallel,
+
+  [Parameter(HelpMessage = 'Maximum number of parallel workers (1-20, default: 5). Overrides config file.')]
+  [ValidateRange(1, 20)]
+  [int]$MaxWorkers = 0
 )
 
 $ErrorActionPreference = 'Stop'
@@ -129,8 +148,2656 @@ catch {
   # Will be handled properly in Test-Dependencies
 }
 
+# Parallel code consolidated below
+
+
+#region PARALLEL EXPORT FUNCTIONS
+# All parallel export functionality consolidated from separate files
+# ~2,400 lines for parallel processing infrastructure
+
+
+# === From parallel-implementation.ps1 ===
+
+
+
+$script:ParallelWorkerScriptBlock = {
+  param(
+    [System.Collections.Concurrent.ConcurrentQueue[hashtable]]$WorkQueue,
+    [ref]$ProgressCounter,
+    [System.Collections.Concurrent.ConcurrentBag[hashtable]]$ResultsBag,
+    [hashtable]$ConnectionInfo,
+    [string]$TargetVersion
+  )
+
+  #region Worker Setup
+  try {
+    # Create own SMO connection
+    $serverConn = [Microsoft.SqlServer.Management.Common.ServerConnection]::new($ConnectionInfo.ServerName)
+
+    if ($ConnectionInfo.UseIntegratedSecurity) {
+      $serverConn.LoginSecure = $true
+    }
+    else {
+      $serverConn.LoginSecure = $false
+      $serverConn.Login = $ConnectionInfo.Username
+      $serverConn.SecurePassword = $ConnectionInfo.SecurePassword
+    }
+
+    if ($ConnectionInfo.TrustServerCertificate) {
+      $serverConn.TrustServerCertificate = $true
+    }
+
+    $serverConn.ConnectTimeout = $ConnectionInfo.ConnectTimeout
+    $serverConn.Connect()
+
+    $server = [Microsoft.SqlServer.Management.Smo.Server]::new($serverConn)
+    $db = $server.Databases[$ConnectionInfo.DatabaseName]
+
+    if (-not $db) {
+      throw "Database '$($ConnectionInfo.DatabaseName)' not found"
+    }
+
+    # Create Scripter with prefetch enabled
+    $scripter = [Microsoft.SqlServer.Management.Smo.Scripter]::new($server)
+    $scripter.PrefetchObjects = $true
+  }
+  catch {
+    # Fatal setup error - can't process any work items
+    $ResultsBag.Add(@{
+        WorkItemId  = [guid]::Empty
+        Success     = $false
+        ObjectCount = 0
+        Error       = "Worker setup failed: $($_.Exception.Message)"
+        ObjectType  = 'WorkerSetup'
+        Objects     = @()
+      })
+    return
+  }
+  #endregion
+
+  #region Work Loop
+  while ($true) {
+    $workItem = $null
+    if (-not $WorkQueue.TryDequeue([ref]$workItem)) {
+      break  # No more work items
+    }
+
+    $result = @{
+      WorkItemId  = $workItem.WorkItemId
+      Success     = $false
+      ObjectCount = $workItem.Objects.Count
+      Error       = $null
+      ObjectType  = $workItem.ObjectType
+      Objects     = $workItem.Objects
+    }
+
+    try {
+      # Ensure output directory exists (handle race condition with concurrent workers)
+      $outputDir = Split-Path -Parent $workItem.OutputPath
+      if (-not (Test-Path $outputDir)) {
+        try {
+          New-Item -ItemType Directory -Path $outputDir -Force | Out-Null
+        }
+        catch {
+          # Race condition: another worker may have created it between Test-Path and New-Item
+          if (-not (Test-Path $outputDir)) {
+            throw  # Re-throw if directory still doesn't exist (actual error)
+          }
+          # Otherwise, directory was created by another worker - continue
+        }
+      }
+
+      # Fetch SMO objects by identifier
+      $smoObjects = [System.Collections.Generic.List[object]]::new()
+
+      foreach ($objId in $workItem.Objects) {
+        $smoObj = $null
+
+        # Handle special object types
+        if ($workItem.SpecialHandler -eq 'Indexes') {
+          # For indexes, fetch the individual index object from the parent table
+          $table = $db.Tables[$objId.TableName, $objId.TableSchema]
+          if ($table -and $table.Indexes) {
+            $smoObj = $table.Indexes[$objId.IndexName]
+          }
+        }
+        elseif ($workItem.SpecialHandler -eq 'ForeignKeys') {
+          # For foreign keys, fetch individual FK or parent table depending on grouping mode
+          $table = $db.Tables[$objId.Name, $objId.Schema]
+          if ($table -and $objId.FKName -and $workItem.GroupingMode -eq 'single') {
+            # Single mode: fetch individual FK object
+            $smoObj = $table.ForeignKeys[$objId.FKName]
+          }
+          elseif ($table) {
+            # Grouped mode: return table for FK scripting options
+            $smoObj = $table
+          }
+        }
+        elseif ($workItem.SpecialHandler -eq 'TableTriggers') {
+          # For triggers, fetch individual trigger or parent table depending on grouping mode
+          $table = $db.Tables[$objId.Name, $objId.Schema]
+          if ($table -and $objId.TriggerName -and $workItem.GroupingMode -eq 'single') {
+            # Single mode: fetch individual trigger object
+            $smoObj = $table.Triggers[$objId.TriggerName]
+          }
+          elseif ($table) {
+            # Grouped mode: return table for trigger scripting options
+            $smoObj = $table
+          }
+        }
+        else {
+          # Standard object lookup
+          switch ($workItem.ObjectType) {
+            'Table'                    { $smoObj = $db.Tables[$objId.Name, $objId.Schema] }
+            'View'                     { $smoObj = $db.Views[$objId.Name, $objId.Schema] }
+            'StoredProcedure'          { $smoObj = $db.StoredProcedures[$objId.Name, $objId.Schema] }
+            'UserDefinedFunction'      { $smoObj = $db.UserDefinedFunctions[$objId.Name, $objId.Schema] }
+            'Schema'                   { $smoObj = $db.Schemas[$objId.Name] }
+            'Sequence'                 { $smoObj = $db.Sequences[$objId.Name, $objId.Schema] }
+            'Synonym'                  { $smoObj = $db.Synonyms[$objId.Name, $objId.Schema] }
+            'UserDefinedType'          { $smoObj = $db.UserDefinedTypes[$objId.Name, $objId.Schema] }
+            'UserDefinedDataType'      { $smoObj = $db.UserDefinedDataTypes[$objId.Name, $objId.Schema] }
+            'UserDefinedTableType'     { $smoObj = $db.UserDefinedTableTypes[$objId.Name, $objId.Schema] }
+            'XmlSchemaCollection'      { $smoObj = $db.XmlSchemaCollections[$objId.Name, $objId.Schema] }
+            'PartitionFunction'        { $smoObj = $db.PartitionFunctions[$objId.Name] }
+            'PartitionScheme'          { $smoObj = $db.PartitionSchemes[$objId.Name] }
+            'Default'                  { $smoObj = $db.Defaults[$objId.Name, $objId.Schema] }
+            'Rule'                     { $smoObj = $db.Rules[$objId.Name, $objId.Schema] }
+            'DatabaseTrigger'          { $smoObj = $db.Triggers[$objId.Name] }
+            'FullTextCatalog'          { $smoObj = $db.FullTextCatalogs[$objId.Name] }
+            'FullTextStopList'         { $smoObj = $db.FullTextStopLists[$objId.Name] }
+            'SearchPropertyList'       { $smoObj = $db.SearchPropertyLists[$objId.Name] }
+            'SecurityPolicy'           { $smoObj = $db.SecurityPolicies[$objId.Name, $objId.Schema] }
+            'AsymmetricKey'            { $smoObj = $db.AsymmetricKeys[$objId.Name] }
+            'Certificate'              { $smoObj = $db.Certificates[$objId.Name] }
+            'SymmetricKey'             { $smoObj = $db.SymmetricKeys[$objId.Name] }
+            'ApplicationRole'          { $smoObj = $db.ApplicationRoles[$objId.Name] }
+            'DatabaseRole'             { $smoObj = $db.Roles[$objId.Name] }
+            'User'                     { $smoObj = $db.Users[$objId.Name] }
+            'PlanGuide'                { $smoObj = $db.PlanGuides[$objId.Name] }
+            'ExternalDataSource'       { $smoObj = $db.ExternalDataSources[$objId.Name] }
+            'ExternalFileFormat'       { $smoObj = $db.ExternalFileFormats[$objId.Name] }
+            'UserDefinedAggregate'     { $smoObj = $db.UserDefinedAggregates[$objId.Name, $objId.Schema] }
+            'SqlAssembly'              { $smoObj = $db.Assemblies[$objId.Name] }
+          }
+        }
+
+        if ($smoObj) {
+          $smoObjects.Add($smoObj)
+        }
+      }
+
+      if ($smoObjects.Count -eq 0) {
+        throw "No SMO objects found for work item"
+      }
+
+      # Configure scripting options
+      $scripter.Options = [Microsoft.SqlServer.Management.Smo.ScriptingOptions]::new()
+      $scripter.Options.ToFileOnly = $true
+      $scripter.Options.FileName = $workItem.OutputPath
+      $scripter.Options.AppendToFile = $workItem.AppendToFile
+      $scripter.Options.AnsiFile = $true
+      $scripter.Options.IncludeHeaders = $true
+      $scripter.Options.ScriptBatchTerminator = $true
+      $scripter.Options.TargetServerVersion = $TargetVersion
+
+      # Apply custom scripting options from work item
+      foreach ($optKey in $workItem.ScriptingOptions.Keys) {
+        try {
+          $scripter.Options.$optKey = $workItem.ScriptingOptions[$optKey]
+        }
+        catch {
+          # Ignore invalid options
+        }
+      }
+
+      # Handle special cases
+      if ($workItem.SpecialHandler -eq 'SecurityPolicy') {
+        # Write custom header first
+        $header = "-- Row-Level Security Policy`r`n-- NOTE: Ensure predicate functions exist before running`r`nGO`r`n"
+        [System.IO.File]::WriteAllText($workItem.OutputPath, $header, [System.Text.Encoding]::UTF8)
+        $scripter.Options.AppendToFile = $true
+      }
+
+      # Script the objects
+      $scripter.EnumScript($smoObjects.ToArray()) | Out-Null
+
+      $result.Success = $true
+    }
+    catch {
+      $result.Error = $_.Exception.Message
+    }
+
+    # Record result
+    $ResultsBag.Add($result)
+
+    # Increment progress (atomic)
+    [System.Threading.Interlocked]::Increment($ProgressCounter) | Out-Null
+  }
+  #endregion
+
+  #region Cleanup
+  try {
+    if ($serverConn -and $serverConn.IsOpen) {
+      $serverConn.Disconnect()
+    }
+  }
+  catch {
+    # Ignore cleanup errors
+  }
+  #endregion
+}
+
+
+
+
+
+function Initialize-ParallelRunspacePool {
+  <#
+  .SYNOPSIS
+      Creates and opens a runspace pool for parallel workers.
+  #>
+  [CmdletBinding()]
+  param(
+    [Parameter(Mandatory)]
+    [int]$MaxWorkers
+  )
+
+  $sessionState = [System.Management.Automation.Runspaces.InitialSessionState]::CreateDefault()
+
+  # Import SqlServer module in each runspace
+  $sessionState.ImportPSModule('SqlServer')
+
+  $pool = [System.Management.Automation.Runspaces.RunspaceFactory]::CreateRunspacePool(
+    1,           # Min runspaces
+    $MaxWorkers, # Max runspaces
+    $sessionState,
+    $Host
+  )
+
+  $pool.Open()
+
+  return $pool
+}
+
+function Start-ParallelWorkers {
+  <#
+  .SYNOPSIS
+      Starts parallel workers in the runspace pool.
+  .OUTPUTS
+      Array of worker objects with PowerShell and Handle properties.
+  #>
+  [CmdletBinding()]
+  [OutputType([System.Collections.Generic.List[hashtable]])]
+  param(
+    [Parameter(Mandatory)]
+    [System.Management.Automation.Runspaces.RunspacePool]$RunspacePool,
+
+    [Parameter(Mandatory)]
+    [int]$WorkerCount,
+
+    [Parameter(Mandatory)]
+    [System.Collections.Concurrent.ConcurrentQueue[hashtable]]$WorkQueue,
+
+    [Parameter(Mandatory)]
+    [ref]$ProgressCounter,
+
+    [Parameter(Mandatory)]
+    [System.Collections.Concurrent.ConcurrentBag[hashtable]]$ResultsBag,
+
+    [Parameter(Mandatory)]
+    [hashtable]$ConnectionInfo,
+
+    [Parameter(Mandatory)]
+    [string]$TargetVersion
+  )
+
+  $workers = [System.Collections.Generic.List[hashtable]]::new()
+
+  for ($i = 0; $i -lt $WorkerCount; $i++) {
+    $ps = [PowerShell]::Create()
+    $ps.RunspacePool = $RunspacePool
+
+    $ps.AddScript($script:ParallelWorkerScriptBlock).AddParameters(@{
+        WorkQueue       = $WorkQueue
+        ProgressCounter = $ProgressCounter
+        ResultsBag      = $ResultsBag
+        ConnectionInfo  = $ConnectionInfo
+        TargetVersion   = $TargetVersion
+      }) | Out-Null
+
+    $handle = $ps.BeginInvoke()
+
+    $workers.Add(@{
+        PowerShell = $ps
+        Handle     = $handle
+        Index      = $i
+      })
+  }
+
+  # Use Write-Output with -NoEnumerate to prevent PowerShell from unwrapping single-item collections
+  Write-Output -NoEnumerate $workers
+}
+
+function Wait-ParallelWorkers {
+  <#
+  .SYNOPSIS
+      Waits for all parallel workers to complete, showing progress.
+  #>
+  [CmdletBinding()]
+  param(
+    [Parameter(Mandatory)]
+    [System.Collections.Generic.List[hashtable]]$Workers,
+
+    [Parameter(Mandatory)]
+    [ref]$ProgressCounter,
+
+    [Parameter(Mandatory)]
+    [int]$TotalItems,
+
+    [Parameter()]
+    [int]$ProgressInterval = 50
+  )
+
+  $startTime = [DateTime]::Now
+  $lastReported = 0
+
+  # Poll until all workers complete
+  while ($true) {
+    $allComplete = $true
+    foreach ($worker in $Workers) {
+      if (-not $worker.Handle.IsCompleted) {
+        $allComplete = $false
+        break
+      }
+    }
+
+    $current = $ProgressCounter.Value
+
+    # Report progress at intervals
+    if (($current - $lastReported) -ge $ProgressInterval -or $allComplete) {
+      $pct = if ($TotalItems -gt 0) { [math]::Floor(($current / $TotalItems) * 100) } else { 0 }
+      $elapsed = ([DateTime]::Now - $startTime).TotalSeconds
+      $rate = if ($elapsed -gt 0) { [math]::Round($current / $elapsed, 1) } else { 0 }
+
+      Write-Host ("[Parallel] Processed {0}/{1} items ({2}%) - {3}/sec" -f $current, $TotalItems, $pct, $rate) -ForegroundColor Cyan
+      $lastReported = $current
+    }
+
+    if ($allComplete) {
+      break
+    }
+
+    Start-Sleep -Milliseconds 500
+  }
+
+  # End all workers and collect any errors
+  foreach ($worker in $Workers) {
+    try {
+      $worker.PowerShell.EndInvoke($worker.Handle)
+    }
+    catch {
+      Write-Warning "Worker $($worker.Index) ended with error: $_"
+    }
+    finally {
+      $worker.PowerShell.Dispose()
+    }
+  }
+
+  $elapsed = ([DateTime]::Now - $startTime).TotalSeconds
+  Write-Host ("[Parallel] All workers finished in {0:F1} seconds" -f $elapsed) -ForegroundColor Green
+}
+
+
+
+# === From parallel-work-items-part1.ps1 ===
+
+# Parallel Export - Work Queue Builder Helper Functions
+# These functions create work items for each object type
+# Add to the "Parallel Export Functions" region in Export-SqlServerSchema.ps1
+
+# NOTE: Add these functions AFTER Get-SmoObjectByIdentifier and BEFORE Export-DatabaseObjects
+
+
+
+function Build-WorkItems-Schemas {
+  <#
+  .SYNOPSIS
+  Builds work items for database schema export.
+  .DESCRIPTION
+  Creates export work items for user-defined schemas (excludes system schemas).
+  Output: 03_Schemas folder.
+  #>
+  param($Database, $OutputDir)
+
+  if (Test-ObjectTypeExcluded -ObjectType 'Schemas') { return @() }
+
+  $schemas = @($Database.Schemas | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $null -Name $_.Name) })
+  if ($schemas.Count -eq 0) { return @() }
+
+  $workItems = @()
+  $groupBy = Get-ObjectGroupingMode -ObjectType 'Schemas'
+  $baseDir = Join-Path $OutputDir '03_Schemas'
+  $scriptOpts = @{}
+
+  switch ($groupBy) {
+    'single' {
+      foreach ($schema in $schemas) {
+        $fileName = "$(Get-SafeFileName $($schema.Name)).sql"
+        $workItems += New-ExportWorkItem `
+          -ObjectType 'Schema' `
+          -GroupingMode 'single' `
+          -Objects @(@{ Schema = $null; Name = $schema.Name }) `
+          -OutputPath (Join-Path $baseDir $fileName) `
+          -ScriptingOptions $scriptOpts
+      }
+    }
+    { $_ -in 'schema', 'all' } {
+      $fileName = "001_Schemas.sql"
+      $objects = @($schemas | ForEach-Object { @{ Schema = $null; Name = $_.Name } })
+      $workItems += New-ExportWorkItem `
+        -ObjectType 'Schema' `
+        -GroupingMode $groupBy `
+        -Objects $objects `
+        -OutputPath (Join-Path $baseDir $fileName) `
+        -ScriptingOptions $scriptOpts
+    }
+  }
+
+  return $workItems
+}
+
+function Build-WorkItems-Sequences {
+  <#
+  .SYNOPSIS
+  Builds work items for sequence object export.
+  .DESCRIPTION
+  Creates export work items for SQL Server sequences (auto-incrementing values).
+  Supports single/schema/all grouping modes. Output: 04_Sequences folder.
+  #>
+  param($Database, $OutputDir)
+
+  if (Test-ObjectTypeExcluded -ObjectType 'Sequences') { return @() }
+
+  $sequences = @($Database.Sequences | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) })
+  if ($sequences.Count -eq 0) { return @() }
+
+  $workItems = @()
+  $groupBy = Get-ObjectGroupingMode -ObjectType 'Sequences'
+  $baseDir = Join-Path $OutputDir '04_Sequences'
+  $scriptOpts = @{}
+
+  switch ($groupBy) {
+    'single' {
+      foreach ($seq in $sequences) {
+        $safeSchema = Get-SafeFileName $seq.Schema
+        $safeName = Get-SafeFileName $seq.Name
+        $fileName = "$safeSchema.$safeName.sql"
+        $workItems += New-ExportWorkItem `
+          -ObjectType 'Sequence' `
+          -GroupingMode 'single' `
+          -Objects @(@{ Schema = $seq.Schema; Name = $seq.Name }) `
+          -OutputPath (Join-Path $baseDir $fileName) `
+          -ScriptingOptions $scriptOpts
+      }
+    }
+    'schema' {
+      $bySchema = $sequences | Group-Object Schema
+      $schemaNum = 1
+      foreach ($group in $bySchema | Sort-Object Name) {
+        $safeSchema = Get-SafeFileName $group.Name
+        $fileName = "{0:D3}_{1}_Sequences.sql" -f $schemaNum, $safeSchema
+        $objects = @($group.Group | ForEach-Object { @{ Schema = $_.Schema; Name = $_.Name } })
+        $workItems += New-ExportWorkItem `
+          -ObjectType 'Sequence' `
+          -GroupingMode 'schema' `
+          -Objects $objects `
+          -OutputPath (Join-Path $baseDir $fileName) `
+          -ScriptingOptions $scriptOpts
+        $schemaNum++
+      }
+    }
+    'all' {
+      $objects = @($sequences | ForEach-Object { @{ Schema = $_.Schema; Name = $_.Name } })
+      $workItems += New-ExportWorkItem `
+        -ObjectType 'Sequence' `
+        -GroupingMode 'all' `
+        -Objects $objects `
+        -OutputPath (Join-Path $baseDir '001_Sequences.sql') `
+        -ScriptingOptions $scriptOpts
+    }
+  }
+
+  return $workItems
+}
+
+function Build-WorkItems-PartitionFunctions {
+  <#
+  .SYNOPSIS
+  Builds work items for partition function export.
+  .DESCRIPTION
+  Creates export work items for partition functions that define data distribution boundaries.
+  Database-level objects (no schema). Output: 05_PartitionFunctions folder.
+  #>
+  param($Database, $OutputDir)
+
+  if (Test-ObjectTypeExcluded -ObjectType 'PartitionFunctions') { return @() }
+
+  $partFuncs = @($Database.PartitionFunctions | Where-Object { -not (Test-ObjectExcluded -Schema $null -Name $_.Name) })
+  if ($partFuncs.Count -eq 0) { return @() }
+
+  $workItems = @()
+  $groupBy = Get-ObjectGroupingMode -ObjectType 'PartitionFunctions'
+  $baseDir = Join-Path $OutputDir '05_PartitionFunctions'
+  $scriptOpts = @{}
+
+  # No schema property, so schema and all modes produce one file
+  switch ($groupBy) {
+    'single' {
+      foreach ($pf in $partFuncs) {
+        $fileName = "PartitionFunction.$(Get-SafeFileName $($pf.Name)).sql"
+        $workItems += New-ExportWorkItem `
+          -ObjectType 'PartitionFunction' `
+          -GroupingMode 'single' `
+          -Objects @(@{ Schema = $null; Name = $pf.Name }) `
+          -OutputPath (Join-Path $baseDir $fileName) `
+          -ScriptingOptions $scriptOpts
+      }
+    }
+    { $_ -in 'schema', 'all' } {
+      $objects = @($partFuncs | ForEach-Object { @{ Schema = $null; Name = $_.Name } })
+      $workItems += New-ExportWorkItem `
+        -ObjectType 'PartitionFunction' `
+        -GroupingMode $groupBy `
+        -Objects $objects `
+        -OutputPath (Join-Path $baseDir '001_AllPartitionFunctions.sql') `
+        -ScriptingOptions $scriptOpts
+    }
+  }
+
+  return $workItems
+}
+
+function Build-WorkItems-PartitionSchemes {
+  <#
+  .SYNOPSIS
+  Builds work items for partition scheme export.
+  .DESCRIPTION
+  Creates export work items for partition schemes that map partition function boundaries to filegroups.
+  Must be exported after partition functions. Output: 06_PartitionSchemes folder.
+  #>
+  param($Database, $OutputDir)
+
+  if (Test-ObjectTypeExcluded -ObjectType 'PartitionSchemes') { return @() }
+
+  $partSchemes = @($Database.PartitionSchemes | Where-Object { -not (Test-ObjectExcluded -Schema $null -Name $_.Name) })
+  if ($partSchemes.Count -eq 0) { return @() }
+
+  $workItems = @()
+  $groupBy = Get-ObjectGroupingMode -ObjectType 'PartitionSchemes'
+  $baseDir = Join-Path $OutputDir '06_PartitionSchemes'
+  $scriptOpts = @{}
+
+  switch ($groupBy) {
+    'single' {
+      foreach ($ps in $partSchemes) {
+        $fileName = "PartitionScheme.$(Get-SafeFileName $($ps.Name)).sql"
+        $workItems += New-ExportWorkItem `
+          -ObjectType 'PartitionScheme' `
+          -GroupingMode 'single' `
+          -Objects @(@{ Schema = $null; Name = $ps.Name }) `
+          -OutputPath (Join-Path $baseDir $fileName) `
+          -ScriptingOptions $scriptOpts
+      }
+    }
+    { $_ -in 'schema', 'all' } {
+      $objects = @($partSchemes | ForEach-Object { @{ Schema = $null; Name = $_.Name } })
+      $workItems += New-ExportWorkItem `
+        -ObjectType 'PartitionScheme' `
+        -GroupingMode $groupBy `
+        -Objects $objects `
+        -OutputPath (Join-Path $baseDir '001_AllPartitionSchemes.sql') `
+        -ScriptingOptions $scriptOpts
+    }
+  }
+
+  return $workItems
+}
+
+function Build-WorkItems-UserDefinedTypes {
+  <#
+  .SYNOPSIS
+  Builds work items for user-defined type export.
+  .DESCRIPTION
+  Creates export work items for UDTs including alias types, CLR types, and table types.
+  Must be exported before tables that use these types. Output: 07_Types folder.
+  #>
+  param($Database, $OutputDir)
+
+  if (Test-ObjectTypeExcluded -ObjectType 'UserDefinedTypes') { return @() }
+
+  # Collect all type variations
+  $allTypes = @()
+  try { $allTypes += @($Database.UserDefinedDataTypes | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) }) } catch { }
+  try { $allTypes += @($Database.UserDefinedTableTypes | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) }) } catch { }
+  try { $allTypes += @($Database.UserDefinedTypes | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) }) } catch { }
+
+  if ($allTypes.Count -eq 0) { return @() }
+
+  $workItems = @()
+  $groupBy = Get-ObjectGroupingMode -ObjectType 'UserDefinedTypes'
+  $baseDir = Join-Path $OutputDir '07_Types'
+  $scriptOpts = @{}
+
+  switch ($groupBy) {
+    'single' {
+      foreach ($type in $allTypes) {
+        $safeSchema = Get-SafeFileName $type.Schema
+        $safeName = Get-SafeFileName $type.Name
+        $fileName = "$safeSchema.$safeName.sql"
+        # Determine specific type for worker lookup
+        $objectType = if ($type.GetType().Name -eq 'UserDefinedDataType') { 'UserDefinedDataType' }
+        elseif ($type.GetType().Name -eq 'UserDefinedTableType') { 'UserDefinedTableType' }
+        else { 'UserDefinedType' }
+
+        $workItems += New-ExportWorkItem `
+          -ObjectType $objectType `
+          -GroupingMode 'single' `
+          -Objects @(@{ Schema = $type.Schema; Name = $type.Name }) `
+          -OutputPath (Join-Path $baseDir $fileName) `
+          -ScriptingOptions $scriptOpts
+      }
+    }
+    'schema' {
+      $bySchema = $allTypes | Group-Object Schema
+      $schemaNum = 1
+      foreach ($group in $bySchema | Sort-Object Name) {
+        $safeSchema = Get-SafeFileName $group.Name
+        $fileName = "{0:D3}_{1}_Types.sql" -f $schemaNum, $safeSchema
+        # Mix of type variations - worker will handle lookup
+        $objects = @($group.Group | ForEach-Object { @{ Schema = $_.Schema; Name = $_.Name } })
+        $workItems += New-ExportWorkItem `
+          -ObjectType 'UserDefinedType' `
+          -GroupingMode 'schema' `
+          -Objects $objects `
+          -OutputPath (Join-Path $baseDir $fileName) `
+          -ScriptingOptions $scriptOpts
+        $schemaNum++
+      }
+    }
+    'all' {
+      $objects = @($allTypes | ForEach-Object { @{ Schema = $_.Schema; Name = $_.Name } })
+      $workItems += New-ExportWorkItem `
+        -ObjectType 'UserDefinedType' `
+        -GroupingMode 'all' `
+        -Objects $objects `
+        -OutputPath (Join-Path $baseDir '001_AllTypes.sql') `
+        -ScriptingOptions $scriptOpts
+    }
+  }
+
+  return $workItems
+}
+
+function Build-WorkItems-XmlSchemaCollections {
+  <#
+  .SYNOPSIS
+  Builds work items for XML schema collection export.
+  .DESCRIPTION
+  Creates export work items for XML schema collections used to validate XML columns.
+  Must be exported before tables with typed XML columns. Output: 08_XmlSchemaCollections folder.
+  #>
+  param($Database, $OutputDir)
+
+  if (Test-ObjectTypeExcluded -ObjectType 'XmlSchemaCollections') { return @() }
+
+  $xmlSchemas = @($Database.XmlSchemaCollections | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) })
+  if ($xmlSchemas.Count -eq 0) { return @() }
+
+  $workItems = @()
+  $groupBy = Get-ObjectGroupingMode -ObjectType 'XmlSchemaCollections'
+  $baseDir = Join-Path $OutputDir '08_XmlSchemaCollections'
+  $scriptOpts = @{}
+
+  switch ($groupBy) {
+    'single' {
+      foreach ($xml in $xmlSchemas) {
+        $safeSchema = Get-SafeFileName $xml.Schema
+        $safeName = Get-SafeFileName $xml.Name
+        $fileName = "$safeSchema.$safeName.sql"
+        $workItems += New-ExportWorkItem `
+          -ObjectType 'XmlSchemaCollection' `
+          -GroupingMode 'single' `
+          -Objects @(@{ Schema = $xml.Schema; Name = $xml.Name }) `
+          -OutputPath (Join-Path $baseDir $fileName) `
+          -ScriptingOptions $scriptOpts
+      }
+    }
+    'schema' {
+      $bySchema = $xmlSchemas | Group-Object Schema
+      $schemaNum = 1
+      foreach ($group in $bySchema | Sort-Object Name) {
+        $safeSchema = Get-SafeFileName $group.Name
+        $fileName = "{0:D3}_{1}_XmlSchemas.sql" -f $schemaNum, $safeSchema
+        $objects = @($group.Group | ForEach-Object { @{ Schema = $_.Schema; Name = $_.Name } })
+        $workItems += New-ExportWorkItem `
+          -ObjectType 'XmlSchemaCollection' `
+          -GroupingMode 'schema' `
+          -Objects $objects `
+          -OutputPath (Join-Path $baseDir $fileName) `
+          -ScriptingOptions $scriptOpts
+        $schemaNum++
+      }
+    }
+    'all' {
+      $objects = @($xmlSchemas | ForEach-Object { @{ Schema = $_.Schema; Name = $_.Name } })
+      $workItems += New-ExportWorkItem `
+        -ObjectType 'XmlSchemaCollection' `
+        -GroupingMode 'all' `
+        -Objects $objects `
+        -OutputPath (Join-Path $baseDir '001_XmlSchemas.sql') `
+        -ScriptingOptions $scriptOpts
+    }
+  }
+
+  return $workItems
+}
+
+function Build-WorkItems-Tables {
+  <#
+  .SYNOPSIS
+  Builds work items for table export (structure with primary keys only).
+  .DESCRIPTION
+  Creates export work items for table DDL with primary keys but NOT foreign keys or indexes.
+  FKs and indexes are exported separately to handle circular dependencies.
+  Output: 09_Tables_PrimaryKey folder.
+  #>
+  param($Database, $OutputDir)
+
+  if (Test-ObjectTypeExcluded -ObjectType 'Tables') { return @() }
+
+  $tables = @($Database.Tables | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) })
+  if ($tables.Count -eq 0) { return @() }
+
+  $workItems = @()
+  $groupBy = Get-ObjectGroupingMode -ObjectType 'Tables'
+  $baseDir = Join-Path $OutputDir '09_Tables_PrimaryKey'
+
+  # Tables export with PKs but not FKs or indexes
+  $scriptOpts = @{
+    DriPrimaryKey       = $true
+    DriForeignKeys      = $false
+    DriUniqueKeys       = $true
+    DriChecks           = $true
+    DriDefaults         = $true
+    Indexes             = $false
+    ClusteredIndexes    = $false
+    NonClusteredIndexes = $false
+    XmlIndexes          = $false
+    FullTextIndexes     = $false
+    Triggers            = $false
+  }
+
+  switch ($groupBy) {
+    'single' {
+      foreach ($table in $tables) {
+        $fileName = "$(Get-SafeFileName $($table.Schema)).$(Get-SafeFileName $($table.Name)).sql"
+        $workItems += New-ExportWorkItem `
+          -ObjectType 'Table' `
+          -GroupingMode 'single' `
+          -Objects @(@{ Schema = $table.Schema; Name = $table.Name }) `
+          -OutputPath (Join-Path $baseDir $fileName) `
+          -ScriptingOptions $scriptOpts
+      }
+    }
+    'schema' {
+      $bySchema = $tables | Group-Object Schema
+      $schemaNum = 1
+      foreach ($group in $bySchema | Sort-Object Name) {
+        $fileName = "{0:D3}_{1}.sql" -f $schemaNum, (Get-SafeFileName $group.Name)
+        $objects = @($group.Group | ForEach-Object { @{ Schema = $_.Schema; Name = $_.Name } })
+        $workItems += New-ExportWorkItem `
+          -ObjectType 'Table' `
+          -GroupingMode 'schema' `
+          -Objects $objects `
+          -OutputPath (Join-Path $baseDir $fileName) `
+          -ScriptingOptions $scriptOpts
+        $schemaNum++
+      }
+    }
+    'all' {
+      $objects = @($tables | ForEach-Object { @{ Schema = $_.Schema; Name = $_.Name } })
+      $workItems += New-ExportWorkItem `
+        -ObjectType 'Table' `
+        -GroupingMode 'all' `
+        -Objects $objects `
+        -OutputPath (Join-Path $baseDir '001_AllTables.sql') `
+        -ScriptingOptions $scriptOpts
+    }
+  }
+
+  return $workItems
+}
+
+# Continue in next comment due to length...
+
+# === From parallel-work-items-part2.ps1 ===
+
+# Parallel Export - Work Queue Builders Part 2
+# Continuation of helper functions
+
+function Build-WorkItems-ForeignKeys {
+  <#
+  .SYNOPSIS
+  Builds work items for foreign key constraint export.
+  .DESCRIPTION
+  Creates export work items for FK constraints as ALTER TABLE ADD CONSTRAINT statements.
+  Exported separately from tables to avoid circular reference issues during import.
+  Output: 10_Tables_ForeignKeys folder.
+  #>
+  param($Database, $OutputDir)
+
+  if (Test-ObjectTypeExcluded -ObjectType 'ForeignKeys') { return @() }
+
+  # Collect FKs from all tables
+  $tables = @($Database.Tables | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) })
+  $fkList = @()
+  foreach ($table in $tables) {
+    if ($table.ForeignKeys.Count -gt 0) {
+      foreach ($fk in $table.ForeignKeys) {
+        $fkList += @{
+          TableSchema = $table.Schema
+          TableName   = $table.Name
+          FKName      = $fk.Name
+        }
+      }
+    }
+  }
+
+  if ($fkList.Count -eq 0) { return @() }
+
+  $workItems = @()
+  $groupBy = Get-ObjectGroupingMode -ObjectType 'ForeignKeys'
+  $baseDir = Join-Path $OutputDir '10_Tables_ForeignKeys'
+
+  # For FKs, we script tables with FK-only options
+  $scriptOpts = @{
+    DriPrimaryKey                    = $false
+    DriForeignKeys                   = $true
+    DriUniqueKeys                    = $false
+    DriChecks                        = $false
+    DriDefaults                      = $false
+    Indexes                          = $false
+    SchemaQualifyForeignKeysReferences = $true
+  }
+
+  switch ($groupBy) {
+    'single' {
+      # One file per foreign key (matches sequential export naming: Schema.Table.FKName.sql)
+      foreach ($fk in $fkList) {
+        $fileName = "$(Get-SafeFileName $($fk.TableSchema)).$(Get-SafeFileName $($fk.TableName)).$(Get-SafeFileName $($fk.FKName)).sql"
+        $workItems += New-ExportWorkItem `
+          -ObjectType 'TableForeignKeys' `
+          -GroupingMode 'single' `
+          -Objects @(@{ Schema = $fk.TableSchema; Name = $fk.TableName; FKName = $fk.FKName }) `
+          -OutputPath (Join-Path $baseDir $fileName) `
+          -ScriptingOptions $scriptOpts `
+          -SpecialHandler 'ForeignKeys'
+      }
+    }
+    'schema' {
+      $bySchema = $fkList | Group-Object { $_.TableSchema }
+      $schemaNum = 1
+      foreach ($group in $bySchema | Sort-Object Name) {
+        $safeSchema = Get-SafeFileName $group.Name
+        $fileName = "{0:D3}_{1}_ForeignKeys.sql" -f $schemaNum, $safeSchema
+        $tableNames = $group.Group | Select-Object -Property TableSchema, TableName -Unique
+        $objects = @($tableNames | ForEach-Object { @{ Schema = $_.TableSchema; Name = $_.TableName } })
+        $workItems += New-ExportWorkItem `
+          -ObjectType 'TableForeignKeys' `
+          -GroupingMode 'schema' `
+          -Objects $objects `
+          -OutputPath (Join-Path $baseDir $fileName) `
+          -ScriptingOptions $scriptOpts `
+          -SpecialHandler 'ForeignKeys'
+        $schemaNum++
+      }
+    }
+    'all' {
+      $tableNames = $fkList | Select-Object -Property TableSchema, TableName -Unique
+      $objects = @($tableNames | ForEach-Object { @{ Schema = $_.TableSchema; Name = $_.TableName } })
+      $workItems += New-ExportWorkItem `
+        -ObjectType 'TableForeignKeys' `
+        -GroupingMode 'all' `
+        -Objects $objects `
+        -OutputPath (Join-Path $baseDir '001_ForeignKeys.sql') `
+        -ScriptingOptions $scriptOpts `
+        -SpecialHandler 'ForeignKeys'
+    }
+  }
+
+  return $workItems
+}
+
+function Build-WorkItems-Indexes {
+  <#
+  .SYNOPSIS
+  Builds work items for non-clustered index export.
+  .DESCRIPTION
+  Creates export work items for individual indexes (excludes primary key indexes).
+  Each index gets its own work item with TableSchema, TableName, and IndexName identifiers.
+  Output: 11_Indexes folder.
+  #>
+  param($Database, $OutputDir)
+
+  if (Test-ObjectTypeExcluded -ObjectType 'Indexes') { return @() }
+
+  # Collect indexes from tables (same logic as sequential export)
+  $tables = @($Database.Tables | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) })
+  $indexList = @()
+  foreach ($table in $tables) {
+    if ($table.Indexes.Count -gt 0) {
+      foreach ($idx in $table.Indexes) {
+        # Skip system indexes, primary key indexes, and unique key indexes (same as sequential)
+        if (-not $idx.IsSystemObject -and
+            -not ($idx.IndexKeyType -eq [Microsoft.SqlServer.Management.Smo.IndexKeyType]::DriPrimaryKey) -and
+            -not ($idx.IndexKeyType -eq [Microsoft.SqlServer.Management.Smo.IndexKeyType]::DriUniqueKey)) {
+          $indexList += @{
+            TableSchema = $table.Schema
+            TableName   = $table.Name
+            IndexName   = $idx.Name
+          }
+        }
+      }
+    }
+  }
+
+  if ($indexList.Count -eq 0) { return @() }
+
+  $workItems = @()
+  $groupBy = Get-ObjectGroupingMode -ObjectType 'Indexes'
+  $baseDir = Join-Path $OutputDir '11_Indexes'
+
+  # Script tables with index-only options
+  $scriptOpts = @{
+    DriAll              = $false
+    Indexes             = $true
+    ClusteredIndexes    = $false
+    NonClusteredIndexes = $true
+    XmlIndexes          = $true
+    FullTextIndexes     = $false
+  }
+
+  switch ($groupBy) {
+    'single' {
+      # One file per index (matches sequential export naming: Schema.Table.IndexName.sql)
+      foreach ($idx in $indexList) {
+        $fileName = "$(Get-SafeFileName $($idx.TableSchema)).$(Get-SafeFileName $($idx.TableName)).$(Get-SafeFileName $($idx.IndexName)).sql"
+        $workItems += New-ExportWorkItem `
+          -ObjectType 'Index' `
+          -GroupingMode 'single' `
+          -Objects @(@{ TableSchema = $idx.TableSchema; TableName = $idx.TableName; IndexName = $idx.IndexName }) `
+          -OutputPath (Join-Path $baseDir $fileName) `
+          -ScriptingOptions $scriptOpts `
+          -SpecialHandler 'Indexes'
+      }
+    }
+    'schema' {
+      $bySchema = $indexList | Group-Object { $_.TableSchema }
+      $schemaNum = 1
+      foreach ($group in $bySchema | Sort-Object Name) {
+        $safeSchema = Get-SafeFileName $group.Name
+        $fileName = "{0:D3}_{1}_Indexes.sql" -f $schemaNum, $safeSchema
+        # Pass individual index identifiers
+        $indexObjects = @($group.Group | ForEach-Object { @{ TableSchema = $_.TableSchema; TableName = $_.TableName; IndexName = $_.IndexName } })
+        $workItems += New-ExportWorkItem `
+          -ObjectType 'Index' `
+          -GroupingMode 'schema' `
+          -Objects $indexObjects `
+          -OutputPath (Join-Path $baseDir $fileName) `
+          -ScriptingOptions $scriptOpts `
+          -SpecialHandler 'Indexes'
+        $schemaNum++
+      }
+    }
+    'all' {
+      # Pass all individual index identifiers
+      $indexObjects = @($indexList | ForEach-Object { @{ TableSchema = $_.TableSchema; TableName = $_.TableName; IndexName = $_.IndexName } })
+      $workItems += New-ExportWorkItem `
+        -ObjectType 'Index' `
+        -GroupingMode 'all' `
+        -Objects $indexObjects `
+        -OutputPath (Join-Path $baseDir '001_Indexes.sql') `
+        -ScriptingOptions $scriptOpts `
+        -SpecialHandler 'Indexes'
+    }
+  }
+
+  return $workItems
+}
+
+function Build-WorkItems-Defaults {
+  <#
+  .SYNOPSIS
+  Builds work items for legacy default object export.
+  .DESCRIPTION
+  Creates export work items for standalone DEFAULT objects (deprecated, use DEFAULT constraints).
+  Included for backward compatibility with older databases. Output: 12_Defaults folder.
+  #>
+  param($Database, $OutputDir)
+
+  if (Test-ObjectTypeExcluded -ObjectType 'Defaults') { return @() }
+
+  $defaults = @($Database.Defaults | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) })
+  if ($defaults.Count -eq 0) { return @() }
+
+  $workItems = @()
+  $groupBy = Get-ObjectGroupingMode -ObjectType 'Defaults'
+  $baseDir = Join-Path $OutputDir '12_Defaults'
+  $scriptOpts = @{}
+
+  switch ($groupBy) {
+    'single' {
+      foreach ($def in $defaults) {
+        $safeSchema = Get-SafeFileName $def.Schema
+        $safeName = Get-SafeFileName $def.Name
+        $fileName = "$safeSchema.$safeName.sql"
+        $workItems += New-ExportWorkItem `
+          -ObjectType 'Default' `
+          -GroupingMode 'single' `
+          -Objects @(@{ Schema = $def.Schema; Name = $def.Name }) `
+          -OutputPath (Join-Path $baseDir $fileName) `
+          -ScriptingOptions $scriptOpts
+      }
+    }
+    'schema' {
+      $bySchema = $defaults | Group-Object Schema
+      $schemaNum = 1
+      foreach ($group in $bySchema | Sort-Object Name) {
+        $safeSchema = Get-SafeFileName $group.Name
+        $fileName = "{0:D3}_{1}_Defaults.sql" -f $schemaNum, $safeSchema
+        $objects = @($group.Group | ForEach-Object { @{ Schema = $_.Schema; Name = $_.Name } })
+        $workItems += New-ExportWorkItem `
+          -ObjectType 'Default' `
+          -GroupingMode 'schema' `
+          -Objects $objects `
+          -OutputPath (Join-Path $baseDir $fileName) `
+          -ScriptingOptions $scriptOpts
+        $schemaNum++
+      }
+    }
+    'all' {
+      $objects = @($defaults | ForEach-Object { @{ Schema = $_.Schema; Name = $_.Name } })
+      $workItems += New-ExportWorkItem `
+        -ObjectType 'Default' `
+        -GroupingMode 'all' `
+        -Objects $objects `
+        -OutputPath (Join-Path $baseDir '001_Defaults.sql') `
+        -ScriptingOptions $scriptOpts
+    }
+  }
+
+  return $workItems
+}
+
+function Build-WorkItems-Rules {
+  <#
+  .SYNOPSIS
+  Builds work items for legacy rule object export.
+  .DESCRIPTION
+  Creates export work items for standalone RULE objects (deprecated, use CHECK constraints).
+  Included for backward compatibility with older databases. Output: 13_Rules folder.
+  #>
+  param($Database, $OutputDir)
+
+  if (Test-ObjectTypeExcluded -ObjectType 'Rules') { return @() }
+
+  $rules = @($Database.Rules | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) })
+  if ($rules.Count -eq 0) { return @() }
+
+  $workItems = @()
+  $groupBy = Get-ObjectGroupingMode -ObjectType 'Rules'
+  $baseDir = Join-Path $OutputDir '13_Rules'
+  $scriptOpts = @{}
+
+  switch ($groupBy) {
+    'single' {
+      foreach ($rule in $rules) {
+        $safeSchema = Get-SafeFileName $rule.Schema
+        $safeName = Get-SafeFileName $rule.Name
+        $fileName = "$safeSchema.$safeName.sql"
+        $workItems += New-ExportWorkItem `
+          -ObjectType 'Rule' `
+          -GroupingMode 'single' `
+          -Objects @(@{ Schema = $rule.Schema; Name = $rule.Name }) `
+          -OutputPath (Join-Path $baseDir $fileName) `
+          -ScriptingOptions $scriptOpts
+      }
+    }
+    'schema' {
+      $bySchema = $rules | Group-Object Schema
+      $schemaNum = 1
+      foreach ($group in $bySchema | Sort-Object Name) {
+        $safeSchema = Get-SafeFileName $group.Name
+        $fileName = "{0:D3}_{1}_Rules.sql" -f $schemaNum, $safeSchema
+        $objects = @($group.Group | ForEach-Object { @{ Schema = $_.Schema; Name = $_.Name } })
+        $workItems += New-ExportWorkItem `
+          -ObjectType 'Rule' `
+          -GroupingMode 'schema' `
+          -Objects $objects `
+          -OutputPath (Join-Path $baseDir $fileName) `
+          -ScriptingOptions $scriptOpts
+        $schemaNum++
+      }
+    }
+    'all' {
+      $objects = @($rules | ForEach-Object { @{ Schema = $_.Schema; Name = $_.Name } })
+      $workItems += New-ExportWorkItem `
+        -ObjectType 'Rule' `
+        -GroupingMode 'all' `
+        -Objects $objects `
+        -OutputPath (Join-Path $baseDir '001_Rules.sql') `
+        -ScriptingOptions $scriptOpts
+    }
+  }
+
+  return $workItems
+}
+
+function Build-WorkItems-Assemblies {
+  <#
+  .SYNOPSIS
+  Builds work items for CLR assembly export.
+  .DESCRIPTION
+  Creates export work items for .NET assemblies registered in the database for CLR integration.
+  Must be exported before CLR functions, procedures, or types that depend on them.
+  Output: 14_Programmability folder (subfolder).
+  #>
+  param($Database, $OutputDir)
+
+  if (Test-ObjectTypeExcluded -ObjectType 'Assemblies') { return @() }
+
+  $assemblies = @($Database.Assemblies | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $null -Name $_.Name) })
+  if ($assemblies.Count -eq 0) { return @() }
+
+  $workItems = @()
+  $groupBy = Get-ObjectGroupingMode -ObjectType 'Assemblies'
+  $baseDir = Join-Path $OutputDir '14_Programmability'
+  $scriptOpts = @{}
+
+  # Assemblies have no schema property
+  switch ($groupBy) {
+    'single' {
+      foreach ($asm in $assemblies) {
+        $fileName = "Assembly.$(Get-SafeFileName $($asm.Name)).sql"
+        $workItems += New-ExportWorkItem `
+          -ObjectType 'SqlAssembly' `
+          -GroupingMode 'single' `
+          -Objects @(@{ Schema = $null; Name = $asm.Name }) `
+          -OutputPath (Join-Path $baseDir $fileName) `
+          -ScriptingOptions $scriptOpts
+      }
+    }
+    { $_ -in 'schema', 'all' } {
+      $objects = @($assemblies | ForEach-Object { @{ Schema = $null; Name = $_.Name } })
+      $workItems += New-ExportWorkItem `
+        -ObjectType 'SqlAssembly' `
+        -GroupingMode $groupBy `
+        -Objects $objects `
+        -OutputPath (Join-Path $baseDir '001_Assemblies.sql') `
+        -ScriptingOptions $scriptOpts
+    }
+  }
+
+  return $workItems
+}
+
+# Add remaining programmability objects: Functions, Aggregates, StoredProcedures, Triggers, Views, Synonyms
+# Then: FullText, External Data, SearchPropertyLists, PlanGuides, Security, SecurityPolicies
+
+# I'll create part 3 for the remaining functions...
+
+# === From parallel-work-items-part3.ps1 ===
+
+# Parallel Export - Work Queue Builders Part 3
+# Remaining helper functions for all object types
+
+function Build-WorkItems-Functions {
+  <#
+  .SYNOPSIS
+  Builds work items for user-defined function export.
+  .DESCRIPTION
+  Creates export work items for scalar, table-valued, and CLR functions.
+  May have cross-dependencies with views and procedures (handled by import retry logic).
+  Output: 14_Programmability/Functions subfolder.
+  #>
+  param($Database, $OutputDir)
+
+  if (Test-ObjectTypeExcluded -ObjectType 'Functions') { return @() }
+
+  $functions = @($Database.UserDefinedFunctions | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) })
+  if ($functions.Count -eq 0) { return @() }
+
+  $workItems = @()
+  $groupBy = Get-ObjectGroupingMode -ObjectType 'Functions'
+  $baseDir = Join-Path $OutputDir '14_Programmability'
+  $scriptOpts = @{}
+
+  switch ($groupBy) {
+    'single' {
+      foreach ($func in $functions) {
+        $safeSchema = Get-SafeFileName $func.Schema
+        $safeName = Get-SafeFileName $func.Name
+        $fileName = "$safeSchema.$safeName.sql"
+        $workItems += New-ExportWorkItem `
+          -ObjectType 'UserDefinedFunction' `
+          -GroupingMode 'single' `
+          -Objects @(@{ Schema = $func.Schema; Name = $func.Name }) `
+          -OutputPath (Join-Path $baseDir $fileName) `
+          -ScriptingOptions $scriptOpts
+      }
+    }
+    'schema' {
+      $bySchema = $functions | Group-Object Schema
+      $schemaNum = 1
+      foreach ($group in $bySchema | Sort-Object Name) {
+        $safeSchema = Get-SafeFileName $group.Name
+        $fileName = "{0:D3}_{1}_Functions.sql" -f $schemaNum, $safeSchema
+        $objects = @($group.Group | ForEach-Object { @{ Schema = $_.Schema; Name = $_.Name } })
+        $workItems += New-ExportWorkItem `
+          -ObjectType 'UserDefinedFunction' `
+          -GroupingMode 'schema' `
+          -Objects $objects `
+          -OutputPath (Join-Path $baseDir $fileName) `
+          -ScriptingOptions $scriptOpts
+        $schemaNum++
+      }
+    }
+    'all' {
+      $objects = @($functions | ForEach-Object { @{ Schema = $_.Schema; Name = $_.Name } })
+      $workItems += New-ExportWorkItem `
+        -ObjectType 'UserDefinedFunction' `
+        -GroupingMode 'all' `
+        -Objects $objects `
+        -OutputPath (Join-Path $baseDir '001_Functions.sql') `
+        -ScriptingOptions $scriptOpts
+    }
+  }
+
+  return $workItems
+}
+
+function Build-WorkItems-UserDefinedAggregates {
+  <#
+  .SYNOPSIS
+  Builds work items for CLR user-defined aggregate export.
+  .DESCRIPTION
+  Creates export work items for custom aggregate functions implemented via CLR.
+  Requires corresponding CLR assembly to be loaded first.
+  Output: 14_Programmability/UserDefinedAggregates subfolder.
+  #>
+  param($Database, $OutputDir)
+
+  if (Test-ObjectTypeExcluded -ObjectType 'UserDefinedAggregates') { return @() }
+
+  try {
+    $aggregates = @($Database.UserDefinedAggregates | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) })
+  }
+  catch {
+    return @()
+  }
+
+  if ($aggregates.Count -eq 0) { return @() }
+
+  $workItems = @()
+  $groupBy = Get-ObjectGroupingMode -ObjectType 'UserDefinedAggregates'
+  $baseDir = Join-Path $OutputDir '14_Programmability'
+  $scriptOpts = @{}
+
+  switch ($groupBy) {
+    'single' {
+      foreach ($agg in $aggregates) {
+        $safeSchema = Get-SafeFileName $agg.Schema
+        $safeName = Get-SafeFileName $agg.Name
+        $fileName = "$safeSchema.$safeName.sql"
+        $workItems += New-ExportWorkItem `
+          -ObjectType 'UserDefinedAggregate' `
+          -GroupingMode 'single' `
+          -Objects @(@{ Schema = $agg.Schema; Name = $agg.Name }) `
+          -OutputPath (Join-Path $baseDir $fileName) `
+          -ScriptingOptions $scriptOpts
+      }
+    }
+    'schema' {
+      $bySchema = $aggregates | Group-Object Schema
+      $schemaNum = 1
+      foreach ($group in $bySchema | Sort-Object Name) {
+        $safeSchema = Get-SafeFileName $group.Name
+        $fileName = "{0:D3}_{1}_Aggregates.sql" -f $schemaNum, $safeSchema
+        $objects = @($group.Group | ForEach-Object { @{ Schema = $_.Schema; Name = $_.Name } })
+        $workItems += New-ExportWorkItem `
+          -ObjectType 'UserDefinedAggregate' `
+          -GroupingMode 'schema' `
+          -Objects $objects `
+          -OutputPath (Join-Path $baseDir $fileName) `
+          -ScriptingOptions $scriptOpts
+        $schemaNum++
+      }
+    }
+    'all' {
+      $objects = @($aggregates | ForEach-Object { @{ Schema = $_.Schema; Name = $_.Name } })
+      $workItems += New-ExportWorkItem `
+        -ObjectType 'UserDefinedAggregate' `
+        -GroupingMode 'all' `
+        -Objects $objects `
+        -OutputPath (Join-Path $baseDir '001_Aggregates.sql') `
+        -ScriptingOptions $scriptOpts
+    }
+  }
+
+  return $workItems
+}
+
+function Build-WorkItems-StoredProcedures {
+  <#
+  .SYNOPSIS
+  Builds work items for stored procedure export.
+  .DESCRIPTION
+  Creates export work items for T-SQL and CLR stored procedures.
+  May have cross-dependencies with functions and views (handled by import retry logic).
+  Output: 14_Programmability/StoredProcedures subfolder.
+  #>
+  param($Database, $OutputDir)
+
+  if (Test-ObjectTypeExcluded -ObjectType 'StoredProcedures') { return @() }
+
+  $procs = @($Database.StoredProcedures | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) })
+  if ($procs.Count -eq 0) { return @() }
+
+  $workItems = @()
+  $groupBy = Get-ObjectGroupingMode -ObjectType 'StoredProcedures'
+  $baseDir = Join-Path $OutputDir '14_Programmability'
+  $scriptOpts = @{}
+
+  switch ($groupBy) {
+    'single' {
+      foreach ($proc in $procs) {
+        $safeSchema = Get-SafeFileName $proc.Schema
+        $safeName = Get-SafeFileName $proc.Name
+        $fileName = "$safeSchema.$safeName.sql"
+        $workItems += New-ExportWorkItem `
+          -ObjectType 'StoredProcedure' `
+          -GroupingMode 'single' `
+          -Objects @(@{ Schema = $proc.Schema; Name = $proc.Name }) `
+          -OutputPath (Join-Path $baseDir $fileName) `
+          -ScriptingOptions $scriptOpts
+      }
+    }
+    'schema' {
+      $bySchema = $procs | Group-Object Schema
+      $schemaNum = 1
+      foreach ($group in $bySchema | Sort-Object Name) {
+        $safeSchema = Get-SafeFileName $group.Name
+        $fileName = "{0:D3}_{1}_StoredProcedures.sql" -f $schemaNum, $safeSchema
+        $objects = @($group.Group | ForEach-Object { @{ Schema = $_.Schema; Name = $_.Name } })
+        $workItems += New-ExportWorkItem `
+          -ObjectType 'StoredProcedure' `
+          -GroupingMode 'schema' `
+          -Objects $objects `
+          -OutputPath (Join-Path $baseDir $fileName) `
+          -ScriptingOptions $scriptOpts
+        $schemaNum++
+      }
+    }
+    'all' {
+      $objects = @($procs | ForEach-Object { @{ Schema = $_.Schema; Name = $_.Name } })
+      $workItems += New-ExportWorkItem `
+        -ObjectType 'StoredProcedure' `
+        -GroupingMode 'all' `
+        -Objects $objects `
+        -OutputPath (Join-Path $baseDir '001_StoredProcedures.sql') `
+        -ScriptingOptions $scriptOpts
+    }
+  }
+
+  return $workItems
+}
+
+function Build-WorkItems-DatabaseTriggers {
+  <#
+  .SYNOPSIS
+  Builds work items for database-level DDL trigger export.
+  .DESCRIPTION
+  Creates export work items for DDL triggers that respond to database events (CREATE, ALTER, DROP).
+  Database-scoped, not tied to specific tables. Output: 14_Programmability/DatabaseTriggers subfolder.
+  #>
+  param($Database, $OutputDir)
+
+  if (Test-ObjectTypeExcluded -ObjectType 'DatabaseTriggers') { return @() }
+
+  $triggers = @($Database.Triggers | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $null -Name $_.Name) })
+  if ($triggers.Count -eq 0) { return @() }
+
+  $workItems = @()
+  $groupBy = Get-ObjectGroupingMode -ObjectType 'DatabaseTriggers'
+  $baseDir = Join-Path $OutputDir '14_Programmability'
+  $scriptOpts = @{}
+
+  # Database triggers have no schema property
+  switch ($groupBy) {
+    'single' {
+      foreach ($trigger in $triggers) {
+        $fileName = "Trigger.$(Get-SafeFileName $($trigger.Name)).sql"
+        $workItems += New-ExportWorkItem `
+          -ObjectType 'DatabaseTrigger' `
+          -GroupingMode 'single' `
+          -Objects @(@{ Schema = $null; Name = $trigger.Name }) `
+          -OutputPath (Join-Path $baseDir $fileName) `
+          -ScriptingOptions $scriptOpts
+      }
+    }
+    { $_ -in 'schema', 'all' } {
+      $objects = @($triggers | ForEach-Object { @{ Schema = $null; Name = $_.Name } })
+      $workItems += New-ExportWorkItem `
+        -ObjectType 'DatabaseTrigger' `
+        -GroupingMode $groupBy `
+        -Objects $objects `
+        -OutputPath (Join-Path $baseDir '001_DatabaseTriggers.sql') `
+        -ScriptingOptions $scriptOpts
+    }
+  }
+
+  return $workItems
+}
+
+function Build-WorkItems-TableTriggers {
+  <#
+  .SYNOPSIS
+  Builds work items for table-level DML trigger export.
+  .DESCRIPTION
+  Creates export work items for DML triggers (INSERT, UPDATE, DELETE) attached to tables.
+  Iterates all tables and collects their triggers with parent table context.
+  Output: 14_Programmability/TableTriggers subfolder.
+  #>
+  param($Database, $OutputDir)
+
+  if (Test-ObjectTypeExcluded -ObjectType 'TableTriggers') { return @() }
+
+  # Collect triggers from tables
+  $tables = @($Database.Tables | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) })
+  $triggerList = @()
+  foreach ($table in $tables) {
+    if ($table.Triggers.Count -gt 0) {
+      foreach ($trigger in $table.Triggers) {
+        $triggerList += @{
+          TableSchema  = $table.Schema
+          TableName    = $table.Name
+          TriggerName  = $trigger.Name
+        }
+      }
+    }
+  }
+
+  if ($triggerList.Count -eq 0) { return @() }
+
+  $workItems = @()
+  $groupBy = Get-ObjectGroupingMode -ObjectType 'TableTriggers'
+  $baseDir = Join-Path $OutputDir '14_Programmability'
+  $scriptOpts = @{ Triggers = $true }
+
+  switch ($groupBy) {
+    'single' {
+      # One file per trigger (matches sequential export naming: Schema.Table.TriggerName.sql)
+      foreach ($trigger in $triggerList) {
+        $fileName = "$(Get-SafeFileName $($trigger.TableSchema)).$(Get-SafeFileName $($trigger.TableName)).$(Get-SafeFileName $($trigger.TriggerName)).sql"
+        $workItems += New-ExportWorkItem `
+          -ObjectType 'TableTriggers' `
+          -GroupingMode 'single' `
+          -Objects @(@{ Schema = $trigger.TableSchema; Name = $trigger.TableName; TriggerName = $trigger.TriggerName }) `
+          -OutputPath (Join-Path $baseDir '04_Triggers' $fileName) `
+          -ScriptingOptions $scriptOpts `
+          -SpecialHandler 'TableTriggers'
+      }
+    }
+    'schema' {
+      $bySchema = $triggerList | Group-Object { $_.TableSchema }
+      $schemaNum = 1
+      foreach ($group in $bySchema | Sort-Object Name) {
+        $safeSchema = Get-SafeFileName $group.Name
+        $fileName = "{0:D3}_{1}_TableTriggers.sql" -f $schemaNum, $safeSchema
+        $tableNames = $group.Group | Select-Object -Property TableSchema, TableName -Unique
+        $objects = @($tableNames | ForEach-Object { @{ Schema = $_.TableSchema; Name = $_.TableName } })
+        $workItems += New-ExportWorkItem `
+          -ObjectType 'TableTriggers' `
+          -GroupingMode 'schema' `
+          -Objects $objects `
+          -OutputPath (Join-Path $baseDir $fileName) `
+          -ScriptingOptions $scriptOpts `
+          -SpecialHandler 'TableTriggers'
+        $schemaNum++
+      }
+    }
+    'all' {
+      $tableNames = $triggerList | Select-Object -Property TableSchema, TableName -Unique
+      $objects = @($tableNames | ForEach-Object { @{ Schema = $_.TableSchema; Name = $_.TableName } })
+      $workItems += New-ExportWorkItem `
+        -ObjectType 'TableTriggers' `
+        -GroupingMode 'all' `
+        -Objects $objects `
+        -OutputPath (Join-Path $baseDir '001_TableTriggers.sql') `
+        -ScriptingOptions $scriptOpts `
+        -SpecialHandler 'TableTriggers'
+    }
+  }
+
+  return $workItems
+}
+
+function Build-WorkItems-Views {
+  <#
+  .SYNOPSIS
+  Builds work items for view export.
+  .DESCRIPTION
+  Creates export work items for database views (excludes system views).
+  May have cross-dependencies with functions and other views (handled by import retry logic).
+  Output: 14_Programmability/Views subfolder.
+  #>
+  param($Database, $OutputDir)
+
+  if (Test-ObjectTypeExcluded -ObjectType 'Views') { return @() }
+
+  $views = @($Database.Views | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) })
+  if ($views.Count -eq 0) { return @() }
+
+  $workItems = @()
+  $groupBy = Get-ObjectGroupingMode -ObjectType 'Views'
+  $baseDir = Join-Path $OutputDir '14_Programmability'
+  $scriptOpts = @{ DriAll = $false }
+
+  switch ($groupBy) {
+    'single' {
+      foreach ($view in $views) {
+        $safeSchema = Get-SafeFileName $view.Schema
+        $safeName = Get-SafeFileName $view.Name
+        $fileName = "$safeSchema.$safeName.sql"
+        $workItems += New-ExportWorkItem `
+          -ObjectType 'View' `
+          -GroupingMode 'single' `
+          -Objects @(@{ Schema = $view.Schema; Name = $view.Name }) `
+          -OutputPath (Join-Path $baseDir $fileName) `
+          -ScriptingOptions $scriptOpts
+      }
+    }
+    'schema' {
+      $bySchema = $views | Group-Object Schema
+      $schemaNum = 1
+      foreach ($group in $bySchema | Sort-Object Name) {
+        $safeSchema = Get-SafeFileName $group.Name
+        $fileName = "{0:D3}_{1}_Views.sql" -f $schemaNum, $safeSchema
+        $objects = @($group.Group | ForEach-Object { @{ Schema = $_.Schema; Name = $_.Name } })
+        $workItems += New-ExportWorkItem `
+          -ObjectType 'View' `
+          -GroupingMode 'schema' `
+          -Objects $objects `
+          -OutputPath (Join-Path $baseDir $fileName) `
+          -ScriptingOptions $scriptOpts
+        $schemaNum++
+      }
+    }
+    'all' {
+      $objects = @($views | ForEach-Object { @{ Schema = $_.Schema; Name = $_.Name } })
+      $workItems += New-ExportWorkItem `
+        -ObjectType 'View' `
+        -GroupingMode 'all' `
+        -Objects $objects `
+        -OutputPath (Join-Path $baseDir '001_Views.sql') `
+        -ScriptingOptions $scriptOpts
+    }
+  }
+
+  return $workItems
+}
+
+function Build-WorkItems-Synonyms {
+  <#
+  .SYNOPSIS
+  Builds work items for synonym export.
+  .DESCRIPTION
+  Creates export work items for database synonyms (aliases for other database objects).
+  May reference objects in other databases or linked servers. Output: 15_Synonyms folder.
+  #>
+  param($Database, $OutputDir)
+
+  if (Test-ObjectTypeExcluded -ObjectType 'Synonyms') { return @() }
+
+  $synonyms = @($Database.Synonyms | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) })
+  if ($synonyms.Count -eq 0) { return @() }
+
+  $workItems = @()
+  $groupBy = Get-ObjectGroupingMode -ObjectType 'Synonyms'
+  $baseDir = Join-Path $OutputDir '15_Synonyms'
+  $scriptOpts = @{}
+
+  switch ($groupBy) {
+    'single' {
+      foreach ($syn in $synonyms) {
+        $safeSchema = Get-SafeFileName $syn.Schema
+        $safeName = Get-SafeFileName $syn.Name
+        $fileName = "$safeSchema.$safeName.sql"
+        $workItems += New-ExportWorkItem `
+          -ObjectType 'Synonym' `
+          -GroupingMode 'single' `
+          -Objects @(@{ Schema = $syn.Schema; Name = $syn.Name }) `
+          -OutputPath (Join-Path $baseDir $fileName) `
+          -ScriptingOptions $scriptOpts
+      }
+    }
+    'schema' {
+      $bySchema = $synonyms | Group-Object Schema
+      $schemaNum = 1
+      foreach ($group in $bySchema | Sort-Object Name) {
+        $safeSchema = Get-SafeFileName $group.Name
+        $fileName = "{0:D3}_{1}_Synonyms.sql" -f $schemaNum, $safeSchema
+        $objects = @($group.Group | ForEach-Object { @{ Schema = $_.Schema; Name = $_.Name } })
+        $workItems += New-ExportWorkItem `
+          -ObjectType 'Synonym' `
+          -GroupingMode 'schema' `
+          -Objects $objects `
+          -OutputPath (Join-Path $baseDir $fileName) `
+          -ScriptingOptions $scriptOpts
+        $schemaNum++
+      }
+    }
+    'all' {
+      $objects = @($synonyms | ForEach-Object { @{ Schema = $_.Schema; Name = $_.Name } })
+      $workItems += New-ExportWorkItem `
+        -ObjectType 'Synonym' `
+        -GroupingMode 'all' `
+        -Objects $objects `
+        -OutputPath (Join-Path $baseDir '001_Synonyms.sql') `
+        -ScriptingOptions $scriptOpts
+    }
+  }
+
+  return $workItems
+}
+
+function Build-WorkItems-FullTextCatalogs {
+  <#
+  .SYNOPSIS
+  Builds work items for full-text catalog export.
+  .DESCRIPTION
+  Creates export work items for full-text search catalogs (containers for full-text indexes).
+  Database-level objects. Output: 16_FullTextSearch folder.
+  #>
+  param($Database, $OutputDir)
+
+  if (Test-ObjectTypeExcluded -ObjectType 'FullTextCatalogs') { return @() }
+
+  try {
+    $ftCatalogs = @($Database.FullTextCatalogs | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $null -Name $_.Name) })
+  }
+  catch {
+    return @()
+  }
+
+  if ($ftCatalogs.Count -eq 0) { return @() }
+
+  $workItems = @()
+  $groupBy = Get-ObjectGroupingMode -ObjectType 'FullTextCatalogs'
+  $baseDir = Join-Path $OutputDir '16_FullTextSearch'
+  $scriptOpts = @{}
+
+  # No schema property
+  switch ($groupBy) {
+    'single' {
+      foreach ($ftCat in $ftCatalogs) {
+        $fileName = "FullTextCatalog.$(Get-SafeFileName $($ftCat.Name)).sql"
+        $workItems += New-ExportWorkItem `
+          -ObjectType 'FullTextCatalog' `
+          -GroupingMode 'single' `
+          -Objects @(@{ Schema = $null; Name = $ftCat.Name }) `
+          -OutputPath (Join-Path $baseDir $fileName) `
+          -ScriptingOptions $scriptOpts
+      }
+    }
+    { $_ -in 'schema', 'all' } {
+      $objects = @($ftCatalogs | ForEach-Object { @{ Schema = $null; Name = $_.Name } })
+      $workItems += New-ExportWorkItem `
+        -ObjectType 'FullTextCatalog' `
+        -GroupingMode $groupBy `
+        -Objects $objects `
+        -OutputPath (Join-Path $baseDir '001_FullTextCatalogs.sql') `
+        -ScriptingOptions $scriptOpts
+    }
+  }
+
+  return $workItems
+}
+
+function Build-WorkItems-FullTextStopLists {
+  <#
+  .SYNOPSIS
+  Builds work items for full-text stoplist export.
+  .DESCRIPTION
+  Creates export work items for full-text stoplists (noise word exclusion lists).
+  Used by full-text indexes to filter common words. Output: 16_FullTextSearch folder.
+  #>
+  param($Database, $OutputDir)
+
+  if (Test-ObjectTypeExcluded -ObjectType 'FullTextStopLists') { return @() }
+
+  try {
+    $ftStopLists = @($Database.FullTextStopLists | Where-Object { -not (Test-ObjectExcluded -Schema $null -Name $_.Name) })
+  }
+  catch {
+    return @()
+  }
+
+  if ($ftStopLists.Count -eq 0) { return @() }
+
+  $workItems = @()
+  $groupBy = Get-ObjectGroupingMode -ObjectType 'FullTextStopLists'
+  $baseDir = Join-Path $OutputDir '16_FullTextSearch'
+  $scriptOpts = @{}
+
+  switch ($groupBy) {
+    'single' {
+      foreach ($stopList in $ftStopLists) {
+        $fileName = "FullTextStopList.$(Get-SafeFileName $($stopList.Name)).sql"
+        $workItems += New-ExportWorkItem `
+          -ObjectType 'FullTextStopList' `
+          -GroupingMode 'single' `
+          -Objects @(@{ Schema = $null; Name = $stopList.Name }) `
+          -OutputPath (Join-Path $baseDir $fileName) `
+          -ScriptingOptions $scriptOpts
+      }
+    }
+    { $_ -in 'schema', 'all' } {
+      $objects = @($ftStopLists | ForEach-Object { @{ Schema = $null; Name = $_.Name } })
+      $workItems += New-ExportWorkItem `
+        -ObjectType 'FullTextStopList' `
+        -GroupingMode $groupBy `
+        -Objects $objects `
+        -OutputPath (Join-Path $baseDir '001_FullTextStopLists.sql') `
+        -ScriptingOptions $scriptOpts
+    }
+  }
+
+  return $workItems
+}
+
+function Build-WorkItems-ExternalDataSources {
+  <#
+  .SYNOPSIS
+  Builds work items for external data source export.
+  .DESCRIPTION
+  Creates export work items for PolyBase external data sources (Hadoop, Azure Blob, etc.).
+  Used with external tables for data virtualization. Output: 17_ExternalData folder.
+  #>
+  param($Database, $OutputDir)
+
+  if (Test-ObjectTypeExcluded -ObjectType 'ExternalDataSources') { return @() }
+
+  try {
+    $extDS = @($Database.ExternalDataSources | Where-Object { -not (Test-ObjectExcluded -Schema $null -Name $_.Name) })
+  }
+  catch {
+    return @()
+  }
+
+  if ($extDS.Count -eq 0) { return @() }
+
+  $workItems = @()
+  $groupBy = Get-ObjectGroupingMode -ObjectType 'ExternalDataSources'
+  $baseDir = Join-Path $OutputDir '17_ExternalData'
+  $scriptOpts = @{}
+
+  switch ($groupBy) {
+    'single' {
+      foreach ($ds in $extDS) {
+        $fileName = "ExternalDataSource.$(Get-SafeFileName $($ds.Name)).sql"
+        $workItems += New-ExportWorkItem `
+          -ObjectType 'ExternalDataSource' `
+          -GroupingMode 'single' `
+          -Objects @(@{ Schema = $null; Name = $ds.Name }) `
+          -OutputPath (Join-Path $baseDir $fileName) `
+          -ScriptingOptions $scriptOpts
+      }
+    }
+    { $_ -in 'schema', 'all' } {
+      $objects = @($extDS | ForEach-Object { @{ Schema = $null; Name = $_.Name } })
+      $workItems += New-ExportWorkItem `
+        -ObjectType 'ExternalDataSource' `
+        -GroupingMode $groupBy `
+        -Objects $objects `
+        -OutputPath (Join-Path $baseDir '001_ExternalDataSources.sql') `
+        -ScriptingOptions $scriptOpts
+    }
+  }
+
+  return $workItems
+}
+
+function Build-WorkItems-ExternalFileFormats {
+  <#
+  .SYNOPSIS
+  Builds work items for external file format export.
+  .DESCRIPTION
+  Creates export work items for PolyBase external file formats (CSV, Parquet, ORC, etc.).
+  Defines structure of data in external data sources. Output: 17_ExternalData folder.
+  #>
+  param($Database, $OutputDir)
+
+  if (Test-ObjectTypeExcluded -ObjectType 'ExternalFileFormats') { return @() }
+
+  try {
+    $extFF = @($Database.ExternalFileFormats | Where-Object { -not (Test-ObjectExcluded -Schema $null -Name $_.Name) })
+  }
+  catch {
+    return @()
+  }
+
+  if ($extFF.Count -eq 0) { return @() }
+
+  $workItems = @()
+  $groupBy = Get-ObjectGroupingMode -ObjectType 'ExternalFileFormats'
+  $baseDir = Join-Path $OutputDir '17_ExternalData'
+  $scriptOpts = @{}
+
+  switch ($groupBy) {
+    'single' {
+      foreach ($ff in $extFF) {
+        $fileName = "ExternalFileFormat.$(Get-SafeFileName $($ff.Name)).sql"
+        $workItems += New-ExportWorkItem `
+          -ObjectType 'ExternalFileFormat' `
+          -GroupingMode 'single' `
+          -Objects @(@{ Schema = $null; Name = $ff.Name }) `
+          -OutputPath (Join-Path $baseDir $fileName) `
+          -ScriptingOptions $scriptOpts
+      }
+    }
+    { $_ -in 'schema', 'all' } {
+      $objects = @($extFF | ForEach-Object { @{ Schema = $null; Name = $_.Name } })
+      $workItems += New-ExportWorkItem `
+        -ObjectType 'ExternalFileFormat' `
+        -GroupingMode $groupBy `
+        -Objects $objects `
+        -OutputPath (Join-Path $baseDir '001_ExternalFileFormats.sql') `
+        -ScriptingOptions $scriptOpts
+    }
+  }
+
+  return $workItems
+}
+
+function Build-WorkItems-SearchPropertyLists {
+  <#
+  .SYNOPSIS
+  Builds work items for search property list export.
+  .DESCRIPTION
+  Creates export work items for full-text search property lists (document property definitions).
+  Used for property searching in full-text indexes. Output: 18_SearchPropertyLists folder.
+  #>
+  param($Database, $OutputDir)
+
+  if (Test-ObjectTypeExcluded -ObjectType 'SearchPropertyLists') { return @() }
+
+  try {
+    $searchPropLists = @($Database.SearchPropertyLists | Where-Object { -not (Test-ObjectExcluded -Schema $null -Name $_.Name) })
+  }
+  catch {
+    return @()
+  }
+
+  if ($searchPropLists.Count -eq 0) { return @() }
+
+  $workItems = @()
+  $groupBy = Get-ObjectGroupingMode -ObjectType 'SearchPropertyLists'
+  $baseDir = Join-Path $OutputDir '18_SearchPropertyLists'
+  $scriptOpts = @{}
+
+  switch ($groupBy) {
+    'single' {
+      foreach ($spl in $searchPropLists) {
+        $fileName = "SearchPropertyList.$(Get-SafeFileName $($spl.Name)).sql"
+        $workItems += New-ExportWorkItem `
+          -ObjectType 'SearchPropertyList' `
+          -GroupingMode 'single' `
+          -Objects @(@{ Schema = $null; Name = $spl.Name }) `
+          -OutputPath (Join-Path $baseDir $fileName) `
+          -ScriptingOptions $scriptOpts
+      }
+    }
+    { $_ -in 'schema', 'all' } {
+      $objects = @($searchPropLists | ForEach-Object { @{ Schema = $null; Name = $_.Name } })
+      $workItems += New-ExportWorkItem `
+        -ObjectType 'SearchPropertyList' `
+        -GroupingMode $groupBy `
+        -Objects $objects `
+        -OutputPath (Join-Path $baseDir '001_SearchPropertyLists.sql') `
+        -ScriptingOptions $scriptOpts
+    }
+  }
+
+  return $workItems
+}
+
+function Build-WorkItems-PlanGuides {
+  <#
+  .SYNOPSIS
+  Builds work items for plan guide export.
+  .DESCRIPTION
+  Creates export work items for query plan guides (hints for query optimizer).
+  Used to influence execution plans without modifying application code. Output: 19_PlanGuides folder.
+  #>
+  param($Database, $OutputDir)
+
+  if (Test-ObjectTypeExcluded -ObjectType 'PlanGuides') { return @() }
+
+  try {
+    $planGuides = @($Database.PlanGuides | Where-Object { -not (Test-ObjectExcluded -Schema $null -Name $_.Name) })
+  }
+  catch {
+    return @()
+  }
+
+  if ($planGuides.Count -eq 0) { return @() }
+
+  $workItems = @()
+  $groupBy = Get-ObjectGroupingMode -ObjectType 'PlanGuides'
+  $baseDir = Join-Path $OutputDir '19_PlanGuides'
+  $scriptOpts = @{}
+
+  switch ($groupBy) {
+    'single' {
+      foreach ($pg in $planGuides) {
+        $fileName = "PlanGuide.$(Get-SafeFileName $($pg.Name)).sql"
+        $workItems += New-ExportWorkItem `
+          -ObjectType 'PlanGuide' `
+          -GroupingMode 'single' `
+          -Objects @(@{ Schema = $null; Name = $pg.Name }) `
+          -OutputPath (Join-Path $baseDir $fileName) `
+          -ScriptingOptions $scriptOpts
+      }
+    }
+    { $_ -in 'schema', 'all' } {
+      $objects = @($planGuides | ForEach-Object { @{ Schema = $null; Name = $_.Name } })
+      $workItems += New-ExportWorkItem `
+        -ObjectType 'PlanGuide' `
+        -GroupingMode $groupBy `
+        -Objects $objects `
+        -OutputPath (Join-Path $baseDir '001_PlanGuides.sql') `
+        -ScriptingOptions $scriptOpts
+    }
+  }
+
+  return $workItems
+}
+
+function Build-WorkItems-Security {
+  <#
+  .SYNOPSIS
+  Builds work items for security object export.
+  .DESCRIPTION
+  Creates export work items for database security objects: Certificates, Asymmetric Keys,
+  Symmetric Keys, Database Roles, Application Roles, and Database Users.
+  All security objects grouped in 01_Security folder (exported first for dependency order).
+  #>
+  param($Database, $OutputDir)
+
+  # Security objects are grouped together: Certificates, Keys, Roles, Users
+  $workItems = @()
+  $baseDir = Join-Path $OutputDir '01_Security'
+
+  # Certificates
+  if (-not (Test-ObjectTypeExcluded -ObjectType 'Certificates')) {
+    try {
+      $certs = @($Database.Certificates | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $null -Name $_.Name) })
+      if ($certs.Count -gt 0) {
+        $objects = @($certs | ForEach-Object { @{ Schema = $null; Name = $_.Name } })
+        $workItems += New-ExportWorkItem `
+          -ObjectType 'Certificate' `
+          -GroupingMode 'all' `
+          -Objects $objects `
+          -OutputPath (Join-Path $baseDir '001_Certificates.sql') `
+          -ScriptingOptions @{}
+      }
+    }
+    catch { }
+  }
+
+  # Asymmetric Keys
+  if (-not (Test-ObjectTypeExcluded -ObjectType 'AsymmetricKeys')) {
+    try {
+      $asymKeys = @($Database.AsymmetricKeys | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $null -Name $_.Name) })
+      if ($asymKeys.Count -gt 0) {
+        $objects = @($asymKeys | ForEach-Object { @{ Schema = $null; Name = $_.Name } })
+        $workItems += New-ExportWorkItem `
+          -ObjectType 'AsymmetricKey' `
+          -GroupingMode 'all' `
+          -Objects $objects `
+          -OutputPath (Join-Path $baseDir '002_AsymmetricKeys.sql') `
+          -ScriptingOptions @{}
+      }
+    }
+    catch { }
+  }
+
+  # Symmetric Keys
+  if (-not (Test-ObjectTypeExcluded -ObjectType 'SymmetricKeys')) {
+    try {
+      $symKeys = @($Database.SymmetricKeys | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $null -Name $_.Name) })
+      if ($symKeys.Count -gt 0) {
+        $objects = @($symKeys | ForEach-Object { @{ Schema = $null; Name = $_.Name } })
+        $workItems += New-ExportWorkItem `
+          -ObjectType 'SymmetricKey' `
+          -GroupingMode 'all' `
+          -Objects $objects `
+          -OutputPath (Join-Path $baseDir '003_SymmetricKeys.sql') `
+          -ScriptingOptions @{}
+      }
+    }
+    catch { }
+  }
+
+  # Database Roles - respect grouping mode (default: single to match sequential export)
+  if (-not (Test-ObjectTypeExcluded -ObjectType 'DatabaseRoles')) {
+    $groupBy = Get-ObjectGroupingMode -ObjectType 'DatabaseRoles'
+    try {
+      $dbRoles = @($Database.Roles | Where-Object { -not $_.IsFixedRole -and -not (Test-ObjectExcluded -Schema $null -Name $_.Name) })
+      if ($dbRoles.Count -gt 0) {
+        switch ($groupBy) {
+          'single' {
+            # One file per role: RoleName.role.sql (matches sequential export)
+            foreach ($role in $dbRoles) {
+              $safeName = Get-SafeFileName $role.Name
+              $fileName = "$safeName.role.sql"
+              $workItems += New-ExportWorkItem `
+                -ObjectType 'DatabaseRole' `
+                -GroupingMode 'single' `
+                -Objects @(@{ Schema = $null; Name = $role.Name }) `
+                -OutputPath (Join-Path $baseDir $fileName) `
+                -ScriptingOptions @{}
+            }
+          }
+          default {
+            # 'schema' or 'all' - consolidated file
+            $objects = @($dbRoles | ForEach-Object { @{ Schema = $null; Name = $_.Name } })
+            $workItems += New-ExportWorkItem `
+              -ObjectType 'DatabaseRole' `
+              -GroupingMode $groupBy `
+              -Objects $objects `
+              -OutputPath (Join-Path $baseDir '004_Roles.sql') `
+              -ScriptingOptions @{}
+          }
+        }
+      }
+    }
+    catch { }
+
+    # Application Roles
+    try {
+      $appRoles = @($Database.ApplicationRoles | Where-Object { -not (Test-ObjectExcluded -Schema $null -Name $_.Name) })
+      if ($appRoles.Count -gt 0) {
+        switch ($groupBy) {
+          'single' {
+            foreach ($role in $appRoles) {
+              $safeName = Get-SafeFileName $role.Name
+              $fileName = "$safeName.approle.sql"
+              $workItems += New-ExportWorkItem `
+                -ObjectType 'ApplicationRole' `
+                -GroupingMode 'single' `
+                -Objects @(@{ Schema = $null; Name = $role.Name }) `
+                -OutputPath (Join-Path $baseDir $fileName) `
+                -ScriptingOptions @{}
+            }
+          }
+          default {
+            $objects = @($appRoles | ForEach-Object { @{ Schema = $null; Name = $_.Name } })
+            $workItems += New-ExportWorkItem `
+              -ObjectType 'ApplicationRole' `
+              -GroupingMode $groupBy `
+              -Objects $objects `
+              -OutputPath (Join-Path $baseDir '005_ApplicationRoles.sql') `
+              -ScriptingOptions @{}
+          }
+        }
+      }
+    }
+    catch { }
+  }
+
+  # Database Users - respect grouping mode (default: single to match sequential export)
+  if (-not (Test-ObjectTypeExcluded -ObjectType 'DatabaseUsers')) {
+    $groupBy = Get-ObjectGroupingMode -ObjectType 'DatabaseUsers'
+    try {
+      $users = @($Database.Users | Where-Object { -not $_.IsSystemObject -and $_.Name -ne 'dbo' -and -not (Test-ObjectExcluded -Schema $null -Name $_.Name) })
+      if ($users.Count -gt 0) {
+        switch ($groupBy) {
+          'single' {
+            # One file per user: UserName.user.sql (matches sequential export)
+            foreach ($user in $users) {
+              $safeName = Get-SafeFileName $user.Name
+              $fileName = "$safeName.user.sql"
+              $workItems += New-ExportWorkItem `
+                -ObjectType 'User' `
+                -GroupingMode 'single' `
+                -Objects @(@{ Schema = $null; Name = $user.Name }) `
+                -OutputPath (Join-Path $baseDir $fileName) `
+                -ScriptingOptions @{}
+            }
+          }
+          default {
+            # 'schema' or 'all' - consolidated file
+            $objects = @($users | ForEach-Object { @{ Schema = $null; Name = $_.Name } })
+            $workItems += New-ExportWorkItem `
+              -ObjectType 'User' `
+              -GroupingMode $groupBy `
+              -Objects $objects `
+              -OutputPath (Join-Path $baseDir '006_Users.sql') `
+              -ScriptingOptions @{}
+          }
+        }
+      }
+    }
+    catch { }
+  }
+
+  return $workItems
+}
+
+function Build-WorkItems-SecurityPolicies {
+  <#
+  .SYNOPSIS
+  Builds work items for Row-Level Security (RLS) policy export.
+  .DESCRIPTION
+  Creates export work items for security policies with filter and block predicates.
+  Exported AFTER programmability objects because policies reference predicate functions.
+  Output: 20_SecurityPolicies folder.
+  #>
+  param($Database, $OutputDir)
+
+  if (Test-ObjectTypeExcluded -ObjectType 'SecurityPolicies') { return @() }
+
+  try {
+    $secPolicies = @($Database.SecurityPolicies | Where-Object { -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) })
+  }
+  catch {
+    return @()
+  }
+
+  if ($secPolicies.Count -eq 0) { return @() }
+
+  $workItems = @()
+  $groupBy = Get-ObjectGroupingMode -ObjectType 'SecurityPolicies'
+  $baseDir = Join-Path $OutputDir '20_SecurityPolicies'
+  $scriptOpts = @{}
+
+  switch ($groupBy) {
+    'single' {
+      foreach ($policy in $secPolicies) {
+        $safeSchema = Get-SafeFileName $policy.Schema
+        $safeName = Get-SafeFileName $policy.Name
+        $fileName = "$safeSchema.$safeName.securitypolicy.sql"
+        $workItems += New-ExportWorkItem `
+          -ObjectType 'SecurityPolicy' `
+          -GroupingMode 'single' `
+          -Objects @(@{ Schema = $policy.Schema; Name = $policy.Name }) `
+          -OutputPath (Join-Path $baseDir $fileName) `
+          -ScriptingOptions $scriptOpts `
+          -SpecialHandler 'SecurityPolicy'
+      }
+    }
+    'schema' {
+      $bySchema = $secPolicies | Group-Object Schema
+      $schemaNum = 1
+      foreach ($group in $bySchema | Sort-Object Name) {
+        $safeSchema = Get-SafeFileName $group.Name
+        $fileName = "{0:D3}_{1}_SecurityPolicies.sql" -f $schemaNum, $safeSchema
+        $objects = @($group.Group | ForEach-Object { @{ Schema = $_.Schema; Name = $_.Name } })
+        $workItems += New-ExportWorkItem `
+          -ObjectType 'SecurityPolicy' `
+          -GroupingMode 'schema' `
+          -Objects $objects `
+          -OutputPath (Join-Path $baseDir $fileName) `
+          -ScriptingOptions $scriptOpts `
+          -SpecialHandler 'SecurityPolicy'
+        $schemaNum++
+      }
+    }
+    'all' {
+      $objects = @($secPolicies | ForEach-Object { @{ Schema = $_.Schema; Name = $_.Name } })
+      $workItems += New-ExportWorkItem `
+        -ObjectType 'SecurityPolicy' `
+        -GroupingMode 'all' `
+        -Objects $objects `
+        -OutputPath (Join-Path $baseDir '001_SecurityPolicies.sql') `
+        -ScriptingOptions $scriptOpts `
+        -SpecialHandler 'SecurityPolicy'
+    }
+  }
+
+  return $workItems
+}
+
+
+
+# === From parallel-orchestrators.ps1 ===
+
+# Parallel Export - Orchestrator Functions
+
+function Build-WorkItems-Data {
+  <#
+  .SYNOPSIS
+  Builds work items for table data export if -IncludeData is enabled.
+  #>
+  param($Database, $OutputDir)
+
+  if (-not $script:IncludeData) { return @() }
+  if (Test-ObjectTypeExcluded -ObjectType 'Data') { return @() }
+
+  $tables = @($Database.Tables | Where-Object {
+    -not $_.IsSystemObject -and
+    -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name)
+  })
+
+  if ($tables.Count -eq 0) { return @() }
+
+  $workItems = @()
+  $groupBy = Get-ObjectGroupingMode -ObjectType 'Data'
+  $baseDir = Join-Path $OutputDir '21_Data'
+  $scriptOpts = @{ ScriptData = $true; NoCommandTerminator = $true }
+
+  switch ($groupBy) {
+    'single' {
+      foreach ($table in $tables) {
+        $safeSchema = Get-SafeFileName $table.Schema
+        $safeName = Get-SafeFileName $table.Name
+        $fileName = "Data.$safeSchema.$safeName.sql"
+        $workItems += New-ExportWorkItem `
+          -ObjectType 'TableData' `
+          -GroupingMode 'single' `
+          -Objects @(@{ Schema = $table.Schema; Name = $table.Name }) `
+          -OutputPath (Join-Path $baseDir $fileName) `
+          -ScriptingOptions $scriptOpts
+      }
+    }
+    'schema' {
+      $bySchema = $tables | Group-Object Schema
+      $schemaNum = 1
+      foreach ($group in $bySchema | Sort-Object Name) {
+        $safeSchema = Get-SafeFileName $group.Name
+        $fileName = "{0:D3}_{1}_Data.sql" -f $schemaNum, $safeSchema
+        $objects = @($group.Group | ForEach-Object { @{ Schema = $_.Schema; Name = $_.Name } })
+        $workItems += New-ExportWorkItem `
+          -ObjectType 'TableData' `
+          -GroupingMode 'schema' `
+          -Objects $objects `
+          -OutputPath (Join-Path $baseDir $fileName) `
+          -ScriptingOptions $scriptOpts
+        $schemaNum++
+      }
+    }
+    'all' {
+      $objects = @($tables | ForEach-Object { @{ Schema = $_.Schema; Name = $_.Name } })
+      $workItems += New-ExportWorkItem `
+        -ObjectType 'TableData' `
+        -GroupingMode 'all' `
+        -Objects $objects `
+        -OutputPath (Join-Path $baseDir '001_Data.sql') `
+        -ScriptingOptions $scriptOpts
+    }
+  }
+
+  return $workItems
+}
+
+function Build-ParallelWorkQueue {
+  <#
+  .SYNOPSIS
+  Builds the complete work queue for parallel export by calling all helper functions.
+
+  .DESCRIPTION
+  Orchestrates all Build-WorkItems-* helper functions to create a comprehensive work queue.
+  Returns an array of work items ready for parallel processing.
+
+  .PARAMETER Database
+  The SMO Database object to export from.
+
+  .PARAMETER OutputDir
+  The output directory where scripts will be exported.
+
+  .OUTPUTS
+  System.Collections.ArrayList
+  Array of work item hashtables, each containing ObjectType, GroupingMode, Objects, OutputPath, etc.
+  #>
+  [CmdletBinding()]
+  param(
+    [Parameter(Mandatory)]
+    [Microsoft.SqlServer.Management.Smo.Database]$Database,
+
+    [Parameter(Mandatory)]
+    [string]$OutputDir
+  )
+
+  Write-Host "  [INFO] Building parallel work queue..." -ForegroundColor Cyan
+
+  $workQueue = [System.Collections.Generic.List[hashtable]]::new()
+
+  # Call all helper functions in logical order (matches folder structure)
+  $builders = @(
+    { Build-WorkItems-Schemas $Database $OutputDir }
+    { Build-WorkItems-Sequences $Database $OutputDir }
+    { Build-WorkItems-PartitionFunctions $Database $OutputDir }
+    { Build-WorkItems-PartitionSchemes $Database $OutputDir }
+    { Build-WorkItems-UserDefinedTypes $Database $OutputDir }
+    { Build-WorkItems-XmlSchemaCollections $Database $OutputDir }
+    { Build-WorkItems-Tables $Database $OutputDir }
+    { Build-WorkItems-ForeignKeys $Database $OutputDir }
+    { Build-WorkItems-Indexes $Database $OutputDir }
+    { Build-WorkItems-Defaults $Database $OutputDir }
+    { Build-WorkItems-Rules $Database $OutputDir }
+    { Build-WorkItems-Assemblies $Database $OutputDir }
+    { Build-WorkItems-Functions $Database $OutputDir }
+    { Build-WorkItems-UserDefinedAggregates $Database $OutputDir }
+    { Build-WorkItems-StoredProcedures $Database $OutputDir }
+    { Build-WorkItems-DatabaseTriggers $Database $OutputDir }
+    { Build-WorkItems-TableTriggers $Database $OutputDir }
+    { Build-WorkItems-Views $Database $OutputDir }
+    { Build-WorkItems-Synonyms $Database $OutputDir }
+    { Build-WorkItems-FullTextCatalogs $Database $OutputDir }
+    { Build-WorkItems-FullTextStopLists $Database $OutputDir }
+    { Build-WorkItems-ExternalDataSources $Database $OutputDir }
+    { Build-WorkItems-ExternalFileFormats $Database $OutputDir }
+    { Build-WorkItems-SearchPropertyLists $Database $OutputDir }
+    { Build-WorkItems-PlanGuides $Database $OutputDir }
+    { Build-WorkItems-Security $Database $OutputDir }
+    { Build-WorkItems-SecurityPolicies $Database $OutputDir }
+    { Build-WorkItems-Data $Database $OutputDir }
+  )
+
+  foreach ($builder in $builders) {
+    try {
+      $items = & $builder
+      if ($items) {
+        # Add each item individually to avoid type conversion issues
+        foreach ($item in $items) {
+          if ($item -is [hashtable]) {
+            $workQueue.Add($item)
+          }
+        }
+      }
+    }
+    catch {
+      Write-Host "  [WARNING] Error in work queue builder: $_" -ForegroundColor Yellow
+    }
+  }
+
+  Write-Host "  [SUCCESS] Built $($workQueue.Count) work items for parallel processing" -ForegroundColor Green
+  return $workQueue
+}
+
+function Invoke-ParallelExport {
+  <#
+  .SYNOPSIS
+  Main parallel export orchestrator - executes the parallel export workflow.
+
+  .DESCRIPTION
+  Coordinates the entire parallel export process:
+  1. Exports non-parallelizable objects sequentially (FileGroups, DatabaseScopedConfigs, DatabaseScopedCredentials)
+  2. Builds parallel work queue for all other object types
+  3. Creates concurrent collections for results/errors
+  4. Initializes runspace pool with configured worker count
+  5. Spawns workers and distributes work items
+  6. Monitors progress with periodic updates
+  7. Aggregates results and reports errors
+
+  .PARAMETER Database
+  The SMO Database object to export from.
+
+  .PARAMETER Scripter
+  The SMO Scripter object configured with server connection.
+
+  .PARAMETER OutputDir
+  The output directory where scripts will be exported.
+
+  .PARAMETER TargetVersion
+  The target SQL Server version for script compatibility.
+
+  .OUTPUTS
+  System.Collections.Hashtable
+  Export summary with TotalItems, SuccessCount, ErrorCount, Errors array, Duration.
+  #>
+  [CmdletBinding()]
+  param(
+    [Parameter(Mandatory)]
+    [Microsoft.SqlServer.Management.Smo.Database]$Database,
+
+    [Parameter(Mandatory)]
+    [Microsoft.SqlServer.Management.Smo.Scripter]$Scripter,
+
+    [Parameter(Mandatory)]
+    [string]$OutputDir,
+
+    [Parameter(Mandatory)]
+    [string]$TargetVersion
+  )
+
+  Write-Host "[INFO] Starting parallel export with $script:ParallelMaxWorkers workers..." -ForegroundColor Cyan
+  $exportStartTime = Get-Date
+
+  #region Export Non-Parallelizable Objects Sequentially
+  Write-Host "`n[INFO] Exporting non-parallelizable objects sequentially..." -ForegroundColor Cyan
+
+  # FileGroups (folder 00_FileGroups)
+  if (-not (Test-ObjectTypeExcluded -ObjectType 'FileGroups')) {
+    try {
+      $fileGroups = @($Database.FileGroups | Where-Object { $_.Name -ne 'PRIMARY' })
+      if ($fileGroups.Count -gt 0) {
+        $opts = New-ScriptingOptions -TargetVersion $TargetVersion
+        $opts.FileName = Join-Path $OutputDir '00_FileGroups' '001_FileGroups.sql'
+        $Scripter.Options = $opts
+        $Scripter.EnumScript($fileGroups) | Out-Null
+        Write-Host "  [SUCCESS] Exported $($fileGroups.Count) filegroup(s)" -ForegroundColor Green
+      }
+    }
+    catch {
+      Write-Host "  [WARNING] Error exporting FileGroups: $_" -ForegroundColor Yellow
+    }
+  }
+
+  # Database Scoped Configurations (folder 02_DatabaseConfiguration)
+  if (-not (Test-ObjectTypeExcluded -ObjectType 'DatabaseScopedConfigurations')) {
+    try {
+      if ($Database.DatabaseScopedConfigurations -and $Database.DatabaseScopedConfigurations.Count -gt 0) {
+        $dbScopedConfigs = @($Database.DatabaseScopedConfigurations)
+        $opts = New-ScriptingOptions -TargetVersion $TargetVersion
+        $opts.FileName = Join-Path $OutputDir '02_DatabaseConfiguration' '001_DatabaseScopedConfigurations.sql'
+        $Scripter.Options = $opts
+        $Scripter.EnumScript($dbScopedConfigs) | Out-Null
+        Write-Host "  [SUCCESS] Exported $($dbScopedConfigs.Count) database scoped configuration(s)" -ForegroundColor Green
+      }
+    }
+    catch {
+      Write-Host "  [WARNING] Error exporting DatabaseScopedConfigurations: $_" -ForegroundColor Yellow
+    }
+  }
+
+  # Database Scoped Credentials (folder 02_DatabaseConfiguration)
+  # SECURITY: Export structure only - secrets cannot be exported safely
+  if (-not (Test-ObjectTypeExcluded -ObjectType 'DatabaseScopedCredentials')) {
+    try {
+      if ($Database.DatabaseScopedCredentials -and $Database.DatabaseScopedCredentials.Count -gt 0) {
+        $dbScopedCreds = @($Database.DatabaseScopedCredentials)
+        $credFilePath = Join-Path $OutputDir '02_DatabaseConfiguration' '002_DatabaseScopedCredentials.sql'
+        $credScript = New-Object System.Text.StringBuilder
+        [void]$credScript.AppendLine("-- Database Scoped Credentials (Structure Only)")
+        [void]$credScript.AppendLine("-- WARNING: Secrets cannot be exported and must be provided during import")
+        [void]$credScript.AppendLine("-- This file documents the credential names and identities for reference")
+        [void]$credScript.AppendLine("")
+
+        foreach ($cred in $dbScopedCreds) {
+          [void]$credScript.AppendLine("-- Credential: $($cred.Name)")
+          [void]$credScript.AppendLine("-- Identity: $($cred.Identity)")
+          [void]$credScript.AppendLine("-- MANUAL ACTION REQUIRED: Create this credential with appropriate secret")
+          [void]$credScript.AppendLine("-- Example:")
+          [void]$credScript.AppendLine("/*")
+          [void]$credScript.AppendLine("CREATE DATABASE SCOPED CREDENTIAL [$($cred.Name)]")
+          [void]$credScript.AppendLine("WITH IDENTITY = '$($cred.Identity)',")
+          [void]$credScript.AppendLine("SECRET = '<PROVIDE_SECRET_HERE>';")
+          [void]$credScript.AppendLine("GO")
+          [void]$credScript.AppendLine("*/")
+          [void]$credScript.AppendLine("")
+        }
+
+        $credScript.ToString() | Out-File -FilePath $credFilePath -Encoding UTF8
+        Write-Host "  [SUCCESS] Documented $($dbScopedCreds.Count) database scoped credential(s) (structure only)" -ForegroundColor Green
+        Write-Host "  [WARNING] Credentials exported as documentation only - secrets must be provided manually" -ForegroundColor Yellow
+      }
+    }
+    catch {
+      Write-Host "  [WARNING] Error exporting DatabaseScopedCredentials: $_" -ForegroundColor Yellow
+    }
+  }
+
+  #endregion
+
+  #region Build Parallel Work Queue
+  $workQueue = Build-ParallelWorkQueue -Database $Database -OutputDir $OutputDir
+
+  if ($workQueue.Count -eq 0) {
+    Write-Host "[WARNING] No work items generated for parallel processing" -ForegroundColor Yellow
+    return @{
+      TotalItems = 0
+      SuccessCount = 0
+      ErrorCount = 0
+      Errors = @()
+      Duration = (Get-Date) - $exportStartTime
+    }
+  }
+  #endregion
+
+  #region Initialize Concurrent Collections
+  $completedItems = [System.Collections.Concurrent.ConcurrentBag[hashtable]]::new()
+  $errorItems = [System.Collections.Concurrent.ConcurrentBag[hashtable]]::new()
+  $completedCount = [ref]0
+
+  # Convert ArrayList to ConcurrentQueue for thread-safe access
+  $concurrentQueue = [System.Collections.Concurrent.ConcurrentQueue[hashtable]]::new()
+
+  # Handle ArrayList enumeration quirks - use indexed access to avoid DictionaryEntry issues
+  $count = $workQueue.Count
+  for ($i = 0; $i -lt $count; $i++) {
+    $item = $workQueue[$i]
+    if ($item -is [hashtable]) {
+      $concurrentQueue.Enqueue($item)
+    } else {
+      Write-Host "[WARNING] Skipping work item $i of unexpected type: $($item.GetType().FullName)" -ForegroundColor Yellow
+    }
+  }
+
+  if ($concurrentQueue.Count -ne $workQueue.Count) {
+    Write-Host "[WARNING] Only enqueued $($concurrentQueue.Count) of $($workQueue.Count) work items!" -ForegroundColor Yellow
+  }
+  #endregion
+
+  #region Initialize Runspace Pool
+  $runspacePool = Initialize-ParallelRunspacePool -MaxWorkers $script:ParallelMaxWorkers
+  if (-not $runspacePool) {
+    throw "Failed to initialize runspace pool"
+  }
+  #endregion
+
+  #region Start Workers
+  try {
+    Write-Host "[INFO] Starting $script:ParallelMaxWorkers worker(s) for $($workQueue.Count) work items..." -ForegroundColor Cyan
+
+    $workers = Start-ParallelWorkers `
+      -RunspacePool $runspacePool `
+      -WorkerCount $script:ParallelMaxWorkers `
+      -WorkQueue $concurrentQueue `
+      -ProgressCounter $completedCount `
+      -ResultsBag $completedItems `
+      -ConnectionInfo $script:ConnectionInfo `
+      -TargetVersion $TargetVersion
+
+    if ($workers.Count -eq 0) {
+      throw "No workers were started"
+    }
+
+    Write-Host "[SUCCESS] Started $($workers.Count) worker(s)" -ForegroundColor Green
+
+    # Wait for completion with progress monitoring
+    Wait-ParallelWorkers `
+      -Workers $workers `
+      -ProgressCounter $completedCount `
+      -TotalItems $workQueue.Count `
+      -ProgressInterval $script:ParallelProgressInterval
+
+  }
+  finally {
+    # Cleanup
+    if ($runspacePool) {
+      $runspacePool.Close()
+      $runspacePool.Dispose()
+    }
+  }
+  #endregion
+
+  #region Aggregate Results
+  $exportEndTime = Get-Date
+  $duration = $exportEndTime - $exportStartTime
+
+  # Separate successful and failed items from completedItems
+  # Worker errors are stored in completedItems with Success=false flag
+  $successCount = 0
+  foreach ($item in $completedItems) {
+    if ($item.Success -eq $false) {
+      $errorItems.Add($item)
+    }
+    else {
+      $successCount++
+    }
+  }
+
+  $summary = @{
+    TotalItems = $workQueue.Count
+    SuccessCount = $successCount
+    ErrorCount = $errorItems.Count
+    Errors = @($errorItems | ForEach-Object { $_ })
+    Duration = $duration
+  }
+
+  Write-Host "`n[SUCCESS] Parallel export completed in $($duration.TotalSeconds.ToString('F2')) seconds" -ForegroundColor Green
+  Write-Host "  Total Items: $($summary.TotalItems)" -ForegroundColor Cyan
+  Write-Host "  Successful: $($summary.SuccessCount)" -ForegroundColor Green
+  Write-Host "  Errors: $($summary.ErrorCount)" -ForegroundColor $(if ($summary.ErrorCount -gt 0) { 'Red' } else { 'Green' })
+
+  if ($summary.ErrorCount -gt 0) {
+    Write-Host "`n[ERROR] The following errors occurred during parallel export:" -ForegroundColor Red
+    foreach ($err in $summary.Errors) {
+      Write-Host "  $($err.ObjectType) - $($err.OutputPath): $($err.Error)" -ForegroundColor Red
+    }
+  }
+
+  return $summary
+  #endregion
+}
+
+
+
+#endregion PARALLEL EXPORT FUNCTIONS
+
 $script:LogFile = $null  # Will be set after output directory is created
 $script:VerboseOutput = $PSBoundParameters.ContainsKey('Verbose')  # Default is quiet; -Verbose shows per-object progress
+
+# Parallel export settings
+$script:ParallelEnabled = $false
+$script:ParallelMaxWorkers = 5
+$script:ParallelProgressInterval = 50
+$script:ConnectionInfo = $null
+$script:Config = @{}  # Will be set after config file is loaded
 
 # Performance metrics tracking
 $script:Metrics = @{
@@ -205,7 +2872,7 @@ function Write-ObjectProgress {
     [switch]$Failed
   )
 
-  $percentComplete = [math]::Round(($Current / $Total) * 100)
+  $percentComplete = [math]::Floor(($Current / $Total) * 100)
 
   $labelPrefix = if ($script:CurrentProgressLabel) { "$($script:CurrentProgressLabel) " } else { '' }
 
@@ -1118,6 +3785,127 @@ function Get-ObjectGroupingMode {
   return $defaultMode
 }
 
+#endregion Get-GroupByMode
+
+#region Parallel Export Functions
+
+function New-ExportWorkItem {
+  <#
+  .SYNOPSIS
+      Creates a work item for parallel export processing.
+  .DESCRIPTION
+      Work items contain object identifiers (not SMO objects) because SMO objects
+      are connection-bound and cannot be serialized across runspace boundaries.
+  #>
+  [CmdletBinding()]
+  param(
+    [Parameter(Mandatory)]
+    [string]$ObjectType,
+
+    [Parameter(Mandatory)]
+    [string]$GroupingMode,  # 'single', 'schema', 'all'
+
+    [Parameter(Mandatory)]
+    [hashtable[]]$Objects,  # Array of @{ Schema = ''; Name = '' }
+
+    [Parameter(Mandatory)]
+    [string]$OutputPath,
+
+    [Parameter()]
+    [bool]$AppendToFile = $false,
+
+    [Parameter()]
+    [hashtable]$ScriptingOptions = @{},
+
+    [Parameter()]
+    [string]$SpecialHandler = $null,
+
+    [Parameter()]
+    [hashtable]$CustomData = $null
+  )
+
+  return @{
+    WorkItemId       = [guid]::NewGuid()
+    ObjectType       = $ObjectType
+    GroupingMode     = $GroupingMode
+    Objects          = $Objects
+    OutputPath       = $OutputPath
+    AppendToFile     = $AppendToFile
+    ScriptingOptions = $ScriptingOptions
+    SpecialHandler   = $SpecialHandler
+    CustomData       = $CustomData
+  }
+}
+
+function Get-SmoObjectByIdentifier {
+  <#
+  .SYNOPSIS
+      Retrieves an SMO object by its type, schema, and name.
+  .DESCRIPTION
+      Used by parallel workers to fetch SMO objects from their own database connection.
+      Returns $null if object not found (caller should handle).
+  #>
+  [CmdletBinding()]
+  param(
+    [Parameter(Mandatory)]
+    $Database,  # Don't type-constrain SMO objects
+
+    [Parameter(Mandatory)]
+    [string]$ObjectType,
+
+    [Parameter()]
+    [string]$Schema,
+
+    [Parameter(Mandatory)]
+    [string]$Name
+  )
+
+  try {
+    switch ($ObjectType) {
+      'Table'                    { return $Database.Tables[$Name, $Schema] }
+      'View'                     { return $Database.Views[$Name, $Schema] }
+      'StoredProcedure'          { return $Database.StoredProcedures[$Name, $Schema] }
+      'UserDefinedFunction'      { return $Database.UserDefinedFunctions[$Name, $Schema] }
+      'Schema'                   { return $Database.Schemas[$Name] }
+      'Sequence'                 { return $Database.Sequences[$Name, $Schema] }
+      'Synonym'                  { return $Database.Synonyms[$Name, $Schema] }
+      'UserDefinedType'          { return $Database.UserDefinedTypes[$Name, $Schema] }
+      'UserDefinedDataType'      { return $Database.UserDefinedDataTypes[$Name, $Schema] }
+      'UserDefinedTableType'     { return $Database.UserDefinedTableTypes[$Name, $Schema] }
+      'XmlSchemaCollection'      { return $Database.XmlSchemaCollections[$Name, $Schema] }
+      'PartitionFunction'        { return $Database.PartitionFunctions[$Name] }
+      'PartitionScheme'          { return $Database.PartitionSchemes[$Name] }
+      'Default'                  { return $Database.Defaults[$Name, $Schema] }
+      'Rule'                     { return $Database.Rules[$Name, $Schema] }
+      'DatabaseTrigger'          { return $Database.Triggers[$Name] }
+      'FullTextCatalog'          { return $Database.FullTextCatalogs[$Name] }
+      'FullTextStopList'         { return $Database.FullTextStopLists[$Name] }
+      'SearchPropertyList'       { return $Database.SearchPropertyLists[$Name] }
+      'SecurityPolicy'           { return $Database.SecurityPolicies[$Name, $Schema] }
+      'AsymmetricKey'            { return $Database.AsymmetricKeys[$Name] }
+      'Certificate'              { return $Database.Certificates[$Name] }
+      'SymmetricKey'             { return $Database.SymmetricKeys[$Name] }
+      'ApplicationRole'          { return $Database.ApplicationRoles[$Name] }
+      'DatabaseRole'             { return $Database.Roles[$Name] }
+      'User'                     { return $Database.Users[$Name] }
+      'PlanGuide'                { return $Database.PlanGuides[$Name] }
+      'ExternalDataSource'       { return $Database.ExternalDataSources[$Name] }
+      'ExternalFileFormat'       { return $Database.ExternalFileFormats[$Name] }
+      'DatabaseAuditSpecification' { return $Database.DatabaseAuditSpecifications[$Name] }
+      default {
+        Write-Warning "Unknown object type in Get-SmoObjectByIdentifier: $ObjectType"
+        return $null
+      }
+    }
+  }
+  catch {
+    Write-Warning "Failed to get SMO object $Schema.$Name of type $ObjectType : $_"
+    return $null
+  }
+}
+
+#endregion Parallel Export Functions
+
 function Export-DatabaseObjects {
   <#
     .SYNOPSIS
@@ -1149,6 +3937,33 @@ function Export-DatabaseObjects {
   Write-Output 'EXPORTING DATABASE OBJECTS'
   Write-Output '═══════════════════════════════════════════════'
 
+  #region Parallel Export Branch
+  # If parallel mode is enabled, use the parallel export workflow instead of sequential
+  if ($script:ParallelEnabled) {
+    Write-Host "\n[INFO] Parallel mode enabled - using parallel export workflow" -ForegroundColor Cyan
+
+    try {
+      $parallelSummary = Invoke-ParallelExport `
+        -Database $Database `
+        -Scripter $Scripter `
+        -OutputDir $OutputDir `
+        -TargetVersion $TargetVersion
+
+      # Convert parallel summary to metrics format
+      $functionMetrics.TotalObjects = $parallelSummary.TotalItems
+      $functionMetrics.SuccessCount = $parallelSummary.SuccessCount
+      $functionMetrics.FailCount = $parallelSummary.ErrorCount
+
+      return $functionMetrics
+    }
+    catch {
+      Write-Host "[ERROR] Parallel export failed: $_" -ForegroundColor Red
+      Write-Host "[INFO] Falling back to sequential export..." -ForegroundColor Yellow
+      # Fall through to sequential export below
+    }
+  }
+  #endregion
+
   # 0. FileGroups (Environment-specific, but captured for documentation)
   Write-Output ''
   Write-Output 'Exporting filegroups...'
@@ -1158,6 +3973,7 @@ function Export-DatabaseObjects {
   else {
     $fileGroups = @($Database.FileGroups | Where-Object { $_.Name -ne 'PRIMARY' })
     if ($fileGroups.Count -gt 0) {
+      Write-ProgressHeader 'FileGroups'
       $fgFilePath = Join-Path $OutputDir '00_FileGroups' '001_FileGroups.sql'
       $fgScript = New-Object System.Text.StringBuilder
       [void]$fgScript.AppendLine("-- FileGroups and Files")
@@ -1246,6 +4062,7 @@ function Export-DatabaseObjects {
     try {
       $dbConfigs = @($Database.DatabaseScopedConfigurations)
       if ($dbConfigs.Count -gt 0) {
+        Write-ProgressHeader 'DatabaseConfiguration'
         $configFilePath = Join-Path $OutputDir '02_DatabaseConfiguration' '001_DatabaseScopedConfigurations.sql'
         $configScript = New-Object System.Text.StringBuilder
         [void]$configScript.AppendLine("-- Database Scoped Configurations")
@@ -1285,6 +4102,7 @@ function Export-DatabaseObjects {
       # Filter to actual credentials (collection may contain null/empty elements)
       $dbCredentials = @($Database.Credentials | Where-Object { $null -ne $_.Name -and $_.Name -ne '' })
       if ($dbCredentials.Count -gt 0) {
+        Write-ProgressHeader 'DatabaseCredentials'
         $credFilePath = Join-Path $OutputDir '02_DatabaseConfiguration' '002_DatabaseScopedCredentials.sql'
         $credScript = New-Object System.Text.StringBuilder
         [void]$credScript.AppendLine("-- Database Scoped Credentials (Structure Only)")
@@ -3608,6 +6426,7 @@ function Export-DatabaseObjects {
     Write-Host '  [SKIPPED] Security objects excluded by configuration' -ForegroundColor Yellow
   }
   else {
+    Write-ProgressHeader 'Security'
     $asymmetricKeys = @($Database.AsymmetricKeys | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $null -Name $_.Name) })
     $certs = @($Database.Certificates | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $null -Name $_.Name) })
     $symKeys = @($Database.SymmetricKeys | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $null -Name $_.Name) })
@@ -4250,6 +7069,7 @@ try {
   if ($ConfigFile) {
     if (Test-Path $ConfigFile) {
       $config = Import-YamlConfig -ConfigFilePath $ConfigFile
+      $script:Config = $config  # Store for parallel workers
       $configSource = $ConfigFile
 
       # Override IncludeData if specified in config
@@ -4321,6 +7141,42 @@ try {
   Write-Verbose "Using command timeout: $effectiveCommandTimeout seconds"
   Write-Verbose "Using max retries: $effectiveMaxRetries attempts"
   Write-Verbose "Using retry delay: $effectiveRetryDelay seconds"
+
+  # Parallel export settings - Config file first, then command line overrides
+  # Start with defaults
+  $script:ParallelEnabled = $false
+  $script:ParallelMaxWorkers = 5
+  $script:ParallelProgressInterval = 50
+
+  # Apply config file settings
+  if ($config.export.parallel) {
+    if ($config.export.parallel.enabled -eq $true) {
+      $script:ParallelEnabled = $true
+    }
+    elseif ($config.export.parallel.enabled -eq $false) {
+      $script:ParallelEnabled = $false
+    }
+    if ($config.export.parallel.maxWorkers) {
+      $script:ParallelMaxWorkers = [Math]::Max(1, [Math]::Min(20, [int]$config.export.parallel.maxWorkers))
+    }
+    if ($config.export.parallel.progressInterval) {
+      $script:ParallelProgressInterval = [Math]::Max(1, [int]$config.export.parallel.progressInterval)
+    }
+  }
+
+  # Command line switch ALWAYS overrides config file (project rule)
+  if ($Parallel.IsPresent) {
+    $script:ParallelEnabled = $true
+  }
+
+  # Command line -MaxWorkers overrides config file
+  if ($MaxWorkers -gt 0) {
+    $script:ParallelMaxWorkers = $MaxWorkers
+  }
+
+  if ($script:ParallelEnabled) {
+    Write-Host "[INFO] Parallel export enabled with $($script:ParallelMaxWorkers) workers" -ForegroundColor Cyan
+  }
 
   # Validate dependencies
   Test-Dependencies
@@ -4413,6 +7269,17 @@ For more details, see: https://go.microsoft.com/fwlink/?linkid=2226722
   $smDatabase = $smServer.Databases[$Database]
   if ($null -eq $smDatabase) {
     throw "Database '$Database' not found"
+  }
+
+  # Store connection info for parallel workers
+  $script:ConnectionInfo = @{
+    ServerName              = $Server
+    DatabaseName            = $Database
+    UseIntegratedSecurity   = ($null -eq $Credential)
+    Username                = if ($Credential) { $Credential.UserName } else { $null }
+    SecurePassword          = if ($Credential) { $Credential.Password } else { $null }
+    TrustServerCertificate  = if ($config -and $config.ContainsKey('trustServerCertificate')) { $config.trustServerCertificate } else { $false }
+    ConnectTimeout          = $effectiveConnectionTimeout
   }
 
   Write-Output "[SUCCESS] Connected to $Server\$Database"

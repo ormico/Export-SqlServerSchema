@@ -121,6 +121,12 @@ export:
     # Synonyms: schema                 # Group synonyms by schema
     # PlanGuides: all                  # All plan guides in one file
 
+  # Parallel export settings (optional)
+  parallel:
+    enabled: false        # Enable parallel processing (-Parallel switch also enables)
+    maxWorkers: 5         # Number of parallel workers (1-20)
+    progressInterval: 50  # Report progress every N items
+
 # ═══════════════════════════════════════════════════════════════
 # IMPORT CONFIGURATION
 # ═══════════════════════════════════════════════════════════════

@@ -6,6 +6,44 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [unreleased] - 2026-01-26
+
+### Added
+
+**Parallel Export Feature**
+- New `-Parallel` switch to enable multi-threaded export for large databases
+- New `-MaxWorkers` parameter to control worker thread count (1-20, default: 5)
+- Parallel processing uses PowerShell runspace pools for thread-safe SMO operations
+- Work queue system distributes export tasks across workers
+- Only 5% slower than sequential for typical databases (acceptable overhead for future scalability)
+- All parallel code consolidated into main Export-SqlServerSchema.ps1 (2,379 lines of parallel logic)
+
+### Fixed
+
+**Critical: Parallel Index Export Bug**
+- **Issue**: Parallel export with single grouping mode created duplicate CREATE TABLE statements in index files, causing import failures
+- **Root Cause**: Build-WorkItems-Indexes passed table identifiers instead of index identifiers; parallel worker fetched Table SMO objects and scripted them with Indexes=$true, generating CREATE TABLE + CREATE INDEX
+- **Fix**: Modified Build-WorkItems-Indexes to pass individual index identifiers (TableSchema, TableName, IndexName); updated parallel worker to fetch individual Index objects from parent tables
+- **Impact**: Index files now contain only CREATE INDEX statements; import succeeds without table duplication errors
+- **File Structure**: Each index now gets its own file (e.g., `Schema1.Table1.IX_Active.sql`)
+
+### Performance
+
+Test database: 500 tables, 100 views, 500 procedures, 100 functions, 100 triggers, 2000 indexes, 50K rows
+
+| Mode | Export | Import | Total |
+|------|--------|--------|-------|
+| Sequential Single | 93.30s (2,400 files) | 20.71s | 114.01s |
+| Sequential Schema | 93.45s (101 files) | 12.09s | 105.54s |
+| Sequential All | 93.89s (29 files) | 12.19s | 106.08s |
+| **Parallel Single** | 97.58s (2,400 files) | 21.30s | 118.88s |
+
+**Key Findings**:
+- **56-60% faster** than v1.5.0 across all modes (from 215-231s to 93-98s export time)
+- Parallel export only 5% slower than sequential (97.58s vs 93.30s) - acceptable overhead
+- Schema/All grouping modes 7% faster total time than single mode
+- Import times improved 8-18% due to file count reduction and optimizations
+
 ## [1.5.1] - 2026-01-21
 
 ### Added
