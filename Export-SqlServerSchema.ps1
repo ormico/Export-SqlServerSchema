@@ -39,6 +39,15 @@
 .PARAMETER ConfigFile
     Path to YAML configuration file for advanced export settings. Optional.
 
+.PARAMETER Parallel
+    Enable parallel export processing using multiple worker threads. Can also be enabled via
+    YAML config (export.parallel.enabled: true). Command-line switch overrides config file.
+
+.PARAMETER MaxWorkers
+    Maximum number of parallel workers (1-20, default: 5). Only applies when -Parallel is enabled.
+    Overrides YAML config setting (export.parallel.maxWorkers). Higher values may improve performance
+    on large databases but increase memory usage.
+
 .EXAMPLE
     # Export with Windows auth
     ./Export-SqlServerSchema.ps1 -Server localhost -Database TestDb
@@ -49,6 +58,9 @@
 
     # Export with data
     ./Export-SqlServerSchema.ps1 -Server localhost -Database TestDb -IncludeData -OutputPath ./exports
+
+    # Export with parallel processing
+    ./Export-SqlServerSchema.ps1 -Server localhost -Database TestDb -Parallel -MaxWorkers 8
 
 .NOTES
     Requires: SQL Server Management Objects (SMO)
@@ -116,7 +128,11 @@ param(
   [string[]]$ExcludeObjectTypes,
 
   [Parameter(HelpMessage = 'Enable parallel export processing for improved performance')]
-  [switch]$Parallel
+  [switch]$Parallel,
+
+  [Parameter(HelpMessage = 'Maximum number of parallel workers (1-20, default: 5). Overrides config file.')]
+  [ValidateRange(1, 20)]
+  [int]$MaxWorkers = 0
 )
 
 $ErrorActionPreference = 'Stop'
@@ -7002,6 +7018,11 @@ try {
   # Command line switch ALWAYS overrides config file (project rule)
   if ($Parallel.IsPresent) {
     $script:ParallelEnabled = $true
+  }
+
+  # Command line -MaxWorkers overrides config file
+  if ($MaxWorkers -gt 0) {
+    $script:ParallelMaxWorkers = $MaxWorkers
   }
 
   if ($script:ParallelEnabled) {

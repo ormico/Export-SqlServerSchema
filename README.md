@@ -58,10 +58,10 @@ $cred = Get-Credential
 ./Export-SqlServerSchema.ps1 -Server "localhost" -Database "MyDatabase" -Credential $cred
 
 # Parallel export (faster for large databases)
-./Export-SqlServerSchema.ps1 -Server "localhost" -Database "MyDatabase" -EnableParallel
+./Export-SqlServerSchema.ps1 -Server "localhost" -Database "MyDatabase" -Parallel
 
 # Parallel with custom thread count
-./Export-SqlServerSchema.ps1 -Server "localhost" -Database "MyDatabase" -EnableParallel -MaxDegreeOfParallelism 4
+./Export-SqlServerSchema.ps1 -Server "localhost" -Database "MyDatabase" -Parallel -MaxWorkers 4
 ```
 
 ### Import Database
@@ -171,8 +171,8 @@ DbScripts/
 | `-Database` | Yes | Database to export |
 | `-OutputPath` | No | Output directory (default: ./DbScripts) |
 | `-IncludeData` | No | Export table data as INSERT statements |
-| `-EnableParallel` | No | Enable parallel export using multiple threads |
-| `-MaxDegreeOfParallelism` | No | Max parallel workers (default: CPU count - 1) |
+| `-Parallel` | No | Enable parallel export using multiple threads |
+| `-MaxWorkers` | No | Max parallel workers (1-20, default: 5) |
 | `-Credential` | No | SQL authentication credentials |
 | `-TargetSqlVersion` | No | Target SQL version (default: Sql2022) |
 | `-IncludeObjectTypes` | No | Whitelist: Only export specified types (e.g., Tables,Views) |
@@ -252,16 +252,16 @@ Based on test database (500 tables, 100 views, 500 procedures, 100 functions, 10
 ### Usage
 
 ```powershell
-# Enable parallel export (uses CPU count - 1 workers)
-./Export-SqlServerSchema.ps1 -Server localhost -Database MyDatabase -EnableParallel
+# Enable parallel export (uses default 5 workers)
+./Export-SqlServerSchema.ps1 -Server localhost -Database MyDatabase -Parallel
 
 # Specify custom worker count
-./Export-SqlServerSchema.ps1 -Server localhost -Database MyDatabase -EnableParallel -MaxDegreeOfParallelism 4
+./Export-SqlServerSchema.ps1 -Server localhost -Database MyDatabase -Parallel -MaxWorkers 4
 
 # Parallel with other options
 ./Export-SqlServerSchema.ps1 -Server localhost -Database MyDatabase `
-    -EnableParallel `
-    -MaxDegreeOfParallelism 8 `
+    -Parallel `
+    -MaxWorkers 8 `
     -ConfigFile myconfig.yml `
     -IncludeData
 ```
@@ -270,14 +270,15 @@ Based on test database (500 tables, 100 views, 500 procedures, 100 functions, 10
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `-EnableParallel` | False | Enable multi-threaded export |
-| `-MaxDegreeOfParallelism` | CPU count - 1 | Number of worker threads |
+| `-Parallel` | False | Enable multi-threaded export |
+| `-MaxWorkers` | 5 | Number of worker threads (1-20) |
 
 **YAML Configuration:**
 ```yaml
 export:
-  enableParallel: true
-  maxDegreeOfParallelism: 4  # Optional, defaults to CPU count - 1
+  parallel:
+    enabled: true
+    maxWorkers: 4  # Optional, defaults to 5
 ```
 
 ### Technical Details
@@ -508,8 +509,9 @@ includeData: true
 
 # Export settings (optional):
 export:
-  enableParallel: true               # Enable parallel export
-  maxDegreeOfParallelism: 4          # Worker thread count (default: CPU count - 1)
+  parallel:
+    enabled: true                    # Enable parallel export
+    maxWorkers: 4                    # Worker thread count (1-20, default: 5)
   groupBy: single                    # Grouping mode: single, schema, or all
 
 # Reliability settings (optional, defaults shown):

@@ -29,10 +29,10 @@ You can control how objects are grouped into files using the `GroupingMode` para
 For large databases (1000+ objects), use parallel export to speed up the process.
 
 ```powershell
-./Export-SqlServerSchema.ps1 -Server "bi-server" -Database "DataWarehouse" -EnableParallel
+./Export-SqlServerSchema.ps1 -Server "bi-server" -Database "DataWarehouse" -Parallel
 ```
 
-**Note**: Parallel export uses multiple threads (Runspaces). You can control the thread count with `-MaxDegreeOfParallelism`.
+**Note**: Parallel export uses multiple threads (Runspaces). You can control the thread count with `-MaxWorkers` (1-20, default: 5).
 
 ### 1.4 Filtering Objects
 
@@ -78,7 +78,9 @@ includeData: true
 
 export:
   groupBy: schema
-  enableParallel: true
+  parallel:
+    enabled: true
+    maxWorkers: 5
 
 # Retry settings for flaky connections
 maxRetries: 5

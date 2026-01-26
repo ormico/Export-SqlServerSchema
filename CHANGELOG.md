@@ -6,13 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
-## [unreleased] - 2026-01-22
+## [unreleased] - 2026-01-26
 
 ### Added
 
 **Parallel Export Feature**
-- New `-EnableParallel` switch to enable multi-threaded export for large databases
-- New `-MaxDegreeOfParallelism` parameter to control worker thread count (default: CPU count - 1)
+- New `-Parallel` switch to enable multi-threaded export for large databases
+- New `-MaxWorkers` parameter to control worker thread count (1-20, default: 5)
 - Parallel processing uses PowerShell runspace pools for thread-safe SMO operations
 - Work queue system distributes export tasks across workers
 - Only 5% slower than sequential for typical databases (acceptable overhead for future scalability)

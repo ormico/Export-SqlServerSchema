@@ -176,9 +176,9 @@ parallel:
   $countMatch = ($seqCount -eq $par1Count) -and ($seqCount -eq $par5Count) -and ($seqCount -eq $par10Count)
 
   Write-Host "  Sequential:        $seqCount files" -ForegroundColor Cyan
-  Write-Host "  Parallel (1w):     $par1Count files $(if ($seqCount -eq $par1Count) { '✓' } else { '✗' })" -ForegroundColor $(if ($seqCount -eq $par1Count) { 'Green' } else { 'Red' })
-  Write-Host "  Parallel (5w):     $par5Count files $(if ($seqCount -eq $par5Count) { '✓' } else { '✗' })" -ForegroundColor $(if ($seqCount -eq $par5Count) { 'Green' } else { 'Red' })
-  Write-Host "  Parallel (10w):    $par10Count files $(if ($seqCount -eq $par10Count) { '✓' } else { '✗' })" -ForegroundColor $(if ($seqCount -eq $par10Count) { 'Green' } else { 'Red' })
+  Write-Host "  Parallel (1w):     $par1Count files $(if ($seqCount -eq $par1Count) { '[OK]' } else { '[FAIL]' })" -ForegroundColor $(if ($seqCount -eq $par1Count) { 'Green' } else { 'Red' })
+  Write-Host "  Parallel (5w):     $par5Count files $(if ($seqCount -eq $par5Count) { '[OK]' } else { '[FAIL]' })" -ForegroundColor $(if ($seqCount -eq $par5Count) { 'Green' } else { 'Red' })
+  Write-Host "  Parallel (10w):    $par10Count files $(if ($seqCount -eq $par10Count) { '[OK]' } else { '[FAIL]' })" -ForegroundColor $(if ($seqCount -eq $par10Count) { 'Green' } else { 'Red' })
 
   if ($countMatch) {
     Write-Host "`n[SUCCESS] All exports produced identical file counts!" -ForegroundColor Green
