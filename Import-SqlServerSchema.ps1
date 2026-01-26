@@ -846,23 +846,32 @@ function Invoke-SqlScript {
     # Pattern: NAME = N'OriginalName' (but NOT FILENAME = ...)
     # Use negative lookbehind to ensure we're not matching FILENAME
     if ($scriptName -match '(?i)filegroup') {
-      $sql = $sql -replace "(?<!FILE)NAME\s*=\s*N'([^']+)'", "NAME = N'${DatabaseName}_`$1'"
+      # Use a sanitized database name when embedding into T-SQL string literals for logical file names.
+      # This prevents quotes or other metacharacters in $DatabaseName from breaking the NAME = N'...' literal.
+      $safeDatabaseName = $DatabaseName -replace '[^A-Za-z0-9_]', '_'
+      $sql = $sql -replace "(?<!FILE)NAME\s*=\s*N'([^']+)'", "NAME = N'${safeDatabaseName}_`$1'"
 
       # Override SIZE and FILEGROWTH for FileGroup data files if defaults specified
       # This prevents large source database allocations from failing on dev systems
       if ($FileGroupFileSizeDefaults) {
         if ($FileGroupFileSizeDefaults.ContainsKey('sizeKB')) {
-          $newSizeKB = $FileGroupFileSizeDefaults.sizeKB
+          [int]$validatedSizeKB = 0
+          if (-not [int]::TryParse([string]$FileGroupFileSizeDefaults.sizeKB, [ref]$validatedSizeKB) -or $validatedSizeKB -le 0) {
+            throw "Invalid FileGroupFileSizeDefaults.sizeKB value '$($FileGroupFileSizeDefaults.sizeKB)'. Expected a positive integer (KB)."
+          }
           # Replace SIZE = <number>KB or SIZE = <number>MB or SIZE = <number>GB
           # Pattern matches: SIZE = 8192KB, SIZE = 64MB, SIZE = 1GB (with optional surrounding whitespace)
-          $sql = $sql -replace 'SIZE\s*=\s*\d+(KB|MB|GB)', "SIZE = ${newSizeKB}KB"
-          Write-Verbose "  [INFO] FileGroup file SIZE overridden to ${newSizeKB}KB"
+          $sql = $sql -replace 'SIZE\s*=\s*\d+(KB|MB|GB)', "SIZE = ${validatedSizeKB}KB"
+          Write-Verbose "  [INFO] FileGroup file SIZE overridden to ${validatedSizeKB}KB"
         }
         if ($FileGroupFileSizeDefaults.ContainsKey('fileGrowthKB')) {
-          $newGrowthKB = $FileGroupFileSizeDefaults.fileGrowthKB
+          [int]$validatedGrowthKB = 0
+          if (-not [int]::TryParse([string]$FileGroupFileSizeDefaults.fileGrowthKB, [ref]$validatedGrowthKB) -or $validatedGrowthKB -le 0) {
+            throw "Invalid FileGroupFileSizeDefaults.fileGrowthKB value '$($FileGroupFileSizeDefaults.fileGrowthKB)'. Expected a positive integer (KB)."
+          }
           # Replace FILEGROWTH = <number>KB or FILEGROWTH = <number>MB or FILEGROWTH = <number>GB
-          $sql = $sql -replace 'FILEGROWTH\s*=\s*\d+(KB|MB|GB)', "FILEGROWTH = ${newGrowthKB}KB"
-          Write-Verbose "  [INFO] FileGroup file FILEGROWTH overridden to ${newGrowthKB}KB"
+          $sql = $sql -replace 'FILEGROWTH\s*=\s*\d+(KB|MB|GB)', "FILEGROWTH = ${validatedGrowthKB}KB"
+          Write-Verbose "  [INFO] FileGroup file FILEGROWTH overridden to ${validatedGrowthKB}KB"
         }
       }
     }
