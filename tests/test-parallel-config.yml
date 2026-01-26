@@ -8,14 +8,14 @@ export:
     progressInterval: 10
 
   # Use single grouping for most objects to maximize parallelization
-  groupBy:
+  groupByObjectTypes:
     Tables: single
     Views: single
     Functions: single
     StoredProcedures: single
     Indexes: single
     ForeignKeys: single
-    Triggers: single
+    TableTriggers: single
     Synonyms: single
 
   # Test with data export enabled

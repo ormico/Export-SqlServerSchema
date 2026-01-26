@@ -65,6 +65,18 @@
         "/^cd tests; pwsh -Command \"docker-compose up -d\"$/": {
             "approve": true,
             "matchCommandLine": true
+        },
+        "/^pwsh -File run-integration-test\\.ps1$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^pwsh -NoProfile -File test-parallel-export\\.ps1$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^pwsh -NoProfile -File d:\\\\Export-SqlServerSchema\\\\tests\\\\test-parallel-export\\.ps1$/": {
+            "approve": true,
+            "matchCommandLine": true
         }
     }
 }

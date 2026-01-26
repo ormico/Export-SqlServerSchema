@@ -1,7 +1,7 @@
 export:
   parallel:
     enabled: true
-    workers: 5
-  groupBy:
-    mode: single
+    maxWorkers: 5
+  groupByObjectTypes:
+    Tables: single
   includeData: false

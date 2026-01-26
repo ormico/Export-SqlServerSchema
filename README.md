@@ -328,7 +328,10 @@ Test database: 500 tables, 100 views, 500 procedures, 100 functions, 100 trigger
 ```powershell
 # Via YAML config
 export:
-  groupBy: schema  # or 'single' or 'all'
+  groupByObjectTypes:
+    Tables: schema    # or 'single' or 'all'
+    Views: schema
+    StoredProcedures: schema
 
 # File examples by mode:
 # single:  Schema1.Table1.sql, Schema1.Table2.sql, Schema2.Proc1.sql
@@ -512,7 +515,10 @@ export:
   parallel:
     enabled: true                    # Enable parallel export
     maxWorkers: 4                    # Worker thread count (1-20, default: 5)
-  groupBy: single                    # Grouping mode: single, schema, or all
+  groupByObjectTypes:                # Grouping mode per object type
+    Tables: single                   # single, schema, or all
+    Views: single
+    StoredProcedures: single
 
 # Reliability settings (optional, defaults shown):
 connectionTimeout: 30      # Connection timeout in seconds

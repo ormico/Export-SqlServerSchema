@@ -264,7 +264,8 @@ try {
         Write-Host "  Continuing with sequential export test..." -ForegroundColor Yellow
     }
 
-    # Verify parallel export produced same file count
+    # Verify parallel export produced same file count - FAIL if mismatch
+    $parallelExportValid = $false
     if (Test-Path $parallelExportPath) {
         $parallelDirs = Get-ChildItem $parallelExportPath -Directory | Where-Object { $_.Name -match "^$($TEST_SERVER)_" }
         if ($parallelDirs.Count -gt 0) {
@@ -275,8 +276,21 @@ try {
 
             if ($parallelSqlFiles.Count -eq $sqlFiles.Count) {
                 Write-TestStep "Parallel export file count matches sequential" -Type Success
+                $parallelExportValid = $true
             } else {
-                Write-TestStep "Parallel export file count mismatch (parallel: $($parallelSqlFiles.Count), sequential: $($sqlFiles.Count))" -Type Warning
+                # Show differences for debugging
+                $seqFiles = $sqlFiles | Select-Object -ExpandProperty Name | Sort-Object
+                $parFiles = $parallelSqlFiles | Select-Object -ExpandProperty Name | Sort-Object
+                $diff = Compare-Object $seqFiles $parFiles
+                if ($diff) {
+                    Write-Host "  File differences:" -ForegroundColor Yellow
+                    $diff | ForEach-Object {
+                        $indicator = if ($_.SideIndicator -eq '<=') { 'Sequential only' } else { 'Parallel only' }
+                        Write-Host "    [$indicator] $($_.InputObject)" -ForegroundColor Yellow
+                    }
+                }
+                Write-TestStep "Parallel export file count mismatch (parallel: $($parallelSqlFiles.Count), sequential: $($sqlFiles.Count))" -Type Error
+                throw "Parallel export must produce the same files as sequential export"
             }
         }
     }

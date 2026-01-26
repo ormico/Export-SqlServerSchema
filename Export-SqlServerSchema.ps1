@@ -252,9 +252,29 @@ $script:ParallelWorkerScriptBlock = {
             $smoObj = $table.Indexes[$objId.IndexName]
           }
         }
-        elseif ($workItem.SpecialHandler -eq 'ForeignKeys' -or $workItem.SpecialHandler -eq 'TableTriggers') {
-          # For nested collections, we need the parent table
-          $smoObj = $db.Tables[$objId.Name, $objId.Schema]
+        elseif ($workItem.SpecialHandler -eq 'ForeignKeys') {
+          # For foreign keys, fetch individual FK or parent table depending on grouping mode
+          $table = $db.Tables[$objId.Name, $objId.Schema]
+          if ($table -and $objId.FKName -and $workItem.GroupingMode -eq 'single') {
+            # Single mode: fetch individual FK object
+            $smoObj = $table.ForeignKeys[$objId.FKName]
+          }
+          elseif ($table) {
+            # Grouped mode: return table for FK scripting options
+            $smoObj = $table
+          }
+        }
+        elseif ($workItem.SpecialHandler -eq 'TableTriggers') {
+          # For triggers, fetch individual trigger or parent table depending on grouping mode
+          $table = $db.Tables[$objId.Name, $objId.Schema]
+          if ($table -and $objId.TriggerName -and $workItem.GroupingMode -eq 'single') {
+            # Single mode: fetch individual trigger object
+            $smoObj = $table.Triggers[$objId.TriggerName]
+          }
+          elseif ($table) {
+            # Grouped mode: return table for trigger scripting options
+            $smoObj = $table
+          }
         }
         else {
           # Standard object lookup
@@ -399,6 +419,7 @@ function Start-ParallelWorkers {
       Array of worker objects with PowerShell and Handle properties.
   #>
   [CmdletBinding()]
+  [OutputType([System.Collections.Generic.List[hashtable]])]
   param(
     [Parameter(Mandatory)]
     [System.Management.Automation.Runspaces.RunspacePool]$RunspacePool,
@@ -445,7 +466,8 @@ function Start-ParallelWorkers {
       })
   }
 
-  return $workers
+  # Use Write-Output with -NoEnumerate to prevent PowerShell from unwrapping single-item collections
+  Write-Output -NoEnumerate $workers
 }
 
 function Wait-ParallelWorkers {
@@ -552,7 +574,7 @@ function Build-WorkItems-Schemas {
   switch ($groupBy) {
     'single' {
       foreach ($schema in $schemas) {
-        $fileName = "Schema.$(Get-SafeFileName $($schema.Name)).sql"
+        $fileName = "$(Get-SafeFileName $($schema.Name)).sql"
         $workItems += New-ExportWorkItem `
           -ObjectType 'Schema' `
           -GroupingMode 'single' `
@@ -599,7 +621,7 @@ function Build-WorkItems-Sequences {
   switch ($groupBy) {
     'single' {
       foreach ($seq in $sequences) {
-        $fileName = "Sequence.$($seq.Schema).$(Get-SafeFileName $($seq.Name)).sql"
+        $fileName = "$($seq.Schema).$(Get-SafeFileName $($seq.Name)).sql"
         $workItems += New-ExportWorkItem `
           -ObjectType 'Sequence' `
           -GroupingMode 'single' `
@@ -758,7 +780,7 @@ function Build-WorkItems-UserDefinedTypes {
   switch ($groupBy) {
     'single' {
       foreach ($type in $allTypes) {
-        $fileName = "Type.$($type.Schema).$(Get-SafeFileName $($type.Name)).sql"
+        $fileName = "$($type.Schema).$(Get-SafeFileName $($type.Name)).sql"
         # Determine specific type for worker lookup
         $objectType = if ($type.GetType().Name -eq 'UserDefinedDataType') { 'UserDefinedDataType' }
         elseif ($type.GetType().Name -eq 'UserDefinedTableType') { 'UserDefinedTableType' }
@@ -825,7 +847,7 @@ function Build-WorkItems-XmlSchemaCollections {
   switch ($groupBy) {
     'single' {
       foreach ($xml in $xmlSchemas) {
-        $fileName = "XmlSchemaCollection.$($xml.Schema).$(Get-SafeFileName $($xml.Name)).sql"
+        $fileName = "$($xml.Schema).$(Get-SafeFileName $($xml.Name)).sql"
         $workItems += New-ExportWorkItem `
           -ObjectType 'XmlSchemaCollection' `
           -GroupingMode 'single' `
@@ -993,15 +1015,13 @@ function Build-WorkItems-ForeignKeys {
 
   switch ($groupBy) {
     'single' {
-      # Group by parent table (multiple FKs from same table in one file)
-      $byTable = $fkList | Group-Object { "$($_.TableSchema).$($_.TableName)" }
-      foreach ($group in $byTable) {
-        $firstFK = $group.Group[0]
-        $fileName = "$(Get-SafeFileName $($firstFK.TableSchema)).$(Get-SafeFileName $($firstFK.TableName))_ForeignKeys.sql"
+      # One file per foreign key (matches sequential export naming: Schema.Table.FKName.sql)
+      foreach ($fk in $fkList) {
+        $fileName = "$(Get-SafeFileName $($fk.TableSchema)).$(Get-SafeFileName $($fk.TableName)).$(Get-SafeFileName $($fk.FKName)).sql"
         $workItems += New-ExportWorkItem `
           -ObjectType 'TableForeignKeys' `
           -GroupingMode 'single' `
-          -Objects @(@{ Schema = $firstFK.TableSchema; Name = $firstFK.TableName }) `
+          -Objects @(@{ Schema = $fk.TableSchema; Name = $fk.TableName; FKName = $fk.FKName }) `
           -OutputPath (Join-Path $baseDir $fileName) `
           -ScriptingOptions $scriptOpts `
           -SpecialHandler 'ForeignKeys'
@@ -1091,17 +1111,13 @@ function Build-WorkItems-Indexes {
 
   switch ($groupBy) {
     'single' {
-      # Group indexes by table to create one file per table's indexes
-      $byTable = $indexList | Group-Object { "$($_.TableSchema).$($_.TableName)" }
-      foreach ($group in $byTable) {
-        $firstIdx = $group.Group[0]
-        $fileName = "$(Get-SafeFileName $($firstIdx.TableSchema)).$(Get-SafeFileName $($firstIdx.TableName))_Indexes.sql"
-        # Pass individual index identifiers, not table identifiers
-        $indexObjects = @($group.Group | ForEach-Object { @{ TableSchema = $_.TableSchema; TableName = $_.TableName; IndexName = $_.IndexName } })
+      # One file per index (matches sequential export naming: Schema.Table.IndexName.sql)
+      foreach ($idx in $indexList) {
+        $fileName = "$(Get-SafeFileName $($idx.TableSchema)).$(Get-SafeFileName $($idx.TableName)).$(Get-SafeFileName $($idx.IndexName)).sql"
         $workItems += New-ExportWorkItem `
           -ObjectType 'Index' `
           -GroupingMode 'single' `
-          -Objects $indexObjects `
+          -Objects @(@{ TableSchema = $idx.TableSchema; TableName = $idx.TableName; IndexName = $idx.IndexName }) `
           -OutputPath (Join-Path $baseDir $fileName) `
           -ScriptingOptions $scriptOpts `
           -SpecialHandler 'Indexes'
@@ -1163,7 +1179,7 @@ function Build-WorkItems-Defaults {
   switch ($groupBy) {
     'single' {
       foreach ($def in $defaults) {
-        $fileName = "Default.$($def.Schema).$(Get-SafeFileName $($def.Name)).sql"
+        $fileName = "$($def.Schema).$(Get-SafeFileName $($def.Name)).sql"
         $workItems += New-ExportWorkItem `
           -ObjectType 'Default' `
           -GroupingMode 'single' `
@@ -1224,7 +1240,7 @@ function Build-WorkItems-Rules {
   switch ($groupBy) {
     'single' {
       foreach ($rule in $rules) {
-        $fileName = "Rule.$($rule.Schema).$(Get-SafeFileName $($rule.Name)).sql"
+        $fileName = "$($rule.Schema).$(Get-SafeFileName $($rule.Name)).sql"
         $workItems += New-ExportWorkItem `
           -ObjectType 'Rule' `
           -GroupingMode 'single' `
@@ -1596,15 +1612,14 @@ function Build-WorkItems-TableTriggers {
 
   switch ($groupBy) {
     'single' {
-      $byTable = $triggerList | Group-Object { "$($_.TableSchema).$($_.TableName)" }
-      foreach ($group in $byTable) {
-        $firstTrigger = $group.Group[0]
-        $fileName = "$(Get-SafeFileName $($firstTrigger.TableSchema)).$(Get-SafeFileName $($firstTrigger.TableName))_Triggers.sql"
+      # One file per trigger (matches sequential export naming: Schema.Table.TriggerName.sql)
+      foreach ($trigger in $triggerList) {
+        $fileName = "$(Get-SafeFileName $($trigger.TableSchema)).$(Get-SafeFileName $($trigger.TableName)).$(Get-SafeFileName $($trigger.TriggerName)).sql"
         $workItems += New-ExportWorkItem `
           -ObjectType 'TableTriggers' `
           -GroupingMode 'single' `
-          -Objects @(@{ Schema = $firstTrigger.TableSchema; Name = $firstTrigger.TableName }) `
-          -OutputPath (Join-Path $baseDir $fileName) `
+          -Objects @(@{ Schema = $trigger.TableSchema; Name = $trigger.TableName; TriggerName = $trigger.TriggerName }) `
+          -OutputPath (Join-Path $baseDir '04_Triggers' $fileName) `
           -ScriptingOptions $scriptOpts `
           -SpecialHandler 'TableTriggers'
       }
@@ -1727,7 +1742,7 @@ function Build-WorkItems-Synonyms {
   switch ($groupBy) {
     'single' {
       foreach ($syn in $synonyms) {
-        $fileName = "Synonym.$($syn.Schema).$(Get-SafeFileName $($syn.Name)).sql"
+        $fileName = "$($syn.Schema).$(Get-SafeFileName $($syn.Name)).sql"
         $workItems += New-ExportWorkItem `
           -ObjectType 'Synonym' `
           -GroupingMode 'single' `
@@ -2144,18 +2159,36 @@ function Build-WorkItems-Security {
     catch { }
   }
 
-  # Database Roles
+  # Database Roles - respect grouping mode (default: single to match sequential export)
   if (-not (Test-ObjectTypeExcluded -ObjectType 'DatabaseRoles')) {
+    $groupBy = Get-ObjectGroupingMode -ObjectType 'DatabaseRoles'
     try {
       $dbRoles = @($Database.Roles | Where-Object { -not $_.IsFixedRole -and -not (Test-ObjectExcluded -Schema $null -Name $_.Name) })
       if ($dbRoles.Count -gt 0) {
-        $objects = @($dbRoles | ForEach-Object { @{ Schema = $null; Name = $_.Name } })
-        $workItems += New-ExportWorkItem `
-          -ObjectType 'DatabaseRole' `
-          -GroupingMode 'all' `
-          -Objects $objects `
-          -OutputPath (Join-Path $baseDir '004_Roles.sql') `
-          -ScriptingOptions @{}
+        switch ($groupBy) {
+          'single' {
+            # One file per role: RoleName.role.sql (matches sequential export)
+            foreach ($role in $dbRoles) {
+              $fileName = "$($role.Name).role.sql"
+              $workItems += New-ExportWorkItem `
+                -ObjectType 'DatabaseRole' `
+                -GroupingMode 'single' `
+                -Objects @(@{ Schema = $null; Name = $role.Name }) `
+                -OutputPath (Join-Path $baseDir $fileName) `
+                -ScriptingOptions @{}
+            }
+          }
+          default {
+            # 'schema' or 'all' - consolidated file
+            $objects = @($dbRoles | ForEach-Object { @{ Schema = $null; Name = $_.Name } })
+            $workItems += New-ExportWorkItem `
+              -ObjectType 'DatabaseRole' `
+              -GroupingMode $groupBy `
+              -Objects $objects `
+              -OutputPath (Join-Path $baseDir '004_Roles.sql') `
+              -ScriptingOptions @{}
+          }
+        }
       }
     }
     catch { }
@@ -2164,30 +2197,63 @@ function Build-WorkItems-Security {
     try {
       $appRoles = @($Database.ApplicationRoles | Where-Object { -not (Test-ObjectExcluded -Schema $null -Name $_.Name) })
       if ($appRoles.Count -gt 0) {
-        $objects = @($appRoles | ForEach-Object { @{ Schema = $null; Name = $_.Name } })
-        $workItems += New-ExportWorkItem `
-          -ObjectType 'ApplicationRole' `
-          -GroupingMode 'all' `
-          -Objects $objects `
-          -OutputPath (Join-Path $baseDir '005_ApplicationRoles.sql') `
-          -ScriptingOptions @{}
+        switch ($groupBy) {
+          'single' {
+            foreach ($role in $appRoles) {
+              $fileName = "$($role.Name).approle.sql"
+              $workItems += New-ExportWorkItem `
+                -ObjectType 'ApplicationRole' `
+                -GroupingMode 'single' `
+                -Objects @(@{ Schema = $null; Name = $role.Name }) `
+                -OutputPath (Join-Path $baseDir $fileName) `
+                -ScriptingOptions @{}
+            }
+          }
+          default {
+            $objects = @($appRoles | ForEach-Object { @{ Schema = $null; Name = $_.Name } })
+            $workItems += New-ExportWorkItem `
+              -ObjectType 'ApplicationRole' `
+              -GroupingMode $groupBy `
+              -Objects $objects `
+              -OutputPath (Join-Path $baseDir '005_ApplicationRoles.sql') `
+              -ScriptingOptions @{}
+          }
+        }
       }
     }
     catch { }
   }
 
-  # Database Users
+  # Database Users - respect grouping mode (default: single to match sequential export)
   if (-not (Test-ObjectTypeExcluded -ObjectType 'DatabaseUsers')) {
+    $groupBy = Get-ObjectGroupingMode -ObjectType 'DatabaseUsers'
     try {
       $users = @($Database.Users | Where-Object { -not $_.IsSystemObject -and $_.Name -ne 'dbo' -and -not (Test-ObjectExcluded -Schema $null -Name $_.Name) })
       if ($users.Count -gt 0) {
-        $objects = @($users | ForEach-Object { @{ Schema = $null; Name = $_.Name } })
-        $workItems += New-ExportWorkItem `
-          -ObjectType 'User' `
-          -GroupingMode 'all' `
-          -Objects $objects `
-          -OutputPath (Join-Path $baseDir '006_Users.sql') `
-          -ScriptingOptions @{}
+        switch ($groupBy) {
+          'single' {
+            # One file per user: UserName.user.sql (matches sequential export)
+            foreach ($user in $users) {
+              $fileName = "$($user.Name).user.sql"
+              $workItems += New-ExportWorkItem `
+                -ObjectType 'User' `
+                -GroupingMode 'single' `
+                -Objects @(@{ Schema = $null; Name = $user.Name }) `
+                -OutputPath (Join-Path $baseDir $fileName) `
+                -ScriptingOptions @{}
+            }
+          }
+          default {
+            # 'schema' or 'all' - consolidated file
+            $objects = @($users | ForEach-Object { @{ Schema = $null; Name = $_.Name } })
+            $workItems += New-ExportWorkItem `
+              -ObjectType 'User' `
+              -GroupingMode $groupBy `
+              -Objects $objects `
+              -OutputPath (Join-Path $baseDir '006_Users.sql') `
+              -ScriptingOptions @{}
+          }
+        }
       }
     }
     catch { }
@@ -2226,7 +2292,7 @@ function Build-WorkItems-SecurityPolicies {
   switch ($groupBy) {
     'single' {
       foreach ($policy in $secPolicies) {
-        $fileName = "SecurityPolicy.$($policy.Schema).$(Get-SafeFileName $($policy.Name)).sql"
+        $fileName = "$($policy.Schema).$(Get-SafeFileName $($policy.Name)).securitypolicy.sql"
         $workItems += New-ExportWorkItem `
           -ObjectType 'SecurityPolicy' `
           -GroupingMode 'single' `

@@ -1,0 +1,10 @@
+# Parallel Export Test Configuration - 10 Workers (Stress Test)
+# Tests parallel export with high worker count for concurrency stress testing
+
+trustServerCertificate: true
+
+export:
+  parallel:
+    enabled: true
+    maxWorkers: 10
+    progressInterval: 100

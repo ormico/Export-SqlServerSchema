@@ -77,7 +77,10 @@ importMode: Dev
 includeData: true
 
 export:
-  groupBy: schema
+  groupByObjectTypes:
+    Tables: schema
+    Views: schema
+    StoredProcedures: schema
   parallel:
     enabled: true
     maxWorkers: 5

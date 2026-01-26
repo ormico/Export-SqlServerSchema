@@ -2,5 +2,5 @@ DbScripts/**
 # Environment files with secrets
 .env
 *.log
-
 .local/
+tests/perf-metrics-*.json

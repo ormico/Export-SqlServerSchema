@@ -13,14 +13,45 @@ param()
 
 $ErrorActionPreference = 'Stop'
 
+# Load environment configuration (same pattern as run-integration-test.ps1)
+$ConfigFile = Join-Path $PSScriptRoot '.env'
+if (-not (Test-Path $ConfigFile)) {
+  Write-Host "[ERROR] Configuration file not found: $ConfigFile" -ForegroundColor Red
+  Write-Host "Please copy .env.example to .env and configure settings" -ForegroundColor Yellow
+  exit 1
+}
+Get-Content $ConfigFile | ForEach-Object {
+  if ($_ -match '^\s*([^#][^=]+)=(.*)$') {
+    Set-Variable -Name $matches[1].Trim() -Value $matches[2].Trim() -Scope Script
+  }
+}
+
 # Test configuration
-$Server = 'localhost'
-$Database = 'TestDb'
+$Server = $TEST_SERVER
+$Database = $TEST_DATABASE
 $ExportDir = Join-Path $PSScriptRoot 'exports_parallel_test'
+
+# Build credential object for SQL auth
+$securePassword = ConvertTo-SecureString $SA_PASSWORD -AsPlainText -Force
+$Credential = New-Object System.Management.Automation.PSCredential($TEST_USERNAME, $securePassword)
+
+# External config files (consistent with other tests)
+$ConfigPath1Worker = Join-Path $PSScriptRoot 'test-parallel-1worker.yml'
+$ConfigPath5Workers = Join-Path $PSScriptRoot 'test-parallel-5workers.yml'
+$ConfigPath10Workers = Join-Path $PSScriptRoot 'test-parallel-10workers.yml'
 
 Write-Host "`n═══════════════════════════════════════════════" -ForegroundColor Cyan
 Write-Host "PARALLEL EXPORT TESTING" -ForegroundColor Cyan
 Write-Host "═══════════════════════════════════════════════`n" -ForegroundColor Cyan
+
+# Verify config files exist
+foreach ($configFile in @($ConfigPath1Worker, $ConfigPath5Workers, $ConfigPath10Workers)) {
+  if (-not (Test-Path $configFile)) {
+    Write-Host "[ERROR] Config file not found: $configFile" -ForegroundColor Red
+    exit 1
+  }
+}
+Write-Host "[INFO] All config files found" -ForegroundColor Green
 
 # Clean up old test exports
 if (Test-Path $ExportDir) {
@@ -42,16 +73,28 @@ try {
   Write-Host "─────────────────────────────────────────────" -ForegroundColor Gray
 
   $seqStart = Get-Date
-  $seqOutput = & "$PSScriptRoot\..\Export-SqlServerSchema.ps1" `
+  & "$PSScriptRoot\..\Export-SqlServerSchema.ps1" `
     -Server $Server `
     -Database $Database `
-    -OutputPath $ExportDir
+    -OutputPath $ExportDir `
+    -Credential $Credential `
+    -ConfigFile $ConfigPath1Worker 2>&1 | Out-Null
   $seqDuration = (Get-Date) - $seqStart
 
+  # Find the export directory (pattern: Server_Database_Timestamp)
+  $seqExportDir = Get-ChildItem $ExportDir -Directory |
+    Where-Object { $_.Name -match "^$($Server)_" } |
+    Sort-Object CreationTime -Descending |
+    Select-Object -First 1
+
+  if (-not $seqExportDir) {
+    throw "Sequential export directory not found"
+  }
+
   $testResults.Sequential = @{
-    Duration = $seqDuration
-    OutputPath = $seqOutput
-    FileCount = (Get-ChildItem $seqOutput -Recurse -File).Count
+    Duration  = $seqDuration
+    OutputPath = $seqExportDir.FullName
+    FileCount = (Get-ChildItem $seqExportDir.FullName -Recurse -File).Count
   }
 
   Write-Host "[SUCCESS] Sequential export completed in $($seqDuration.TotalSeconds.ToString('F2'))s" -ForegroundColor Green
@@ -61,31 +104,32 @@ try {
   #region Test 2: Parallel Export (1 Worker - Should match sequential)
   Write-Host "`n[TEST 2] Parallel Export (1 Worker)" -ForegroundColor Cyan
   Write-Host "─────────────────────────────────────────────" -ForegroundColor Gray
-
-  # Create config file with 1 worker
-  $config1Worker = @"
-parallel:
-  enabled: true
-  maxWorkers: 1
-  progressInterval: 10
-"@
-  $configPath1 = Join-Path $ExportDir 'test-parallel-1worker.yml'
-  New-Item -ItemType Directory -Path $ExportDir -Force | Out-Null
-  Set-Content -Path $configPath1 -Value $config1Worker
+  Write-Host "  Config: $ConfigPath1Worker" -ForegroundColor Gray
 
   $par1Start = Get-Date
-  $par1Output = & "$PSScriptRoot\..\Export-SqlServerSchema.ps1" `
+  & "$PSScriptRoot\..\Export-SqlServerSchema.ps1" `
     -Server $Server `
     -Database $Database `
     -OutputPath $ExportDir `
-    -ConfigFile $configPath1 `
-    -Parallel
+    -Credential $Credential `
+    -ConfigFile $ConfigPath1Worker `
+    -Parallel 2>&1 | Out-Null
   $par1Duration = (Get-Date) - $par1Start
 
+  # Find the export directory
+  $par1ExportDir = Get-ChildItem $ExportDir -Directory |
+    Where-Object { $_.Name -match "^$($Server)_" } |
+    Sort-Object CreationTime -Descending |
+    Select-Object -First 1
+
+  if (-not $par1ExportDir) {
+    throw "Parallel (1 worker) export directory not found"
+  }
+
   $testResults.Parallel_1Worker = @{
-    Duration = $par1Duration
-    OutputPath = $par1Output
-    FileCount = (Get-ChildItem $par1Output -Recurse -File).Count
+    Duration   = $par1Duration
+    OutputPath = $par1ExportDir.FullName
+    FileCount  = (Get-ChildItem $par1ExportDir.FullName -Recurse -File).Count
   }
 
   Write-Host "[SUCCESS] Parallel (1 worker) completed in $($par1Duration.TotalSeconds.ToString('F2'))s" -ForegroundColor Green
@@ -95,29 +139,32 @@ parallel:
   #region Test 3: Parallel Export (5 Workers - Default)
   Write-Host "`n[TEST 3] Parallel Export (5 Workers - Default)" -ForegroundColor Cyan
   Write-Host "─────────────────────────────────────────────" -ForegroundColor Gray
-
-  $config5Workers = @"
-parallel:
-  enabled: true
-  maxWorkers: 5
-  progressInterval: 50
-"@
-  $configPath5 = Join-Path $ExportDir 'test-parallel-5workers.yml'
-  Set-Content -Path $configPath5 -Value $config5Workers
+  Write-Host "  Config: $ConfigPath5Workers" -ForegroundColor Gray
 
   $par5Start = Get-Date
-  $par5Output = & "$PSScriptRoot\..\Export-SqlServerSchema.ps1" `
+  & "$PSScriptRoot\..\Export-SqlServerSchema.ps1" `
     -Server $Server `
     -Database $Database `
     -OutputPath $ExportDir `
-    -ConfigFile $configPath5 `
-    -Parallel
+    -Credential $Credential `
+    -ConfigFile $ConfigPath5Workers `
+    -Parallel 2>&1 | Out-Null
   $par5Duration = (Get-Date) - $par5Start
 
+  # Find the export directory
+  $par5ExportDir = Get-ChildItem $ExportDir -Directory |
+    Where-Object { $_.Name -match "^$($Server)_" } |
+    Sort-Object CreationTime -Descending |
+    Select-Object -First 1
+
+  if (-not $par5ExportDir) {
+    throw "Parallel (5 workers) export directory not found"
+  }
+
   $testResults.Parallel_5Workers = @{
-    Duration = $par5Duration
-    OutputPath = $par5Output
-    FileCount = (Get-ChildItem $par5Output -Recurse -File).Count
+    Duration   = $par5Duration
+    OutputPath = $par5ExportDir.FullName
+    FileCount  = (Get-ChildItem $par5ExportDir.FullName -Recurse -File).Count
   }
 
   Write-Host "[SUCCESS] Parallel (5 workers) completed in $($par5Duration.TotalSeconds.ToString('F2'))s" -ForegroundColor Green
@@ -131,29 +178,32 @@ parallel:
   #region Test 4: Parallel Export (10 Workers - Stress Test)
   Write-Host "`n[TEST 4] Parallel Export (10 Workers - Stress Test)" -ForegroundColor Cyan
   Write-Host "─────────────────────────────────────────────" -ForegroundColor Gray
-
-  $config10Workers = @"
-parallel:
-  enabled: true
-  maxWorkers: 10
-  progressInterval: 100
-"@
-  $configPath10 = Join-Path $ExportDir 'test-parallel-10workers.yml'
-  Set-Content -Path $configPath10 -Value $config10Workers
+  Write-Host "  Config: $ConfigPath10Workers" -ForegroundColor Gray
 
   $par10Start = Get-Date
-  $par10Output = & "$PSScriptRoot\..\Export-SqlServerSchema.ps1" `
+  & "$PSScriptRoot\..\Export-SqlServerSchema.ps1" `
     -Server $Server `
     -Database $Database `
     -OutputPath $ExportDir `
-    -ConfigFile $configPath10 `
-    -Parallel
+    -Credential $Credential `
+    -ConfigFile $ConfigPath10Workers `
+    -Parallel 2>&1 | Out-Null
   $par10Duration = (Get-Date) - $par10Start
 
+  # Find the export directory
+  $par10ExportDir = Get-ChildItem $ExportDir -Directory |
+    Where-Object { $_.Name -match "^$($Server)_" } |
+    Sort-Object CreationTime -Descending |
+    Select-Object -First 1
+
+  if (-not $par10ExportDir) {
+    throw "Parallel (10 workers) export directory not found"
+  }
+
   $testResults.Parallel_10Workers = @{
-    Duration = $par10Duration
-    OutputPath = $par10Output
-    FileCount = (Get-ChildItem $par10Output -Recurse -File).Count
+    Duration   = $par10Duration
+    OutputPath = $par10ExportDir.FullName
+    FileCount  = (Get-ChildItem $par10ExportDir.FullName -Recurse -File).Count
   }
 
   Write-Host "[SUCCESS] Parallel (10 workers) completed in $($par10Duration.TotalSeconds.ToString('F2'))s" -ForegroundColor Green
