@@ -783,6 +783,7 @@ function Invoke-SqlScript {
     [switch]$Show,
     [hashtable]$SqlCmdVariables = @{},
     [hashtable]$Config,
+    [hashtable]$FileGroupFileSizeDefaults,  # Override SIZE and FILEGROWTH for FileGroup files
     [Microsoft.SqlServer.Management.Smo.Server]$Connection  # Pre-existing connection for reuse
   )
 
@@ -846,6 +847,24 @@ function Invoke-SqlScript {
     # Use negative lookbehind to ensure we're not matching FILENAME
     if ($scriptName -match '(?i)filegroup') {
       $sql = $sql -replace "(?<!FILE)NAME\s*=\s*N'([^']+)'", "NAME = N'${DatabaseName}_`$1'"
+
+      # Override SIZE and FILEGROWTH for FileGroup data files if defaults specified
+      # This prevents large source database allocations from failing on dev systems
+      if ($FileGroupFileSizeDefaults) {
+        if ($FileGroupFileSizeDefaults.ContainsKey('sizeKB')) {
+          $newSizeKB = $FileGroupFileSizeDefaults.sizeKB
+          # Replace SIZE = <number>KB or SIZE = <number>MB or SIZE = <number>GB
+          # Pattern matches: SIZE = 8192KB, SIZE = 64MB, SIZE = 1GB (with optional surrounding whitespace)
+          $sql = $sql -replace 'SIZE\s*=\s*\d+(KB|MB|GB)', "SIZE = ${newSizeKB}KB"
+          Write-Verbose "  [INFO] FileGroup file SIZE overridden to ${newSizeKB}KB"
+        }
+        if ($FileGroupFileSizeDefaults.ContainsKey('fileGrowthKB')) {
+          $newGrowthKB = $FileGroupFileSizeDefaults.fileGrowthKB
+          # Replace FILEGROWTH = <number>KB or FILEGROWTH = <number>MB or FILEGROWTH = <number>GB
+          $sql = $sql -replace 'FILEGROWTH\s*=\s*\d+(KB|MB|GB)', "FILEGROWTH = ${newGrowthKB}KB"
+          Write-Verbose "  [INFO] FileGroup file FILEGROWTH overridden to ${newGrowthKB}KB"
+        }
+      }
     }
 
     if ($Show) {
@@ -1074,7 +1093,8 @@ function Invoke-ScriptsWithDependencyRetries {
           -OperationName "Script: $($scriptFile.Name)" -ScriptBlock {
           Invoke-SqlScript -FilePath $scriptFile.FullName -ServerName $Server `
             -DatabaseName $Database -Cred $Credential -Timeout $Timeout -Show:$ShowSQL `
-            -SqlCmdVariables $SqlCmdVariables -Config $Config -Connection $Connection
+            -SqlCmdVariables $SqlCmdVariables -Config $Config -Connection $Connection `
+            -FileGroupFileSizeDefaults $script:FileGroupFileSizeDefaults
         } -ErrorVariable scriptError
       }
       catch {
@@ -2041,6 +2061,57 @@ try {
     }
   }
 
+  # Extract FileGroup file size defaults from config
+  # This prevents large source database allocations from failing on dev systems
+  $script:FileGroupFileSizeDefaults = $null
+  if ($config) {
+    # Support both simplified config and nested config formats
+    $fgSizeDefaults = $null
+    if ($config.fileGroupFileSizeDefaults) {
+      # Simplified config format (root-level fileGroupFileSizeDefaults)
+      $fgSizeDefaults = $config.fileGroupFileSizeDefaults
+    }
+    elseif ($config.import) {
+      # Full config format (nested under import.productionMode or import.developerMode)
+      $modeConfigForSize = if ($ImportMode -eq 'Prod') { $config.import.productionMode } else { $config.import.developerMode }
+      if ($modeConfigForSize -and $modeConfigForSize.fileGroupFileSizeDefaults) {
+        $fgSizeDefaults = $modeConfigForSize.fileGroupFileSizeDefaults
+      }
+    }
+
+    if ($fgSizeDefaults) {
+      $script:FileGroupFileSizeDefaults = @{}
+      if ($fgSizeDefaults.sizeKB) {
+        $script:FileGroupFileSizeDefaults['sizeKB'] = $fgSizeDefaults.sizeKB
+      }
+      if ($fgSizeDefaults.fileGrowthKB) {
+        $script:FileGroupFileSizeDefaults['fileGrowthKB'] = $fgSizeDefaults.fileGrowthKB
+      }
+
+      if ($script:FileGroupFileSizeDefaults.Count -gt 0) {
+        Write-Output "[INFO] FileGroup file size defaults configured:"
+        if ($script:FileGroupFileSizeDefaults.ContainsKey('sizeKB')) {
+          Write-Output "  - SIZE = $($script:FileGroupFileSizeDefaults.sizeKB)KB"
+        }
+        if ($script:FileGroupFileSizeDefaults.ContainsKey('fileGrowthKB')) {
+          Write-Output "  - FILEGROWTH = $($script:FileGroupFileSizeDefaults.fileGrowthKB)KB"
+        }
+      }
+    }
+  }
+
+  # Apply safe defaults in Dev mode if no explicit configuration provided
+  # This prevents large allocations from failing on developer systems with limited disk space
+  if ($ImportMode -eq 'Dev' -and -not $script:FileGroupFileSizeDefaults) {
+    $script:FileGroupFileSizeDefaults = @{
+      sizeKB       = 1024    # 1 MB initial size (safe default for dev)
+      fileGrowthKB = 65536   # 64 MB growth (reasonable default)
+    }
+    Write-Output "[INFO] Using Dev mode safe defaults for FileGroup file sizes:"
+    Write-Output "  - SIZE = $($script:FileGroupFileSizeDefaults.sizeKB)KB (1 MB)"
+    Write-Output "  - FILEGROWTH = $($script:FileGroupFileSizeDefaults.fileGrowthKB)KB (64 MB)"
+  }
+
   # Report skipped folders if any
   if ($skippedFolders.Count -gt 0) {
     Write-Output "[INFO] Skipped $($skippedFolders.Count) folder(s) due to $ImportMode mode settings:"
@@ -2194,7 +2265,8 @@ try {
     $result = Invoke-WithRetry -MaxAttempts $effectiveMaxRetries -InitialDelaySeconds $effectiveRetryDelay -OperationName "Script: $($scriptFile.Name)" -ScriptBlock {
       Invoke-SqlScript -FilePath $scriptFile.FullName -ServerName $Server `
         -DatabaseName $Database -Cred $Credential -Timeout $effectiveCommandTimeout -Show:$ShowSQL `
-        -SqlCmdVariables $sqlCmdVars -Config $config -Connection $script:SharedConnection
+        -SqlCmdVariables $sqlCmdVars -Config $config -Connection $script:SharedConnection `
+        -FileGroupFileSizeDefaults $script:FileGroupFileSizeDefaults
     }
 
     if ($result -eq $true) {
@@ -2247,7 +2319,8 @@ try {
       $result = Invoke-WithRetry -MaxAttempts $effectiveMaxRetries -InitialDelaySeconds $effectiveRetryDelay -OperationName "Script: $($scriptFile.Name)" -ScriptBlock {
         Invoke-SqlScript -FilePath $scriptFile.FullName -ServerName $Server `
           -DatabaseName $Database -Cred $Credential -Timeout $effectiveCommandTimeout -Show:$ShowSQL `
-          -SqlCmdVariables $sqlCmdVars -Config $config -Connection $script:SharedConnection
+          -SqlCmdVariables $sqlCmdVars -Config $config -Connection $script:SharedConnection `
+          -FileGroupFileSizeDefaults $script:FileGroupFileSizeDefaults
       }
 
       if ($result -eq $true) {
@@ -2347,7 +2420,8 @@ try {
       $result = Invoke-WithRetry -MaxAttempts $effectiveMaxRetries -InitialDelaySeconds $effectiveRetryDelay -OperationName "Data Script: $($scriptFile.Name)" -ScriptBlock {
         Invoke-SqlScript -FilePath $scriptFile.FullName -ServerName $Server `
           -DatabaseName $Database -Cred $Credential -Timeout $effectiveCommandTimeout -Show:$ShowSQL `
-          -SqlCmdVariables $sqlCmdVars -Config $config -Connection $script:SharedConnection
+          -SqlCmdVariables $sqlCmdVars -Config $config -Connection $script:SharedConnection `
+          -FileGroupFileSizeDefaults $script:FileGroupFileSizeDefaults
       }
 
       if ($result -eq $true) {

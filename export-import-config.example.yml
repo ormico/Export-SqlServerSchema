@@ -201,6 +201,14 @@ import:
       # - PlanGuides                   # Environment-specific query hints
       # - ExternalLibraries            # ML Services packages
 
+    # FileGroup file size defaults (optional, prevents large allocations on dev systems)
+    # If not specified, Dev mode uses safe defaults (1 MB size, 64 MB growth)
+    # The source database may have very large file sizes (e.g., 1 GB) that can fail
+    # on developer systems with limited disk space
+    fileGroupFileSizeDefaults:
+      sizeKB: 1024         # Initial file size in KB (1 MB)
+      fileGrowthKB: 65536  # File growth increment in KB (64 MB)
+
   # ─────────────────────────────────────────────────────────────
   # PRODUCTION MODE SETTINGS (Production Deployment)
   # ─────────────────────────────────────────────────────────────
@@ -239,6 +247,13 @@ import:
       AzureDataLake: "https://proddatalake.blob.core.windows.net/data"
       AzureBackup: "https://prodbackup.blob.core.windows.net/backup"
       OnPremDataSource: "sqlserver://onprem-server.domain.com/database"
+
+    # FileGroup file size defaults (optional, use source values or custom sizes)
+    # In production, you may want larger initial sizes to match capacity planning
+    # If not specified, Prod mode uses the original source database values
+    fileGroupFileSizeDefaults:
+      sizeKB: 1048576       # Initial file size in KB (1 GB)
+      fileGrowthKB: 262144  # File growth increment in KB (256 MB)
 
 # ═══════════════════════════════════════════════════════════════
 # USAGE EXAMPLES

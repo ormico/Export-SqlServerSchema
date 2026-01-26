@@ -294,6 +294,37 @@
             }
           ]
         },
+        "fileGroupFileSizeDefaults": {
+          "type": "object",
+          "description": "Override file SIZE and FILEGROWTH for FileGroup data files (prevents large allocations on dev systems)",
+          "properties": {
+            "sizeKB": {
+              "type": "integer",
+              "description": "Initial file size in KB (default: 1024 = 1MB)",
+              "default": 1024,
+              "minimum": 64,
+              "maximum": 1073741824
+            },
+            "fileGrowthKB": {
+              "type": "integer",
+              "description": "File growth increment in KB (default: 65536 = 64MB)",
+              "default": 65536,
+              "minimum": 64,
+              "maximum": 1073741824
+            }
+          },
+          "additionalProperties": false,
+          "examples": [
+            {
+              "sizeKB": 1024,
+              "fileGrowthKB": 65536
+            },
+            {
+              "sizeKB": 10240,
+              "fileGrowthKB": 102400
+            }
+          ]
+        },
         "externalConnectionStrings": {
           "type": "object",
           "description": "Map external data source names to connection URLs",

@@ -18,6 +18,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Only 5% slower than sequential for typical databases (acceptable overhead for future scalability)
 - All parallel code consolidated into main Export-SqlServerSchema.ps1 (2,379 lines of parallel logic)
 
+**FileGroup File Size Defaults**
+- New `fileGroupFileSizeDefaults` configuration option to override imported file sizes
+- Dev mode automatically uses safe defaults (1 MB initial, 64 MB growth) to prevent disk space issues
+- Configurable at root level or per-mode (`import.developerMode.fileGroupFileSizeDefaults`)
+- Supports `sizeKB` and `fileGrowthKB` parameters (values in kilobytes)
+- Updated JSON schema with new configuration properties
+- Integration tests verify FileGroup file size transformation
+
+**Test Utilities**
+- New `test-synonym-prefetch.ps1` - isolated test for SMO PrefetchObjects behavior
+
 ### Fixed
 
 **Critical: Parallel Index Export Bug**
@@ -26,6 +37,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Fix**: Modified Build-WorkItems-Indexes to pass individual index identifiers (TableSchema, TableName, IndexName); updated parallel worker to fetch individual Index objects from parent tables
 - **Impact**: Index files now contain only CREATE INDEX statements; import succeeds without table duplication errors
 - **File Structure**: Each index now gets its own file (e.g., `Schema1.Table1.IX_Active.sql`)
+
+**Security: Path Traversal Prevention in Parallel Export**
+- **Issue**: Build-WorkItems-* functions constructed file paths using raw schema/object names without sanitization
+- **Risk**: Schema or object names containing path separators (`/`, `\`) or parent references (`..`) could escape the export directory
+- **Fix**: Applied `Get-SafeFileName` sanitization to all schema and object names in 15+ Build-WorkItems-* functions
+- **Affected Functions**: Build-WorkItems-Sequences, Build-WorkItems-Security (roles/users), Build-WorkItems-UserDefinedTypes, Build-WorkItems-XmlSchemaCollections, Build-WorkItems-ForeignKeys, Build-WorkItems-Indexes, Build-WorkItems-Defaults, Build-WorkItems-Rules, Build-WorkItems-Functions, Build-WorkItems-UserDefinedAggregates, Build-WorkItems-StoredProcedures, Build-WorkItems-TableTriggers, Build-WorkItems-Views, Build-WorkItems-Synonyms, Build-WorkItems-SecurityPolicies, Build-WorkItems-Data
+
+**Reliability: Parallel Worker Race Condition**
+- **Issue**: Multiple workers creating the same directory simultaneously could cause intermittent failures
+- **Fix**: Added try-catch around directory creation with secondary existence check after exception
+- **Pattern**: If `New-Item` throws, verify directory exists before propagating error (another worker may have created it)
+
+**Bug Fix: Parallel Export Error Reporting**
+- **Issue**: `$errorItems` ConcurrentBag was defined but never populated, always showing 0 errors
+- **Fix**: Added post-processing loop to filter items with `Success=$false` from `$completedItems` into `$errorItems`
+- **Impact**: Error summary now correctly reports failed export items
 
 ### Performance
 
@@ -43,6 +70,16 @@ Test database: 500 tables, 100 views, 500 procedures, 100 functions, 100 trigger
 - Parallel export only 5% slower than sequential (97.58s vs 93.30s) - acceptable overhead
 - Schema/All grouping modes 7% faster total time than single mode
 - Import times improved 8-18% due to file count reduction and optimizations
+
+### Known Issues
+
+**SMO PrefetchObjects Synonym Limitation**
+- `Database.PrefetchObjects(typeof(Synonym))` fails with "Prefetch objects failed for Database" error
+- This is a confirmed SMO bug/limitation, not an issue in Export-SqlServerSchema
+- **Impact**: None - the error is caught and logged as VERBOSE; synonyms export correctly via lazy loading
+- **Workaround**: None needed; the parameterless `PrefetchObjects()` works but is slower
+- **Affected**: Observed on SQL Server 2022 running in Linux/Docker containers
+- **Test**: Run `tests/test-synonym-prefetch.ps1` to reproduce and verify
 
 ## [1.5.1] - 2026-01-21
 

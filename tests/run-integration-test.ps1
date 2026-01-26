@@ -384,6 +384,38 @@ WHERE t.name = 'Inventory' AND SCHEMA_NAME(t.schema_id) = 'Warehouse'
             Write-TestStep "Tables not on expected FileGroups (Orders: $ordersFileGroup, Inventory: $inventoryFileGroup)" -Type Error
             throw "FileGroup placement verification failed"
         }
+
+        # Verify FileGroup file sizes were overridden with Dev mode defaults
+        # In Dev mode, files should be created with 1024KB (1MB) initial size
+        $devFileSizes = Invoke-SqlCommand @"
+SELECT df.size * 8 AS size_kb, df.growth * 8 AS growth_kb
+FROM sys.database_files df
+INNER JOIN sys.filegroups fg ON df.data_space_id = fg.data_space_id
+WHERE fg.name IN ('FG_CURRENT', 'FG_ARCHIVE')
+"@ $TargetDatabaseDev
+
+        # Parse file sizes - size should be 1024KB (Dev default)
+        # SQL Server may round to nearest extent (64KB), so we check for <= 1024KB
+        $devFileSizeLines = $devFileSizes -split "`n" | Where-Object { $_.Trim() -match '^\d' }
+        if ($devFileSizeLines.Count -gt 0) {
+            $allFilesCorrectSize = $true
+            foreach ($line in $devFileSizeLines) {
+                if ($line.Trim() -match '^(\d+)\s+(\d+)') {
+                    $sizeKB = [int]$matches[1]
+                    # Dev default is 1024KB but SQL Server rounds to extent boundaries
+                    # Accept sizes between 64KB and 2048KB as valid for the test
+                    if ($sizeKB -lt 64 -or $sizeKB -gt 2048) {
+                        $allFilesCorrectSize = $false
+                        Write-Host "    Unexpected file size: ${sizeKB}KB (expected ~1024KB)" -ForegroundColor Yellow
+                    }
+                }
+            }
+            if ($allFilesCorrectSize) {
+                Write-TestStep "Dev mode FileGroup files created with safe default sizes" -Type Success
+            } else {
+                Write-TestStep "Dev mode FileGroup file sizes not as expected" -Type Warning
+            }
+        }
     } else {
         Write-TestStep "Dev mode FileGroup count incorrect: expected 2, got $($devFileGroupCount.Trim())" -Type Error
         throw "Dev mode verification failed: FileGroups not imported correctly with autoRemap"
@@ -451,6 +483,36 @@ WHERE t.name = 'Inventory' AND SCHEMA_NAME(t.schema_id) = 'Warehouse'
         Write-TestStep "Prod mode MAXDOP incorrect: $($prodMaxDop.Trim())" -Type Warning
     }
 
+    # Verify FileGroup file sizes were overridden with Prod config values
+    # In Prod config, we set 2048KB (2MB) initial size
+    $prodFileSizes = Invoke-SqlCommand @"
+SELECT df.size * 8 AS size_kb, df.growth * 8 AS growth_kb
+FROM sys.database_files df
+INNER JOIN sys.filegroups fg ON df.data_space_id = fg.data_space_id
+WHERE fg.name IN ('FG_CURRENT', 'FG_ARCHIVE')
+"@ $TargetDatabaseProd
+
+    $prodFileSizeLines = $prodFileSizes -split "`n" | Where-Object { $_.Trim() -match '^\d' }
+    if ($prodFileSizeLines.Count -gt 0) {
+        $allProdFilesCorrectSize = $true
+        foreach ($line in $prodFileSizeLines) {
+            if ($line.Trim() -match '^(\d+)\s+(\d+)') {
+                $sizeKB = [int]$matches[1]
+                # Prod config sets 2048KB but SQL Server rounds to extent boundaries
+                # Accept sizes between 64KB and 4096KB as valid for the test
+                if ($sizeKB -lt 64 -or $sizeKB -gt 4096) {
+                    $allProdFilesCorrectSize = $false
+                    Write-Host "    Unexpected Prod file size: ${sizeKB}KB (expected ~2048KB)" -ForegroundColor Yellow
+                }
+            }
+        }
+        if ($allProdFilesCorrectSize) {
+            Write-TestStep "Prod mode FileGroup files created with configured sizes" -Type Success
+        } else {
+            Write-TestStep "Prod mode FileGroup file sizes not as expected" -Type Warning
+        }
+    }
+
     # All objects should match
     $prodFullMatch = ($tableCount.Trim() -eq $prodTableCount.Trim()) -and
                      ($viewCount.Trim() -eq $prodViewCount.Trim()) -and
@@ -468,6 +530,16 @@ WHERE t.name = 'Inventory' AND SCHEMA_NAME(t.schema_id) = 'Warehouse'
     # Step 10: Verify data integrity
     Write-Host "`n" -NoNewline
     Write-TestStep "Step 10: Verifying data integrity..." -Type Info
+
+    # Check if data was actually exported by looking at the 21_Data folder
+    $dataFolder = Join-Path $exportDir "21_Data"
+    $dataFilesExist = $false
+    if (Test-Path $dataFolder) {
+        $dataFiles = Get-ChildItem $dataFolder -Filter "*.sql" -ErrorAction SilentlyContinue
+        $dataFilesExist = ($dataFiles.Count -gt 0)
+    }
+
+    Write-Host "  Data export folder: $(if ($dataFilesExist) { "$($dataFiles.Count) file(s)" } else { 'empty or not present' })" -ForegroundColor Gray
 
     $sourceCustomers = Invoke-SqlCommand "SELECT COUNT(*) FROM dbo.Customers" $SourceDatabase
     $devCustomers = Invoke-SqlCommand "SELECT COUNT(*) FROM dbo.Customers" $TargetDatabaseDev
@@ -487,16 +559,38 @@ WHERE t.name = 'Inventory' AND SCHEMA_NAME(t.schema_id) = 'Warehouse'
     $devDataMatch = ($sourceCustomers.Trim() -eq $devCustomers.Trim()) -and ($sourceProducts.Trim() -eq $devProducts.Trim())
     $prodDataMatch = ($sourceCustomers.Trim() -eq $prodCustomers.Trim()) -and ($sourceProducts.Trim() -eq $prodProducts.Trim())
 
-    if ($devDataMatch) {
-        Write-TestStep "Dev mode data integrity verified!" -Type Success
+    # Data verification result depends on whether data was actually exported
+    $dataTestResult = "SKIPPED"
+    if (-not $dataFilesExist) {
+        # Data was not exported - verify targets have 0 rows (expected)
+        $devExpectedEmpty = ($devCustomers.Trim() -eq "0") -and ($devProducts.Trim() -eq "0")
+        $prodExpectedEmpty = ($prodCustomers.Trim() -eq "0") -and ($prodProducts.Trim() -eq "0")
+        if ($devExpectedEmpty -and $prodExpectedEmpty) {
+            Write-TestStep "Data not exported - targets correctly empty (as expected)" -Type Info
+            $dataTestResult = "SKIPPED"
+        } else {
+            Write-TestStep "Data not exported but targets have unexpected data!" -Type Warning
+            $dataTestResult = "WARNING"
+        }
     } else {
-        Write-TestStep "Dev mode data counts do not match!" -Type Warning
-    }
+        # Data was exported - verify data was imported correctly
+        if ($devDataMatch) {
+            Write-TestStep "Dev mode data integrity verified!" -Type Success
+        } else {
+            Write-TestStep "Dev mode data counts do not match!" -Type Error
+            $dataTestResult = "FAILED"
+        }
 
-    if ($prodDataMatch) {
-        Write-TestStep "Prod mode data integrity verified!" -Type Success
-    } else {
-        Write-TestStep "Prod mode data counts do not match!" -Type Warning
+        if ($prodDataMatch) {
+            Write-TestStep "Prod mode data integrity verified!" -Type Success
+        } else {
+            Write-TestStep "Prod mode data counts do not match!" -Type Error
+            $dataTestResult = "FAILED"
+        }
+
+        if ($devDataMatch -and $prodDataMatch) {
+            $dataTestResult = "PASSED"
+        }
     }
 
     # Final Summary
@@ -510,7 +604,17 @@ WHERE t.name = 'Inventory' AND SCHEMA_NAME(t.schema_id) = 'Warehouse'
     Write-TestStep "Dev Mode Verification: PASSED" -Type Success
     Write-TestStep "Prod Mode Import: PASSED" -Type Success
     Write-TestStep "Prod Mode Verification: PASSED" -Type Success
-    Write-TestStep "Data Verification: PASSED" -Type Success
+
+    if ($dataTestResult -eq "PASSED") {
+        Write-TestStep "Data Verification: PASSED" -Type Success
+    } elseif ($dataTestResult -eq "SKIPPED") {
+        Write-TestStep "Data Verification: SKIPPED (data export disabled in config)" -Type Info
+    } elseif ($dataTestResult -eq "WARNING") {
+        Write-TestStep "Data Verification: WARNING (unexpected state)" -Type Warning
+    } else {
+        Write-TestStep "Data Verification: FAILED" -Type Error
+        throw "Data verification failed: Data counts do not match"
+    }
 
     Write-Host "`n[SUCCESS] ALL TESTS PASSED!" -ForegroundColor Green
     Write-Host "`nExported schema available at: $exportDir" -ForegroundColor Cyan

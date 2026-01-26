@@ -18,13 +18,28 @@ import:
       - StoredProcedures
       - Views
 
-# FileGroup path mapping for target environment
-# Base directory paths (without trailing separator) for each FileGroup
-# Script will automatically add correct path separator based on target OS
-# and append database-specific filenames to prevent conflicts
-fileGroupPathMapping:
-  FG_CURRENT: "/var/opt/mssql/data"
-  FG_ARCHIVE: "/var/opt/mssql/data"
+  # Production mode settings
+  productionMode:
+    # Enable all infrastructure components for Prod
+    includeFileGroups: true
+    includeConfigurations: true
+    includeDatabaseScopedCredentials: false  # Always false - secrets required
+    includeExternalData: false  # Disabled for test environment
+    enableSecurityPolicies: true
+
+    # FileGroup path mapping for target environment
+    # Base directory paths (without trailing separator) for each FileGroup
+    # Script will automatically add correct path separator based on target OS
+    # and append database-specific filenames to prevent conflicts
+    fileGroupPathMapping:
+      FG_CURRENT: "/var/opt/mssql/data"
+      FG_ARCHIVE: "/var/opt/mssql/data"
+
+    # FileGroup file size defaults for Prod mode (optional - uses source values if not specified)
+    # For test environment, we use smaller sizes to avoid disk space issues
+    fileGroupFileSizeDefaults:
+      sizeKB: 2048        # 2 MB initial size
+      fileGrowthKB: 65536   # 64 MB growth increment
 
 # Prod mode includes:
 # - FileGroups (with path mapping from above)

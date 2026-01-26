@@ -18,6 +18,14 @@ import:
       - StoredProcedures
       - Views
 
+  # Dev mode settings
+  developerMode:
+    # FileGroup file size defaults for Dev mode
+    # These prevent large allocations from source DB failing on dev systems
+    fileGroupFileSizeDefaults:
+      sizeKB: 1024       # 1 MB initial size (safe for dev)
+      fileGrowthKB: 65536  # 64 MB growth increment
+
 # Dev mode automatically skips:
 # - FileGroups (infrastructure)
 # - Database Scoped Configurations (infrastructure)

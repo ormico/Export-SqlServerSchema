@@ -113,6 +113,37 @@ fileGroupPathMapping:
   FG_INDEX: "E:\\SQLIndexes\\"
 ```
 
+### 4.3 FileGroup File Size Defaults
+
+Exported FileGroup scripts include the original SIZE and FILEGROWTH values from the source database. These can be very large (e.g., 1GB initial size) and may cause imports to fail on developer systems with limited disk space.
+
+**Dev Mode Default Behavior**: In Dev mode, the import automatically uses safe defaults (1 MB initial size, 64 MB growth) unless you override them.
+
+**Custom Configuration**: You can override these values in either mode via the config file:
+
+```yaml
+# At root level (applies to all modes)
+fileGroupFileSizeDefaults:
+  sizeKB: 1024       # 1 MB initial file size
+  fileGrowthKB: 65536  # 64 MB file growth increment
+
+# Or per-mode (nested under import.developerMode or import.productionMode)
+import:
+  developerMode:
+    fileGroupFileSizeDefaults:
+      sizeKB: 1024
+      fileGrowthKB: 65536
+  productionMode:
+    fileGroupFileSizeDefaults:
+      sizeKB: 1048576    # 1 GB initial size for production
+      fileGrowthKB: 262144  # 256 MB growth for production
+```
+
+**Note**: The size values are in KB. Common conversions:
+-   1 MB = 1024 KB
+-   64 MB = 65536 KB
+-   1 GB = 1048576 KB
+
 ## 5. Troubleshooting
 
 -   **Logs**: Check the `export-log.txt` or `import-log.txt` in the output folder.
