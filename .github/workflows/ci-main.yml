@@ -17,19 +17,19 @@ jobs:
       majorMinorPatch: ${{ steps.gitversion.outputs.majorMinorPatch }}
       fullSemVer: ${{ steps.gitversion.outputs.fullSemVer }}
       isTag: ${{ steps.check_tag.outputs.is_tag }}
-    
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      
+
       - name: Verify tag is on main branch
         run: |
           # Get the commit that the tag points to
           TAG_COMMIT=$(git rev-list -n 1 $GITHUB_REF)
           echo "Tag points to commit: $TAG_COMMIT"
-          
+
           # Check if this commit is reachable from main branch
           if git merge-base --is-ancestor $TAG_COMMIT origin/main; then
             echo "[OK] Tag is on main branch"
@@ -38,7 +38,7 @@ jobs:
             echo "Please only create release tags from the main branch"
             exit 1
           fi
-      
+
       - name: Check if triggered by tag
         id: check_tag
         run: |
@@ -49,19 +49,19 @@ jobs:
             echo "is_tag=false" >> $GITHUB_OUTPUT
             echo "Branch push detected: $GITHUB_REF"
           fi
-      
+
       - name: Install GitVersion
         uses: gittools/actions/gitversion/setup@v1
         with:
           versionSpec: '5.x'
-      
+
       - name: Determine Version
         id: gitversion
         uses: gittools/actions/gitversion/execute@v1
         with:
           useConfigFile: true
           configFilePath: GitVersion.yml
-      
+
       - name: Display Version
         run: |
           echo "SemVer: ${{ steps.gitversion.outputs.semVer }}"
@@ -73,38 +73,38 @@ jobs:
     name: Run Integration Tests
     runs-on: ubuntu-latest
     needs: version
-    
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-      
+
       - name: Setup PowerShell
         shell: pwsh
         run: |
           Write-Host "PowerShell version: $($PSVersionTable.PSVersion)"
-      
+
       - name: Install SQL Server command-line tools
         run: |
           # Download and install Microsoft signing key
           curl https://packages.microsoft.com/keys/microsoft.asc | sudo apt-key add -
-          
+
           # Add Microsoft SQL Server repository
           curl https://packages.microsoft.com/config/ubuntu/22.04/prod.list | sudo tee /etc/apt/sources.list.d/msprod.list
-          
+
           # Update and install mssql-tools18
           sudo apt-get update
           sudo ACCEPT_EULA=Y apt-get install -y mssql-tools18 unixodbc-dev
-          
+
           # Add to PATH
           echo "/opt/mssql-tools18/bin" >> $GITHUB_PATH
-      
+
       - name: Install PowerShell modules
         shell: pwsh
         run: |
           Install-Module -Name SqlServer -Scope CurrentUser -Force -AllowClobber
           Install-Module -Name powershell-yaml -Scope CurrentUser -Force -AllowClobber
           Write-Host "[SUCCESS] PowerShell modules installed"
-      
+
       - name: Create .env file for Docker
         working-directory: ./tests
         run: |
@@ -117,13 +117,13 @@ jobs:
           TEST_USERNAME=sa
           EOF
           echo "Created .env file"
-      
+
       - name: Start SQL Server container
         working-directory: ./tests
         run: |
           docker compose up -d
           echo "Waiting for SQL Server to be ready..."
-          
+
           # Wait up to 2 minutes for SQL Server to be ready
           for i in {1..24}; do
             if docker compose exec -T sqlserver /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P Test@1234 -C -Q "SELECT 1" &> /dev/null; then
@@ -133,10 +133,10 @@ jobs:
             echo "Attempt $i: SQL Server not ready yet, waiting 5 seconds..."
             sleep 5
           done
-          
+
           # Final check
           docker compose exec -T sqlserver /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P Test@1234 -C -Q "SELECT 1"
-      
+
       - name: Run integration tests
         shell: pwsh
         working-directory: ./tests
@@ -150,7 +150,7 @@ jobs:
         run: |
           Write-Host "Running exclusion feature tests..."
           ./test-exclude-feature.ps1
-      
+
       - name: Cleanup
         if: always()
         working-directory: ./tests
@@ -164,50 +164,53 @@ jobs:
     if: needs.version.outputs.isTag == 'true'
     permissions:
       contents: write
-    
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-      
+
       - name: Create release directory
         run: |
           mkdir -p release
           echo "Version: ${{ needs.version.outputs.majorMinorPatch }}" > release/VERSION.txt
-      
+
       - name: Copy release files
         run: |
+          cp .editorconfig release/
+          cp .gitignore release/
           cp CHANGELOG.md release/
+          cp docs/USER_GUIDE.md release/USER_GUIDE.md
           cp export-import-config.example.yml release/
           cp export-import-config.schema.json release/
           cp Export-SqlServerSchema.ps1 release/
           cp Import-SqlServerSchema.ps1 release/
           cp LICENSE.md release/
           cp README.md release/
-      
+
       - name: Create release archive
         run: |
           cd release
           zip -r ../Export-SqlServerSchema-v${{ needs.version.outputs.majorMinorPatch }}.zip .
           cd ..
           echo "Archive created: Export-SqlServerSchema-v${{ needs.version.outputs.majorMinorPatch }}.zip"
-      
+
       - name: Generate release notes
         id: release_notes
         run: |
           VERSION="${{ needs.version.outputs.majorMinorPatch }}"
-          
+
           # Extract release notes from CHANGELOG.md
           sed -n "/## \[$VERSION\]/,/## \[/p" CHANGELOG.md | sed '$d' > release_notes.md
-          
+
           # If no specific version notes found, use generic message
           if [ ! -s release_notes.md ]; then
             echo "Release v$VERSION" > release_notes.md
             echo "" >> release_notes.md
             echo "See [CHANGELOG.md](CHANGELOG.md) for details." >> release_notes.md
           fi
-          
+
           cat release_notes.md
-      
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v1
         with:
@@ -220,7 +223,7 @@ jobs:
             Export-SqlServerSchema-v${{ needs.version.outputs.majorMinorPatch }}.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      
+
       - name: Upload release artifacts
         uses: actions/upload-artifact@v4
         with:
