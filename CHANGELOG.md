@@ -10,6 +10,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+**Delta Export Feature (Incremental Export)**
+- New `-DeltaFrom` parameter to specify a previous export directory for incremental exports
+- Exports only changed/new objects since the previous export, significantly reducing export time for large databases
+- Automatic metadata generation (`_export_metadata.json`) on every export for delta support
+- Change detection using SQL Server's `sys.objects.modify_date` timestamps
+- Smart categorization of objects: Modified, New, Deleted, Unchanged
+- "Always export" types for objects without reliable modify dates (FileGroups, Schemas, Security, FKs, Indexes)
+- Compatibility validation ensures delta exports use same server, database, and groupBy settings
+- Copy unchanged files from previous export to create complete output
+- Requires `groupBy: single` mode for object-level granularity
+- Design document: [docs/DELTA_EXPORT_DESIGN.md](docs/DELTA_EXPORT_DESIGN.md)
+
 **Parallel Export Feature**
 - New `-Parallel` switch to enable multi-threaded export for large databases
 - New `-MaxWorkers` parameter to control worker thread count (1-20, default: 5)

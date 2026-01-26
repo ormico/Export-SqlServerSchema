@@ -132,7 +132,10 @@ param(
 
   [Parameter(HelpMessage = 'Maximum number of parallel workers (1-20, default: 5). Overrides config file.')]
   [ValidateRange(1, 20)]
-  [int]$MaxWorkers = 0
+  [int]$MaxWorkers = 0,
+
+  [Parameter(HelpMessage = 'Path to previous export for delta/incremental export. Only changed objects will be re-exported.')]
+  [string]$DeltaFrom
 )
 
 $ErrorActionPreference = 'Stop'
@@ -2799,6 +2802,26 @@ $script:ParallelProgressInterval = 50
 $script:ConnectionInfo = $null
 $script:Config = @{}  # Will be set after config file is loaded
 
+# Export metadata tracking for delta export feature
+# This tracks all objects exported for use in incremental/delta exports
+$script:ExportMetadata = @{
+  Version                = '1.0'
+  ExportStartTimeUtc     = $null
+  ExportStartTimeServer  = $null
+  ServerName             = $null
+  DatabaseName           = $null
+  GroupBy                = 'single'
+  IncludeData            = $false
+  ObjectTypes            = @{}
+  Objects                = [System.Collections.ArrayList]::new()
+}
+
+# Delta export state (set when -DeltaFrom is used)
+$script:DeltaExportEnabled = $false
+$script:DeltaMetadata = $null
+$script:DeltaFromPath = $null
+$script:DeltaChangeResults = $null
+
 # Performance metrics tracking
 $script:Metrics = @{
   StartTime            = $null
@@ -2855,6 +2878,740 @@ function Stop-MetricsTimer {
   $script:Metrics.TotalObjectsExported += $SuccessCount
   $script:Metrics.Errors += $FailCount
 }
+
+#region Export Metadata Functions
+
+function Initialize-ExportMetadata {
+  <#
+    .SYNOPSIS
+        Initializes export metadata tracking at the start of an export.
+    .DESCRIPTION
+        Captures server timestamps (both UTC and server local time) and
+        initializes the objects collection for tracking exported items.
+        This metadata is used for delta/incremental exports.
+    .PARAMETER Database
+        The SMO Database object being exported.
+    .PARAMETER ServerName
+        The server name for metadata.
+    .PARAMETER DatabaseName
+        The database name for metadata.
+    .PARAMETER IncludeData
+        Whether data export is enabled.
+  #>
+  param(
+    [Parameter(Mandatory)]
+    $Database,
+    [Parameter(Mandatory)]
+    [string]$ServerName,
+    [Parameter(Mandatory)]
+    [string]$DatabaseName,
+    [bool]$IncludeData = $false
+  )
+
+  # Get server time (for modify_date comparison in delta exports)
+  # SQL Server stores modify_date in server local time
+  $serverTimeQuery = "SELECT GETDATE() AS ServerTime, GETUTCDATE() AS UtcTime"
+  try {
+    $result = $Database.ExecuteWithResults($serverTimeQuery)
+    if ($result.Tables.Count -gt 0 -and $result.Tables[0].Rows.Count -gt 0) {
+      $script:ExportMetadata.ExportStartTimeServer = $result.Tables[0].Rows[0]['ServerTime'].ToString('yyyy-MM-ddTHH:mm:ss.fff')
+      $script:ExportMetadata.ExportStartTimeUtc = $result.Tables[0].Rows[0]['UtcTime'].ToString('yyyy-MM-ddTHH:mm:ss.fffZ')
+    }
+    else {
+      # Fallback to local time if query fails
+      $now = Get-Date
+      $script:ExportMetadata.ExportStartTimeServer = $now.ToString('yyyy-MM-ddTHH:mm:ss.fff')
+      $script:ExportMetadata.ExportStartTimeUtc = $now.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.fffZ')
+    }
+  }
+  catch {
+    # Fallback to local time if query fails
+    $now = Get-Date
+    $script:ExportMetadata.ExportStartTimeServer = $now.ToString('yyyy-MM-ddTHH:mm:ss.fff')
+    $script:ExportMetadata.ExportStartTimeUtc = $now.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.fffZ')
+    Write-Verbose "Could not get server time, using local time: $_"
+  }
+
+  $script:ExportMetadata.ServerName = $ServerName
+  $script:ExportMetadata.DatabaseName = $DatabaseName
+  $script:ExportMetadata.IncludeData = $IncludeData
+  $script:ExportMetadata.Objects = [System.Collections.ArrayList]::new()
+
+  # Determine groupBy setting from config
+  $groupBy = 'single'  # Default
+  if ($script:Config -and $script:Config.ContainsKey('export')) {
+    $exportConfig = $script:Config['export']
+    if ($exportConfig -and $exportConfig.ContainsKey('groupBy')) {
+      $groupBy = $exportConfig['groupBy']
+    }
+  }
+  $script:ExportMetadata.GroupBy = $groupBy
+}
+
+function Add-ExportedObject {
+  <#
+    .SYNOPSIS
+        Records an exported object in the metadata.
+    .DESCRIPTION
+        Adds an entry to the Objects collection tracking what was exported.
+        This is used by delta exports to determine what changed.
+    .PARAMETER Type
+        The object type (Table, View, StoredProcedure, etc.)
+    .PARAMETER Schema
+        The schema name (null for schema-less objects like FileGroups)
+    .PARAMETER Name
+        The object name.
+    .PARAMETER FilePath
+        The relative file path within the export folder.
+  #>
+  param(
+    [Parameter(Mandatory)]
+    [string]$Type,
+    [string]$Schema,
+    [Parameter(Mandatory)]
+    [string]$Name,
+    [Parameter(Mandatory)]
+    [string]$FilePath
+  )
+
+  $entry = [ordered]@{
+    type     = $Type
+    schema   = $Schema
+    name     = $Name
+    filePath = $FilePath
+  }
+
+  [void]$script:ExportMetadata.Objects.Add($entry)
+}
+
+function Save-ExportMetadata {
+  <#
+    .SYNOPSIS
+        Writes the export metadata to _export_metadata.json.
+    .DESCRIPTION
+        Serializes the collected metadata to JSON format and saves
+        it to the export directory. This file is required for delta exports.
+    .PARAMETER OutputDir
+        The export output directory.
+  #>
+  param(
+    [Parameter(Mandatory)]
+    [string]$OutputDir
+  )
+
+  $metadataPath = Join-Path $OutputDir '_export_metadata.json'
+
+  # Build object list by scanning exported files
+  # This approach captures all exported objects regardless of export path (sequential/parallel)
+  $objects = [System.Collections.ArrayList]::new()
+
+  # Map folder names to object types
+  $folderTypeMap = @{
+    '00_FileGroups'             = 'FileGroup'
+    '01_Security'               = 'Security'
+    '02_DatabaseConfiguration'  = 'DatabaseConfiguration'
+    '03_Schemas'                = 'Schema'
+    '04_Sequences'              = 'Sequence'
+    '05_PartitionFunctions'     = 'PartitionFunction'
+    '06_PartitionSchemes'       = 'PartitionScheme'
+    '07_Types'                  = 'UserDefinedType'
+    '08_XmlSchemaCollections'   = 'XmlSchemaCollection'
+    '09_Tables_Create'          = 'Table'
+    '10_Tables_ForeignKeys'     = 'ForeignKey'
+    '11_Indexes'                = 'Index'
+    '12_Defaults'               = 'Default'
+    '13_Rules'                  = 'Rule'
+    '14_Functions'              = 'UserDefinedFunction'
+    '15_StoredProcedures'       = 'StoredProcedure'
+    '16_Views'                  = 'View'
+    '17_Triggers'               = 'Trigger'
+    '18_Synonyms'               = 'Synonym'
+    '19_FullTextCatalogs'       = 'FullTextCatalog'
+    '20_ExternalData'           = 'ExternalData'
+    '21_SecurityPolicies'       = 'SecurityPolicy'
+    '22_Data'                   = 'Data'
+  }
+
+  # Scan each numbered folder
+  $folders = Get-ChildItem -Path $OutputDir -Directory | Where-Object { $_.Name -match '^\d{2}_' }
+
+  foreach ($folder in $folders) {
+    $objectType = if ($folderTypeMap.ContainsKey($folder.Name)) { $folderTypeMap[$folder.Name] } else { $folder.Name -replace '^\d{2}_', '' }
+
+    # Get all SQL files in this folder
+    $sqlFiles = Get-ChildItem -Path $folder.FullName -Filter '*.sql' -Recurse
+
+    foreach ($file in $sqlFiles) {
+      # Parse schema.name from filename (e.g., "dbo.Customers.sql" -> schema=dbo, name=Customers)
+      $baseName = [System.IO.Path]::GetFileNameWithoutExtension($file.Name)
+      $schema = $null
+      $name = $baseName
+
+      # Try to parse schema.name pattern
+      if ($baseName -match '^([^.]+)\.(.+)$') {
+        $schema = $matches[1]
+        $name = $matches[2]
+      }
+
+      # Build relative path from export root
+      $relativePath = $file.FullName.Substring($OutputDir.Length).TrimStart('\', '/')
+
+      $entry = [ordered]@{
+        type     = $objectType
+        schema   = $schema
+        name     = $name
+        filePath = $relativePath
+      }
+
+      [void]$objects.Add($entry)
+    }
+  }
+
+  # Build the final metadata object
+  $metadata = [ordered]@{
+    version                = $script:ExportMetadata.Version
+    exportStartTimeUtc     = $script:ExportMetadata.ExportStartTimeUtc
+    exportStartTimeServer  = $script:ExportMetadata.ExportStartTimeServer
+    serverName             = $script:ExportMetadata.ServerName
+    databaseName           = $script:ExportMetadata.DatabaseName
+    groupBy                = $script:ExportMetadata.GroupBy
+    includeData            = $script:ExportMetadata.IncludeData
+    objectCount            = $objects.Count
+    objects                = $objects
+  }
+
+  # Convert to JSON with proper formatting
+  $json = $metadata | ConvertTo-Json -Depth 10
+
+  # Write to file
+  $json | Out-File -FilePath $metadataPath -Encoding UTF8
+
+  Write-Output "[SUCCESS] Export metadata saved: _export_metadata.json ($($objects.Count) objects tracked)"
+}
+
+function Read-ExportMetadata {
+  <#
+    .SYNOPSIS
+        Reads and parses export metadata from a previous export.
+    .DESCRIPTION
+        Loads the _export_metadata.json file from a previous export directory
+        and returns the parsed metadata object. Used for delta export validation
+        and change detection.
+    .PARAMETER ExportPath
+        Path to the previous export directory.
+    .OUTPUTS
+        Hashtable containing the parsed metadata, or $null if not found.
+  #>
+  param(
+    [Parameter(Mandatory)]
+    [string]$ExportPath
+  )
+
+  $metadataPath = Join-Path $ExportPath '_export_metadata.json'
+
+  if (-not (Test-Path $metadataPath)) {
+    return $null
+  }
+
+  try {
+    $json = Get-Content -Path $metadataPath -Raw -Encoding UTF8
+    $metadata = $json | ConvertFrom-Json -AsHashtable
+    return $metadata
+  }
+  catch {
+    Write-Warning "Failed to parse metadata file: $_"
+    return $null
+  }
+}
+
+function Test-DeltaExportCompatibility {
+  <#
+    .SYNOPSIS
+        Validates that delta export can proceed with the given configuration.
+    .DESCRIPTION
+        Checks that the previous export exists, has valid metadata, uses
+        groupBy:single mode, and optionally warns about server/database mismatches.
+        Delta export requires groupBy:single because grouped files cannot be
+        merged incrementally.
+    .PARAMETER DeltaFromPath
+        Path to the previous export directory.
+    .PARAMETER CurrentConfig
+        The current export configuration hashtable.
+    .PARAMETER CurrentServerName
+        The current server being exported.
+    .PARAMETER CurrentDatabaseName
+        The current database being exported.
+    .OUTPUTS
+        Hashtable with:
+          - IsValid: $true if delta export can proceed
+          - Metadata: The previous export metadata (if valid)
+          - Errors: Array of error messages (if invalid)
+          - Warnings: Array of warning messages
+  #>
+  param(
+    [Parameter(Mandatory)]
+    [string]$DeltaFromPath,
+    [hashtable]$CurrentConfig,
+    [string]$CurrentServerName,
+    [string]$CurrentDatabaseName
+  )
+
+  $result = @{
+    IsValid  = $true
+    Metadata = $null
+    Errors   = [System.Collections.ArrayList]::new()
+    Warnings = [System.Collections.ArrayList]::new()
+  }
+
+  # Check 1: Previous export path exists
+  if (-not (Test-Path $DeltaFromPath)) {
+    [void]$result.Errors.Add("Delta export source path does not exist: $DeltaFromPath")
+    $result.IsValid = $false
+    return $result
+  }
+
+  # Check 2: Metadata file exists and is valid
+  $metadata = Read-ExportMetadata -ExportPath $DeltaFromPath
+  if ($null -eq $metadata) {
+    [void]$result.Errors.Add("Previous export is missing _export_metadata.json file. Delta export requires metadata from the base export. The base export may be from an older version that did not generate metadata.")
+    $result.IsValid = $false
+    return $result
+  }
+  $result.Metadata = $metadata
+
+  # Check 3: Previous export used groupBy: single
+  $previousGroupBy = if ($metadata.ContainsKey('groupBy')) { $metadata['groupBy'] } else { 'single' }
+  if ($previousGroupBy -ne 'single') {
+    [void]$result.Errors.Add("Previous export used groupBy: '$previousGroupBy'. Delta export requires groupBy: single in both exports.")
+    $result.IsValid = $false
+  }
+
+  # Check 4: Current config uses groupBy: single (or default)
+  $currentGroupBy = 'single'  # Default
+  if ($CurrentConfig -and $CurrentConfig.ContainsKey('export')) {
+    $exportConfig = $CurrentConfig['export']
+    if ($exportConfig -and $exportConfig.ContainsKey('groupBy')) {
+      $currentGroupBy = $exportConfig['groupBy']
+    }
+  }
+  if ($currentGroupBy -ne 'single') {
+    [void]$result.Errors.Add("Current config uses groupBy: '$currentGroupBy'. Delta export requires groupBy: single.")
+    $result.IsValid = $false
+  }
+
+  # Check 5: Server/database match (warning only, not blocking)
+  $previousServer = if ($metadata.ContainsKey('serverName')) { $metadata['serverName'] } else { '' }
+  $previousDb = if ($metadata.ContainsKey('databaseName')) { $metadata['databaseName'] } else { '' }
+
+  if ($CurrentServerName -and $previousServer -and ($previousServer -ne $CurrentServerName)) {
+    [void]$result.Warnings.Add("Server name mismatch: previous='$previousServer', current='$CurrentServerName'. Proceeding with delta export.")
+  }
+  if ($CurrentDatabaseName -and $previousDb -and ($previousDb -ne $CurrentDatabaseName)) {
+    [void]$result.Warnings.Add("Database name mismatch: previous='$previousDb', current='$CurrentDatabaseName'. Proceeding with delta export.")
+  }
+
+  return $result
+}
+
+function Get-DatabaseObjectsWithModifyDate {
+  <#
+    .SYNOPSIS
+        Queries the database for all objects with their modify_date.
+    .DESCRIPTION
+        Retrieves current objects from sys.objects with schema name, object name,
+        type, and modify_date. Used for delta export change detection.
+    .PARAMETER Database
+        The SMO Database object to query.
+    .OUTPUTS
+        Hashtable keyed by "Type|Schema|Name" containing object info.
+  #>
+  param(
+    [Parameter(Mandatory)]
+    $Database
+  )
+
+  $query = @"
+SELECT
+    ISNULL(s.name, '') AS SchemaName,
+    o.name AS ObjectName,
+    o.type AS TypeCode,
+    o.type_desc AS TypeDesc,
+    o.modify_date AS ModifyDate
+FROM sys.objects o
+LEFT JOIN sys.schemas s ON o.schema_id = s.schema_id
+WHERE o.is_ms_shipped = 0
+  AND o.type IN ('U', 'V', 'P', 'FN', 'IF', 'TF', 'TR', 'SN', 'SO')
+ORDER BY o.type_desc, s.name, o.name
+"@
+
+  $objects = @{}
+
+  try {
+    $result = $Database.ExecuteWithResults($query)
+    if ($result.Tables.Count -gt 0) {
+      foreach ($row in $result.Tables[0].Rows) {
+        # Map SQL Server type codes to our type names
+        $typeCode = $row['TypeCode'].ToString().Trim()
+        $typeName = switch ($typeCode) {
+          'U'  { 'Table' }
+          'V'  { 'View' }
+          'P'  { 'StoredProcedure' }
+          'FN' { 'UserDefinedFunction' }
+          'IF' { 'UserDefinedFunction' }
+          'TF' { 'UserDefinedFunction' }
+          'TR' { 'Trigger' }
+          'SN' { 'Synonym' }
+          'SO' { 'Sequence' }
+          default { $row['TypeDesc'].ToString() }
+        }
+
+        $schema = $row['SchemaName'].ToString()
+        $name = $row['ObjectName'].ToString()
+        $modifyDate = $row['ModifyDate']
+
+        # Key format matches what we use in metadata
+        $key = "$typeName|$schema|$name"
+
+        $objects[$key] = @{
+          Type       = $typeName
+          Schema     = $schema
+          Name       = $name
+          ModifyDate = $modifyDate
+        }
+      }
+    }
+  }
+  catch {
+    Write-Warning "Failed to query database objects: $_"
+  }
+
+  return $objects
+}
+
+function Compare-ExportObjects {
+  <#
+    .SYNOPSIS
+        Compares current database objects with previous export metadata.
+    .DESCRIPTION
+        Determines which objects are modified, new, deleted, or unchanged
+        by comparing modify_date with the previous export timestamp.
+    .PARAMETER CurrentObjects
+        Hashtable of current objects from Get-DatabaseObjectsWithModifyDate.
+    .PARAMETER PreviousMetadata
+        The previous export metadata hashtable.
+    .OUTPUTS
+        Hashtable with Modified, New, Deleted, Unchanged, and AlwaysExport arrays.
+  #>
+  param(
+    [Parameter(Mandatory)]
+    [hashtable]$CurrentObjects,
+    [Parameter(Mandatory)]
+    [hashtable]$PreviousMetadata
+  )
+
+  $result = @{
+    Modified     = [System.Collections.ArrayList]::new()
+    New          = [System.Collections.ArrayList]::new()
+    Deleted      = [System.Collections.ArrayList]::new()
+    Unchanged    = [System.Collections.ArrayList]::new()
+    AlwaysExport = [System.Collections.ArrayList]::new()
+  }
+
+  # Get previous export timestamp
+  $previousTimestamp = $null
+  if ($PreviousMetadata.ContainsKey('exportStartTimeServer')) {
+    $timestampStr = $PreviousMetadata['exportStartTimeServer']
+    try {
+      $previousTimestamp = [DateTime]::Parse($timestampStr)
+    }
+    catch {
+      Write-Warning "Could not parse previous export timestamp: $timestampStr"
+    }
+  }
+
+  # Build a lookup of previous objects by key
+  $previousObjects = @{}
+  if ($PreviousMetadata.ContainsKey('objects')) {
+    foreach ($obj in $PreviousMetadata['objects']) {
+      $type = $obj['type']
+      $schema = if ($obj['schema']) { $obj['schema'] } else { '' }
+      $name = $obj['name']
+      $key = "$type|$schema|$name"
+      $previousObjects[$key] = $obj
+    }
+  }
+
+  # Compare current objects with previous
+  foreach ($key in $CurrentObjects.Keys) {
+    $current = $CurrentObjects[$key]
+
+    if ($previousObjects.ContainsKey($key)) {
+      # Object exists in both - check if modified
+      $previous = $previousObjects[$key]
+
+      if ($null -eq $previousTimestamp) {
+        # No valid timestamp, treat as modified to be safe
+        [void]$result.Modified.Add($current)
+      }
+      elseif ($current.ModifyDate -gt $previousTimestamp) {
+        # Modified since last export
+        $current['FilePath'] = $previous['filePath']
+        [void]$result.Modified.Add($current)
+      }
+      else {
+        # Unchanged
+        $current['FilePath'] = $previous['filePath']
+        [void]$result.Unchanged.Add($current)
+      }
+    }
+    else {
+      # New object (in current, not in previous)
+      [void]$result.New.Add($current)
+    }
+  }
+
+  # Find deleted objects (in previous, not in current)
+  foreach ($key in $previousObjects.Keys) {
+    if (-not $CurrentObjects.ContainsKey($key)) {
+      $previous = $previousObjects[$key]
+      [void]$result.Deleted.Add(@{
+        Type     = $previous['type']
+        Schema   = $previous['schema']
+        Name     = $previous['name']
+        FilePath = $previous['filePath']
+      })
+    }
+  }
+
+  return $result
+}
+
+function Get-AlwaysExportObjectTypes {
+  <#
+    .SYNOPSIS
+        Returns object types that should always be exported (no modify_date tracking).
+    .DESCRIPTION
+        Some database objects don't have modify_date in sys.objects or are stored
+        differently. These should always be re-exported in delta mode.
+    .OUTPUTS
+        Array of object type names that should always be exported.
+  #>
+
+  # These types don't have reliable modify_date or aren't in sys.objects:
+  # - FileGroups: Database-level, no modify_date
+  # - Schemas: sys.schemas has no modify_date
+  # - DatabaseScopedConfigurations: Not in sys.objects
+  # - Security objects (Roles, Users): Different tracking
+  # - Partition Functions/Schemes: May not have accurate modify_date
+  # - XmlSchemaCollections: Separate system table
+  # - UserDefinedTypes: sys.types
+  # - Defaults/Rules: Legacy objects
+  # - FullTextCatalogs/StopLists: Separate tables
+  # - Assemblies: sys.assemblies
+  # - Certificates/Keys: Security objects
+  # - SecurityPolicies: RLS policies
+  # - PlanGuides: sys.plan_guides
+  # - ExternalData: External sources/formats
+  # - Data: Table data changes constantly
+
+  return @(
+    'FileGroup',
+    'Schema',
+    'DatabaseConfiguration',
+    'Security',
+    'PartitionFunction',
+    'PartitionScheme',
+    'XmlSchemaCollection',
+    'UserDefinedType',
+    'Default',
+    'Rule',
+    'FullTextCatalog',
+    'Assembly',
+    'Certificate',
+    'AsymmetricKey',
+    'SymmetricKey',
+    'SecurityPolicy',
+    'PlanGuide',
+    'ExternalData',
+    'Data',
+    'ForeignKey',  # FKs tracked separately from tables
+    'Index'        # Indexes tracked separately from tables
+  )
+}
+
+function Get-DeltaChangeDetection {
+  <#
+    .SYNOPSIS
+        Performs full delta change detection for an export.
+    .DESCRIPTION
+        Combines object querying, comparison, and always-export logic to produce
+        the final lists of objects to export, copy, and report as deleted.
+    .PARAMETER Database
+        The SMO Database object to query.
+    .PARAMETER PreviousMetadata
+        The previous export metadata hashtable.
+    .OUTPUTS
+        Hashtable with ToExport, ToCopy, Deleted arrays and summary stats.
+  #>
+  param(
+    [Parameter(Mandatory)]
+    $Database,
+    [Parameter(Mandatory)]
+    [hashtable]$PreviousMetadata
+  )
+
+  Write-Output "Performing delta change detection..."
+
+  # Get current objects from database
+  $currentObjects = Get-DatabaseObjectsWithModifyDate -Database $Database
+  Write-Verbose "Found $($currentObjects.Count) objects with modify_date in database"
+
+  # Compare with previous export
+  $comparison = Compare-ExportObjects -CurrentObjects $currentObjects -PreviousMetadata $PreviousMetadata
+
+  # Build always-export list from previous metadata
+  $alwaysExportTypes = Get-AlwaysExportObjectTypes
+  $alwaysExportObjects = [System.Collections.ArrayList]::new()
+
+  if ($PreviousMetadata.ContainsKey('objects')) {
+    foreach ($obj in $PreviousMetadata['objects']) {
+      $type = $obj['type']
+      if ($alwaysExportTypes -contains $type) {
+        [void]$alwaysExportObjects.Add(@{
+          Type     = $type
+          Schema   = $obj['schema']
+          Name     = $obj['name']
+          FilePath = $obj['filePath']
+        })
+      }
+    }
+  }
+
+  # Build final result
+  $result = @{
+    # Objects to export (modified + new + always-export types)
+    ToExport      = [System.Collections.ArrayList]::new()
+    # Objects to copy from previous export (unchanged, except always-export types)
+    ToCopy        = [System.Collections.ArrayList]::new()
+    # Deleted objects (informational)
+    Deleted       = $comparison.Deleted
+    # Statistics
+    ModifiedCount = $comparison.Modified.Count
+    NewCount      = $comparison.New.Count
+    DeletedCount  = $comparison.Deleted.Count
+    UnchangedCount = $comparison.Unchanged.Count
+    AlwaysExportCount = $alwaysExportObjects.Count
+  }
+
+  # Add modified and new to export list
+  foreach ($obj in $comparison.Modified) { [void]$result.ToExport.Add($obj) }
+  foreach ($obj in $comparison.New) { [void]$result.ToExport.Add($obj) }
+  foreach ($obj in $alwaysExportObjects) { [void]$result.ToExport.Add($obj) }
+
+  # Add unchanged to copy list (excluding always-export types which are re-exported)
+  foreach ($obj in $comparison.Unchanged) {
+    if ($alwaysExportTypes -notcontains $obj.Type) {
+      [void]$result.ToCopy.Add($obj)
+    }
+  }
+
+  # Log summary
+  Write-Output "  [INFO] Change detection complete:"
+  Write-Output "    Modified: $($comparison.Modified.Count)"
+  Write-Output "    New: $($comparison.New.Count)"
+  Write-Output "    Deleted: $($comparison.Deleted.Count)"
+  Write-Output "    Unchanged: $($comparison.Unchanged.Count)"
+  Write-Output "    Always re-export: $($alwaysExportObjects.Count)"
+  Write-Output "  [INFO] Will export: $($result.ToExport.Count) objects"
+  Write-Output "  [INFO] Will copy: $($result.ToCopy.Count) files from previous export"
+
+  return $result
+}
+
+function Copy-UnchangedFiles {
+  <#
+    .SYNOPSIS
+        Copies unchanged files from the previous export to the new export directory.
+    .DESCRIPTION
+        For delta exports, unchanged objects don't need to be re-exported.
+        This function copies their files from the previous export to maintain
+        a complete, standalone export folder.
+    .PARAMETER ToCopyList
+        Array of objects to copy, each with FilePath property.
+    .PARAMETER SourceExportPath
+        Path to the previous export directory.
+    .PARAMETER DestinationExportPath
+        Path to the new export directory.
+    .OUTPUTS
+        Hashtable with CopiedCount, FailedCount, and Errors array.
+  #>
+  param(
+    [Parameter(Mandatory)]
+    [array]$ToCopyList,
+    [Parameter(Mandatory)]
+    [string]$SourceExportPath,
+    [Parameter(Mandatory)]
+    [string]$DestinationExportPath
+  )
+
+  $result = @{
+    CopiedCount = 0
+    FailedCount = 0
+    Errors      = [System.Collections.ArrayList]::new()
+  }
+
+  if ($ToCopyList.Count -eq 0) {
+    return $result
+  }
+
+  Write-Output "Copying $($ToCopyList.Count) unchanged files from previous export..."
+
+  foreach ($obj in $ToCopyList) {
+    $filePath = $obj.FilePath
+    if (-not $filePath) {
+      [void]$result.Errors.Add("Object missing FilePath: $($obj.Type) $($obj.Schema).$($obj.Name)")
+      $result.FailedCount++
+      continue
+    }
+
+    $sourcePath = Join-Path $SourceExportPath $filePath
+    $destPath = Join-Path $DestinationExportPath $filePath
+
+    if (-not (Test-Path $sourcePath)) {
+      [void]$result.Errors.Add("Source file not found: $sourcePath")
+      $result.FailedCount++
+      continue
+    }
+
+    try {
+      # Ensure destination directory exists
+      $destDir = Split-Path $destPath -Parent
+      if (-not (Test-Path $destDir)) {
+        New-Item -ItemType Directory -Path $destDir -Force | Out-Null
+      }
+
+      # Copy the file
+      Copy-Item -Path $sourcePath -Destination $destPath -Force
+      $result.CopiedCount++
+    }
+    catch {
+      [void]$result.Errors.Add("Failed to copy $filePath : $_")
+      $result.FailedCount++
+    }
+  }
+
+  Write-Output "  [SUCCESS] Copied $($result.CopiedCount) file(s)"
+  if ($result.FailedCount -gt 0) {
+    Write-Host "  [WARNING] Failed to copy $($result.FailedCount) file(s)" -ForegroundColor Yellow
+    foreach ($err in $result.Errors) {
+      Write-Verbose "    $err"
+    }
+  }
+
+  return $result
+}
+
+#endregion Export Metadata Functions
 
 function Write-ObjectProgress {
   <#
@@ -7181,6 +7938,46 @@ try {
   # Validate dependencies
   Test-Dependencies
 
+  # Early delta export validation (before connection)
+  # Check config file for deltaFrom setting if not specified on command line
+  $effectiveDeltaFrom = $DeltaFrom
+  if (-not $effectiveDeltaFrom -and $config -and $config.ContainsKey('export')) {
+    $exportConfig = $config['export']
+    if ($exportConfig -and $exportConfig.ContainsKey('deltaFrom') -and $exportConfig['deltaFrom']) {
+      $effectiveDeltaFrom = $exportConfig['deltaFrom']
+    }
+  }
+
+  if ($effectiveDeltaFrom) {
+    Write-Output "Validating delta export from: $effectiveDeltaFrom"
+
+    # Perform early validation that doesn't require database connection
+    $deltaValidation = Test-DeltaExportCompatibility `
+      -DeltaFromPath $effectiveDeltaFrom `
+      -CurrentConfig $config `
+      -CurrentServerName $Server `
+      -CurrentDatabaseName $Database
+
+    # Show any warnings
+    foreach ($warning in $deltaValidation.Warnings) {
+      Write-Host "[WARNING] $warning" -ForegroundColor Yellow
+    }
+
+    # Check for blocking errors
+    if (-not $deltaValidation.IsValid) {
+      foreach ($error in $deltaValidation.Errors) {
+        Write-Host "[ERROR] $error" -ForegroundColor Red
+      }
+      throw "Delta export validation failed. See errors above."
+    }
+
+    # Store validated delta metadata for later use
+    $script:DeltaExportEnabled = $true
+    $script:DeltaMetadata = $deltaValidation.Metadata
+    $script:DeltaFromPath = $effectiveDeltaFrom
+    Write-Output "[SUCCESS] Delta export validated. Previous export: $($script:DeltaMetadata.objectCount) objects from $($script:DeltaMetadata.exportStartTimeServer)"
+  }
+
   # Test database connection
   if (-not (Test-DatabaseConnection -ServerName $Server -DatabaseName $Database -Cred $Credential -Config $config -Timeout $effectiveConnectionTimeout)) {
     exit 1
@@ -7284,6 +8081,18 @@ For more details, see: https://go.microsoft.com/fwlink/?linkid=2226722
 
   Write-Output "[SUCCESS] Connected to $Server\$Database"
   Write-Log "Connected successfully to $Server\$Database" -Severity INFO
+
+  # Initialize export metadata for delta export support
+  Initialize-ExportMetadata -Database $smDatabase -ServerName $Server -DatabaseName $Database -IncludeData $IncludeData
+
+  # Log delta export settings if enabled (validation was done earlier before connection)
+  if ($script:DeltaExportEnabled) {
+    Write-Log "Delta export enabled from $script:DeltaFromPath with $($script:DeltaMetadata.objectCount) objects" -Severity INFO
+
+    # Perform change detection
+    $script:DeltaChangeResults = Get-DeltaChangeDetection -Database $smDatabase -PreviousMetadata $script:DeltaMetadata
+    Write-Log "Delta change detection: $($script:DeltaChangeResults.ToExport.Count) to export, $($script:DeltaChangeResults.ToCopy.Count) to copy" -Severity INFO
+  }
 
   # Record connection time
   if ($connectionTimer) {
@@ -7422,6 +8231,24 @@ For more details, see: https://go.microsoft.com/fwlink/?linkid=2226722
         AvgMsPerObject = 0
       }
     }
+  }
+
+  # Save export metadata (required for delta exports)
+  Save-ExportMetadata -OutputDir $exportDir
+
+  # Copy unchanged files from previous export if delta mode is active
+  if ($script:DeltaExportEnabled -and $script:DeltaChangeResults -and $script:DeltaChangeResults.ToCopy.Count -gt 0) {
+    Write-Output ''
+    Write-Output 'Copying unchanged objects from previous export...'
+    $copyResult = Copy-UnchangedFiles `
+      -ToCopyList $script:DeltaChangeResults.ToCopy `
+      -SourceExportPath $script:DeltaFromPath `
+      -DestinationExportPath $exportDir
+    Write-Output "  [SUCCESS] Copied $($copyResult.CopiedCount) unchanged file(s)"
+    if ($copyResult.FailedCount -gt 0) {
+      Write-Output "  [WARNING] Failed to copy $($copyResult.FailedCount) file(s)"
+    }
+    Write-Log "Delta export copied $($copyResult.CopiedCount) unchanged files" -Severity INFO
   }
 
   # Create deployment manifest
