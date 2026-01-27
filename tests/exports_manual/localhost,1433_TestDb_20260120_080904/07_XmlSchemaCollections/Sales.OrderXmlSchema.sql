@@ -1,2 +1,0 @@
-CREATE XML SCHEMA COLLECTION [Sales].[OrderXmlSchema] AS N'<xsd:schema xmlns:xsd="http://www.w3.org/2001/XMLSchema"><xsd:element name="Order"><xsd:complexType><xsd:complexContent><xsd:restriction base="xsd:anyType"><xsd:sequence><xsd:element name="OrderId" type="xsd:int" /><xsd:element name="OrderDate" type="xsd:dateTime" /><xsd:element name="TotalAmount" type="xsd:decimal" minOccurs="0" /></xsd:sequence></xsd:restriction></xsd:complexContent></xsd:complexType></xsd:element></xsd:schema>'
-GO

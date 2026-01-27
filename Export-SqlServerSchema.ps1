@@ -132,7 +132,10 @@ param(
 
   [Parameter(HelpMessage = 'Maximum number of parallel workers (1-20, default: 5). Overrides config file.')]
   [ValidateRange(1, 20)]
-  [int]$MaxWorkers = 0
+  [int]$MaxWorkers = 0,
+
+  [Parameter(HelpMessage = 'Path to previous export for delta/incremental export. Only changed objects will be re-exported.')]
+  [string]$DeltaFrom
 )
 
 $ErrorActionPreference = 'Stop'
@@ -285,40 +288,44 @@ $script:ParallelWorkerScriptBlock = {
             $smoObj = $table
           }
         }
+        elseif ($workItem.ObjectType -eq 'TableData') {
+          # For TableData, fetch the table object (data scripting options are set separately)
+          $smoObj = $db.Tables[$objId.Name, $objId.Schema]
+        }
         else {
           # Standard object lookup
           switch ($workItem.ObjectType) {
-            'Table'                    { $smoObj = $db.Tables[$objId.Name, $objId.Schema] }
-            'View'                     { $smoObj = $db.Views[$objId.Name, $objId.Schema] }
-            'StoredProcedure'          { $smoObj = $db.StoredProcedures[$objId.Name, $objId.Schema] }
-            'UserDefinedFunction'      { $smoObj = $db.UserDefinedFunctions[$objId.Name, $objId.Schema] }
-            'Schema'                   { $smoObj = $db.Schemas[$objId.Name] }
-            'Sequence'                 { $smoObj = $db.Sequences[$objId.Name, $objId.Schema] }
-            'Synonym'                  { $smoObj = $db.Synonyms[$objId.Name, $objId.Schema] }
-            'UserDefinedType'          { $smoObj = $db.UserDefinedTypes[$objId.Name, $objId.Schema] }
-            'UserDefinedDataType'      { $smoObj = $db.UserDefinedDataTypes[$objId.Name, $objId.Schema] }
-            'UserDefinedTableType'     { $smoObj = $db.UserDefinedTableTypes[$objId.Name, $objId.Schema] }
-            'XmlSchemaCollection'      { $smoObj = $db.XmlSchemaCollections[$objId.Name, $objId.Schema] }
-            'PartitionFunction'        { $smoObj = $db.PartitionFunctions[$objId.Name] }
-            'PartitionScheme'          { $smoObj = $db.PartitionSchemes[$objId.Name] }
-            'Default'                  { $smoObj = $db.Defaults[$objId.Name, $objId.Schema] }
-            'Rule'                     { $smoObj = $db.Rules[$objId.Name, $objId.Schema] }
-            'DatabaseTrigger'          { $smoObj = $db.Triggers[$objId.Name] }
-            'FullTextCatalog'          { $smoObj = $db.FullTextCatalogs[$objId.Name] }
-            'FullTextStopList'         { $smoObj = $db.FullTextStopLists[$objId.Name] }
-            'SearchPropertyList'       { $smoObj = $db.SearchPropertyLists[$objId.Name] }
-            'SecurityPolicy'           { $smoObj = $db.SecurityPolicies[$objId.Name, $objId.Schema] }
-            'AsymmetricKey'            { $smoObj = $db.AsymmetricKeys[$objId.Name] }
-            'Certificate'              { $smoObj = $db.Certificates[$objId.Name] }
-            'SymmetricKey'             { $smoObj = $db.SymmetricKeys[$objId.Name] }
-            'ApplicationRole'          { $smoObj = $db.ApplicationRoles[$objId.Name] }
-            'DatabaseRole'             { $smoObj = $db.Roles[$objId.Name] }
-            'User'                     { $smoObj = $db.Users[$objId.Name] }
-            'PlanGuide'                { $smoObj = $db.PlanGuides[$objId.Name] }
-            'ExternalDataSource'       { $smoObj = $db.ExternalDataSources[$objId.Name] }
-            'ExternalFileFormat'       { $smoObj = $db.ExternalFileFormats[$objId.Name] }
-            'UserDefinedAggregate'     { $smoObj = $db.UserDefinedAggregates[$objId.Name, $objId.Schema] }
-            'SqlAssembly'              { $smoObj = $db.Assemblies[$objId.Name] }
+            'Table' { $smoObj = $db.Tables[$objId.Name, $objId.Schema] }
+            'View' { $smoObj = $db.Views[$objId.Name, $objId.Schema] }
+            'StoredProcedure' { $smoObj = $db.StoredProcedures[$objId.Name, $objId.Schema] }
+            'UserDefinedFunction' { $smoObj = $db.UserDefinedFunctions[$objId.Name, $objId.Schema] }
+            'Schema' { $smoObj = $db.Schemas[$objId.Name] }
+            'Sequence' { $smoObj = $db.Sequences[$objId.Name, $objId.Schema] }
+            'Synonym' { $smoObj = $db.Synonyms[$objId.Name, $objId.Schema] }
+            'UserDefinedType' { $smoObj = $db.UserDefinedTypes[$objId.Name, $objId.Schema] }
+            'UserDefinedDataType' { $smoObj = $db.UserDefinedDataTypes[$objId.Name, $objId.Schema] }
+            'UserDefinedTableType' { $smoObj = $db.UserDefinedTableTypes[$objId.Name, $objId.Schema] }
+            'XmlSchemaCollection' { $smoObj = $db.XmlSchemaCollections[$objId.Name, $objId.Schema] }
+            'PartitionFunction' { $smoObj = $db.PartitionFunctions[$objId.Name] }
+            'PartitionScheme' { $smoObj = $db.PartitionSchemes[$objId.Name] }
+            'Default' { $smoObj = $db.Defaults[$objId.Name, $objId.Schema] }
+            'Rule' { $smoObj = $db.Rules[$objId.Name, $objId.Schema] }
+            'DatabaseTrigger' { $smoObj = $db.Triggers[$objId.Name] }
+            'FullTextCatalog' { $smoObj = $db.FullTextCatalogs[$objId.Name] }
+            'FullTextStopList' { $smoObj = $db.FullTextStopLists[$objId.Name] }
+            'SearchPropertyList' { $smoObj = $db.SearchPropertyLists[$objId.Name] }
+            'SecurityPolicy' { $smoObj = $db.SecurityPolicies[$objId.Name, $objId.Schema] }
+            'AsymmetricKey' { $smoObj = $db.AsymmetricKeys[$objId.Name] }
+            'Certificate' { $smoObj = $db.Certificates[$objId.Name] }
+            'SymmetricKey' { $smoObj = $db.SymmetricKeys[$objId.Name] }
+            'ApplicationRole' { $smoObj = $db.ApplicationRoles[$objId.Name] }
+            'DatabaseRole' { $smoObj = $db.Roles[$objId.Name] }
+            'User' { $smoObj = $db.Users[$objId.Name] }
+            'PlanGuide' { $smoObj = $db.PlanGuides[$objId.Name] }
+            'ExternalDataSource' { $smoObj = $db.ExternalDataSources[$objId.Name] }
+            'ExternalFileFormat' { $smoObj = $db.ExternalFileFormats[$objId.Name] }
+            'UserDefinedAggregate' { $smoObj = $db.UserDefinedAggregates[$objId.Name, $objId.Schema] }
+            'SqlAssembly' { $smoObj = $db.Assemblies[$objId.Name] }
           }
         }
 
@@ -337,7 +344,8 @@ $script:ParallelWorkerScriptBlock = {
       $scripter.Options.FileName = $workItem.OutputPath
       $scripter.Options.AppendToFile = $workItem.AppendToFile
       $scripter.Options.AnsiFile = $true
-      $scripter.Options.IncludeHeaders = $true
+      $scripter.Options.IncludeHeaders = $false  # Match sequential export (no date-stamped headers)
+      $scripter.Options.NoCollation = $true       # Match sequential export (omit explicit collation)
       $scripter.Options.ScriptBatchTerminator = $true
       $scripter.Options.TargetServerVersion = $TargetVersion
 
@@ -353,14 +361,24 @@ $script:ParallelWorkerScriptBlock = {
 
       # Handle special cases
       if ($workItem.SpecialHandler -eq 'SecurityPolicy') {
-        # Write custom header first
-        $header = "-- Row-Level Security Policy`r`n-- NOTE: Ensure predicate functions exist before running`r`nGO`r`n"
-        [System.IO.File]::WriteAllText($workItem.OutputPath, $header, [System.Text.Encoding]::UTF8)
+        # Write custom header first (matching sequential format)
+        # Build the full name from the Objects array
+        $policyName = if ($workItem.Objects.Count -gt 0) {
+          "$($workItem.Objects[0].Schema).$($workItem.Objects[0].Name)"
+        }
+        else { "Unknown" }
+        $header = "-- Row-Level Security Policy: $policyName`r`n-- NOTE: Ensure predicate functions are created before applying this policy`r`n`r`n"
+        [System.IO.File]::WriteAllText($workItem.OutputPath, $header, (New-Object System.Text.UTF8Encoding $false))
         $scripter.Options.AppendToFile = $true
       }
 
       # Script the objects
       $scripter.EnumScript($smoObjects.ToArray()) | Out-Null
+
+      # Add trailing newline for SecurityPolicy to match sequential format
+      if ($workItem.SpecialHandler -eq 'SecurityPolicy') {
+        [System.IO.File]::AppendAllText($workItem.OutputPath, "`r`n", (New-Object System.Text.UTF8Encoding $false))
+      }
 
       $result.Success = $true
     }
@@ -619,7 +637,9 @@ function Build-WorkItems-Sequences {
 
   if (Test-ObjectTypeExcluded -ObjectType 'Sequences') { return @() }
 
-  $sequences = @($Database.Sequences | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) })
+  $allSequences = @($Database.Sequences | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) })
+  # Apply delta filtering (Sequences have modify_date)
+  $sequences = @(Get-DeltaFilteredCollection -Collection $allSequences -ObjectType 'Sequence')
   if ($sequences.Count -eq 0) { return @() }
 
   $workItems = @()
@@ -778,9 +798,9 @@ function Build-WorkItems-UserDefinedTypes {
 
   # Collect all type variations
   $allTypes = @()
-  try { $allTypes += @($Database.UserDefinedDataTypes | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) }) } catch { }
-  try { $allTypes += @($Database.UserDefinedTableTypes | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) }) } catch { }
-  try { $allTypes += @($Database.UserDefinedTypes | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) }) } catch { }
+  try { $allTypes += @($Database.UserDefinedDataTypes | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) }) } catch { Write-Verbose "Could not access UserDefinedDataTypes: $_" }
+  try { $allTypes += @($Database.UserDefinedTableTypes | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) }) } catch { Write-Verbose "Could not access UserDefinedTableTypes: $_" }
+  try { $allTypes += @($Database.UserDefinedTypes | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) }) } catch { Write-Verbose "Could not access UserDefinedTypes (CLR types): $_" }
 
   if ($allTypes.Count -eq 0) { return @() }
 
@@ -916,7 +936,9 @@ function Build-WorkItems-Tables {
 
   if (Test-ObjectTypeExcluded -ObjectType 'Tables') { return @() }
 
-  $tables = @($Database.Tables | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) })
+  $allTables = @($Database.Tables | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) })
+  # Apply delta filtering (Tables have modify_date)
+  $tables = @(Get-DeltaFilteredCollection -Collection $allTables -ObjectType 'Table')
   if ($tables.Count -eq 0) { return @() }
 
   $workItems = @()
@@ -1022,12 +1044,12 @@ function Build-WorkItems-ForeignKeys {
 
   # For FKs, we script tables with FK-only options
   $scriptOpts = @{
-    DriPrimaryKey                    = $false
-    DriForeignKeys                   = $true
-    DriUniqueKeys                    = $false
-    DriChecks                        = $false
-    DriDefaults                      = $false
-    Indexes                          = $false
+    DriPrimaryKey                      = $false
+    DriForeignKeys                     = $true
+    DriUniqueKeys                      = $false
+    DriChecks                          = $false
+    DriDefaults                        = $false
+    Indexes                            = $false
     SchemaQualifyForeignKeysReferences = $true
   }
 
@@ -1100,8 +1122,8 @@ function Build-WorkItems-Indexes {
       foreach ($idx in $table.Indexes) {
         # Skip system indexes, primary key indexes, and unique key indexes (same as sequential)
         if (-not $idx.IsSystemObject -and
-            -not ($idx.IndexKeyType -eq [Microsoft.SqlServer.Management.Smo.IndexKeyType]::DriPrimaryKey) -and
-            -not ($idx.IndexKeyType -eq [Microsoft.SqlServer.Management.Smo.IndexKeyType]::DriUniqueKey)) {
+          -not ($idx.IndexKeyType -eq [Microsoft.SqlServer.Management.Smo.IndexKeyType]::DriPrimaryKey) -and
+          -not ($idx.IndexKeyType -eq [Microsoft.SqlServer.Management.Smo.IndexKeyType]::DriUniqueKey)) {
           $indexList += @{
             TableSchema = $table.Schema
             TableName   = $table.Name
@@ -1375,12 +1397,14 @@ function Build-WorkItems-Functions {
 
   if (Test-ObjectTypeExcluded -ObjectType 'Functions') { return @() }
 
-  $functions = @($Database.UserDefinedFunctions | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) })
+  $allFunctions = @($Database.UserDefinedFunctions | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) })
+  # Apply delta filtering (UserDefinedFunctions have modify_date)
+  $functions = @(Get-DeltaFilteredCollection -Collection $allFunctions -ObjectType 'UserDefinedFunction')
   if ($functions.Count -eq 0) { return @() }
 
   $workItems = @()
   $groupBy = Get-ObjectGroupingMode -ObjectType 'Functions'
-  $baseDir = Join-Path $OutputDir '14_Programmability'
+  $baseDir = Join-Path $OutputDir '14_Programmability' '02_Functions'
   $scriptOpts = @{}
 
   switch ($groupBy) {
@@ -1444,6 +1468,7 @@ function Build-WorkItems-UserDefinedAggregates {
     $aggregates = @($Database.UserDefinedAggregates | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) })
   }
   catch {
+    Write-Verbose "Could not access UserDefinedAggregates (may not be supported on this SQL Server version): $_"
     return @()
   }
 
@@ -1451,7 +1476,7 @@ function Build-WorkItems-UserDefinedAggregates {
 
   $workItems = @()
   $groupBy = Get-ObjectGroupingMode -ObjectType 'UserDefinedAggregates'
-  $baseDir = Join-Path $OutputDir '14_Programmability'
+  $baseDir = Join-Path $OutputDir '14_Programmability' '02_Functions'
   $scriptOpts = @{}
 
   switch ($groupBy) {
@@ -1511,12 +1536,14 @@ function Build-WorkItems-StoredProcedures {
 
   if (Test-ObjectTypeExcluded -ObjectType 'StoredProcedures') { return @() }
 
-  $procs = @($Database.StoredProcedures | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) })
+  $allProcs = @($Database.StoredProcedures | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) })
+  # Apply delta filtering (StoredProcedures have modify_date)
+  $procs = @(Get-DeltaFilteredCollection -Collection $allProcs -ObjectType 'StoredProcedure')
   if ($procs.Count -eq 0) { return @() }
 
   $workItems = @()
   $groupBy = Get-ObjectGroupingMode -ObjectType 'StoredProcedures'
-  $baseDir = Join-Path $OutputDir '14_Programmability'
+  $baseDir = Join-Path $OutputDir '14_Programmability' '03_StoredProcedures'
   $scriptOpts = @{}
 
   switch ($groupBy) {
@@ -1629,10 +1656,13 @@ function Build-WorkItems-TableTriggers {
   foreach ($table in $tables) {
     if ($table.Triggers.Count -gt 0) {
       foreach ($trigger in $table.Triggers) {
-        $triggerList += @{
-          TableSchema  = $table.Schema
-          TableName    = $table.Name
-          TriggerName  = $trigger.Name
+        # Apply delta filtering (Triggers have modify_date)
+        if (Test-ShouldExportInDelta -ObjectType 'Trigger' -Schema $table.Schema -Name $trigger.Name) {
+          $triggerList += @{
+            TableSchema = $table.Schema
+            TableName   = $table.Name
+            TriggerName = $trigger.Name
+          }
         }
       }
     }
@@ -1706,12 +1736,14 @@ function Build-WorkItems-Views {
 
   if (Test-ObjectTypeExcluded -ObjectType 'Views') { return @() }
 
-  $views = @($Database.Views | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) })
+  $allViews = @($Database.Views | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) })
+  # Apply delta filtering (Views have modify_date)
+  $views = @(Get-DeltaFilteredCollection -Collection $allViews -ObjectType 'View')
   if ($views.Count -eq 0) { return @() }
 
   $workItems = @()
   $groupBy = Get-ObjectGroupingMode -ObjectType 'Views'
-  $baseDir = Join-Path $OutputDir '14_Programmability'
+  $baseDir = Join-Path $OutputDir '14_Programmability' '05_Views'
   $scriptOpts = @{ DriAll = $false }
 
   switch ($groupBy) {
@@ -1770,7 +1802,9 @@ function Build-WorkItems-Synonyms {
 
   if (Test-ObjectTypeExcluded -ObjectType 'Synonyms') { return @() }
 
-  $synonyms = @($Database.Synonyms | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) })
+  $allSynonyms = @($Database.Synonyms | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) })
+  # Apply delta filtering (Synonyms have modify_date)
+  $synonyms = @(Get-DeltaFilteredCollection -Collection $allSynonyms -ObjectType 'Synonym')
   if ($synonyms.Count -eq 0) { return @() }
 
   $workItems = @()
@@ -1838,6 +1872,7 @@ function Build-WorkItems-FullTextCatalogs {
     $ftCatalogs = @($Database.FullTextCatalogs | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $null -Name $_.Name) })
   }
   catch {
+    Write-Verbose "Could not access FullTextCatalogs (may not be supported on this SQL Server version): $_"
     return @()
   }
 
@@ -1891,6 +1926,7 @@ function Build-WorkItems-FullTextStopLists {
     $ftStopLists = @($Database.FullTextStopLists | Where-Object { -not (Test-ObjectExcluded -Schema $null -Name $_.Name) })
   }
   catch {
+    Write-Verbose "Could not access FullTextStopLists (may not be supported on this SQL Server version): $_"
     return @()
   }
 
@@ -1943,6 +1979,7 @@ function Build-WorkItems-ExternalDataSources {
     $extDS = @($Database.ExternalDataSources | Where-Object { -not (Test-ObjectExcluded -Schema $null -Name $_.Name) })
   }
   catch {
+    Write-Verbose "Could not access ExternalDataSources (may not be supported on this SQL Server version): $_"
     return @()
   }
 
@@ -1995,6 +2032,7 @@ function Build-WorkItems-ExternalFileFormats {
     $extFF = @($Database.ExternalFileFormats | Where-Object { -not (Test-ObjectExcluded -Schema $null -Name $_.Name) })
   }
   catch {
+    Write-Verbose "Could not access ExternalFileFormats (may not be supported on this SQL Server version): $_"
     return @()
   }
 
@@ -2047,6 +2085,7 @@ function Build-WorkItems-SearchPropertyLists {
     $searchPropLists = @($Database.SearchPropertyLists | Where-Object { -not (Test-ObjectExcluded -Schema $null -Name $_.Name) })
   }
   catch {
+    Write-Verbose "Could not access SearchPropertyLists (may not be supported on this SQL Server version): $_"
     return @()
   }
 
@@ -2099,6 +2138,7 @@ function Build-WorkItems-PlanGuides {
     $planGuides = @($Database.PlanGuides | Where-Object { -not (Test-ObjectExcluded -Schema $null -Name $_.Name) })
   }
   catch {
+    Write-Verbose "Could not access PlanGuides (may not be supported on this SQL Server version): $_"
     return @()
   }
 
@@ -2164,7 +2204,7 @@ function Build-WorkItems-Security {
           -ScriptingOptions @{}
       }
     }
-    catch { }
+    catch { Write-Verbose "Could not access Certificates collection: $_" }
   }
 
   # Asymmetric Keys
@@ -2181,7 +2221,7 @@ function Build-WorkItems-Security {
           -ScriptingOptions @{}
       }
     }
-    catch { }
+    catch { Write-Verbose "Could not access AsymmetricKeys collection: $_" }
   }
 
   # Symmetric Keys
@@ -2198,7 +2238,7 @@ function Build-WorkItems-Security {
           -ScriptingOptions @{}
       }
     }
-    catch { }
+    catch { Write-Verbose "Could not access SymmetricKeys collection: $_" }
   }
 
   # Database Roles - respect grouping mode (default: single to match sequential export)
@@ -2234,7 +2274,7 @@ function Build-WorkItems-Security {
         }
       }
     }
-    catch { }
+    catch { Write-Verbose "Could not access Roles collection: $_" }
 
     # Application Roles
     try {
@@ -2265,7 +2305,7 @@ function Build-WorkItems-Security {
         }
       }
     }
-    catch { }
+    catch { Write-Verbose "Could not access ApplicationRoles collection: $_" }
   }
 
   # Database Users - respect grouping mode (default: single to match sequential export)
@@ -2301,7 +2341,7 @@ function Build-WorkItems-Security {
         }
       }
     }
-    catch { }
+    catch { Write-Verbose "Could not access Users collection: $_" }
   }
 
   return $workItems
@@ -2324,6 +2364,7 @@ function Build-WorkItems-SecurityPolicies {
     $secPolicies = @($Database.SecurityPolicies | Where-Object { -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) })
   }
   catch {
+    Write-Verbose "Could not access SecurityPolicies (may not be supported on this SQL Server version): $_"
     return @()
   }
 
@@ -2391,6 +2432,10 @@ function Build-WorkItems-Data {
   <#
   .SYNOPSIS
   Builds work items for table data export if -IncludeData is enabled.
+
+  .DESCRIPTION
+  Pre-fetches row counts for all tables in a single query to avoid N round-trips.
+  Only includes tables that have data (skips empty tables for efficiency).
   #>
   param($Database, $OutputDir)
 
@@ -2398,9 +2443,39 @@ function Build-WorkItems-Data {
   if (Test-ObjectTypeExcluded -ObjectType 'Data') { return @() }
 
   $tables = @($Database.Tables | Where-Object {
-    -not $_.IsSystemObject -and
-    -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name)
-  })
+      -not $_.IsSystemObject -and
+      -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name)
+    })
+
+  if ($tables.Count -eq 0) { return @() }
+
+  # OPTIMIZATION: Pre-fetch row counts in a single query (same as Export-TableData)
+  # This reduces N database round-trips to just 1
+  $rowCountQuery = @"
+SELECT
+    s.name AS SchemaName,
+    t.name AS TableName,
+    SUM(p.rows) AS TableRowCount
+FROM sys.tables t
+INNER JOIN sys.schemas s ON t.schema_id = s.schema_id
+INNER JOIN sys.partitions p ON t.object_id = p.object_id
+WHERE p.index_id IN (0, 1)  -- Heap or clustered index
+  AND t.is_ms_shipped = 0
+GROUP BY s.name, t.name
+HAVING SUM(p.rows) > 0
+"@
+  $rowCountData = $Database.ExecuteWithResults($rowCountQuery)
+  $tablesWithData = @{}
+  foreach ($row in $rowCountData.Tables[0].Rows) {
+    $key = "$($row.SchemaName).$($row.TableName)"
+    $tablesWithData[$key] = [long]$row.TableRowCount
+  }
+
+  # Filter to only tables with data
+  $tables = @($tables | Where-Object {
+      $key = "$($_.Schema).$($_.Name)"
+      $tablesWithData.ContainsKey($key)
+    })
 
   if ($tables.Count -eq 0) { return @() }
 
@@ -2414,7 +2489,7 @@ function Build-WorkItems-Data {
       foreach ($table in $tables) {
         $safeSchema = Get-SafeFileName $table.Schema
         $safeName = Get-SafeFileName $table.Name
-        $fileName = "Data.$safeSchema.$safeName.sql"
+        $fileName = "$safeSchema.$safeName.data.sql"
         $workItems += New-ExportWorkItem `
           -ObjectType 'TableData' `
           -GroupingMode 'single' `
@@ -2538,6 +2613,247 @@ function Build-ParallelWorkQueue {
   return $workQueue
 }
 
+function Export-NonParallelizableObjects {
+  <#
+  .SYNOPSIS
+      Exports objects that cannot be parallelized (FileGroups, DatabaseScopedConfigurations, Credentials).
+  .DESCRIPTION
+      These objects require StringBuilder-based generation for SQLCMD variable support
+      or security reasons. This function is called by both sequential and parallel export
+      modes to ensure identical output.
+  .PARAMETER Database
+      The SMO Database object to export from.
+  .PARAMETER OutputDir
+      The output directory where scripts will be exported.
+  .PARAMETER Quiet
+      If true, suppress progress messages (used when called from parallel mode).
+  .OUTPUTS
+      Hashtable with counts of exported objects.
+  #>
+  [CmdletBinding()]
+  param(
+    [Parameter(Mandatory)]
+    $Database,
+
+    [Parameter(Mandatory)]
+    [string]$OutputDir,
+
+    [switch]$Quiet
+  )
+
+  $results = @{
+    FileGroups                   = 0
+    DatabaseScopedConfigurations = 0
+    DatabaseScopedCredentials    = 0
+  }
+
+  # FileGroups (folder 00_FileGroups) - uses StringBuilder for SQLCMD variable support
+  if (-not (Test-ObjectTypeExcluded -ObjectType 'FileGroups')) {
+    try {
+      $fileGroups = @($Database.FileGroups | Where-Object { $_.Name -ne 'PRIMARY' })
+      if ($fileGroups.Count -gt 0) {
+        $fgFilePath = Join-Path $OutputDir '00_FileGroups' '001_FileGroups.sql'
+        $fgScript = New-Object System.Text.StringBuilder
+        [void]$fgScript.AppendLine("-- FileGroups and Files")
+        [void]$fgScript.AppendLine("-- WARNING: Physical file paths and sizes are environment-specific")
+        [void]$fgScript.AppendLine("-- Review and update via config file before applying to target environment")
+        [void]$fgScript.AppendLine("-- Uses SQLCMD variables: `$(FG_NAME_PATH_FILE), `$(FG_NAME_SIZE), `$(FG_NAME_GROWTH)")
+        [void]$fgScript.AppendLine("")
+
+        foreach ($fg in $fileGroups) {
+          # Build metadata entry for this FileGroup
+          $fgMetadata = [ordered]@{
+            name       = $fg.Name
+            type       = $fg.FileGroupType.ToString()
+            isReadOnly = $fg.IsReadOnly
+            files      = [System.Collections.ArrayList]::new()
+          }
+
+          [void]$fgScript.AppendLine("-- FileGroup: $($fg.Name)")
+          [void]$fgScript.AppendLine("-- Type: $($fg.FileGroupType)")
+
+          if ($fg.FileGroupType -eq 'RowsFileGroup') {
+            [void]$fgScript.AppendLine("ALTER DATABASE CURRENT ADD FILEGROUP [$($fg.Name)];")
+          }
+          else {
+            [void]$fgScript.AppendLine("ALTER DATABASE CURRENT ADD FILEGROUP [$($fg.Name)] CONTAINS FILESTREAM;")
+          }
+          [void]$fgScript.AppendLine("GO")
+
+          if ($fg.IsReadOnly) {
+            [void]$fgScript.AppendLine("ALTER DATABASE CURRENT MODIFY FILEGROUP [$($fg.Name)] READONLY;")
+            [void]$fgScript.AppendLine("GO")
+          }
+          [void]$fgScript.AppendLine("")
+
+          # Script files in the filegroup
+          $fileIdx = 0
+          foreach ($file in $fg.Files) {
+            $fileIdx++
+            $sqlcmdVarBase = $fg.Name
+            $fileName = Split-Path $file.FileName -Leaf
+            if (-not $fileName) { $fileName = "$($file.Name).ndf" }
+
+            # Build variable names (consistent with path variables)
+            $pathVar = if ($fileIdx -eq 1) { "${sqlcmdVarBase}_PATH_FILE" } else { "${sqlcmdVarBase}_PATH_FILE${fileIdx}" }
+            $sizeVar = if ($fileIdx -eq 1) { "${sqlcmdVarBase}_SIZE" } else { "${sqlcmdVarBase}_SIZE${fileIdx}" }
+            $growthVar = if ($fileIdx -eq 1) { "${sqlcmdVarBase}_GROWTH" } else { "${sqlcmdVarBase}_GROWTH${fileIdx}" }
+
+            # Store original values in metadata
+            $fileMetadata = [ordered]@{
+              name               = $file.Name
+              originalPath       = $file.FileName
+              originalFileName   = $fileName
+              originalSizeKB     = $file.Size
+              originalGrowthKB   = if ($file.GrowthType -eq 'KB') { $file.Growth } else { $null }
+              originalGrowthPct  = if ($file.GrowthType -ne 'KB') { $file.Growth } else { $null }
+              originalGrowthType = $file.GrowthType.ToString()
+              originalMaxSizeKB  = $file.MaxSize
+              pathVariable       = $pathVar
+              sizeVariable       = $sizeVar
+              growthVariable     = $growthVar
+            }
+            [void]$fgMetadata.files.Add($fileMetadata)
+
+            [void]$fgScript.AppendLine("-- File: $($file.Name)")
+            [void]$fgScript.AppendLine("-- Original Path: $($file.FileName)")
+            [void]$fgScript.AppendLine("-- Original Size: $($file.Size)KB, Growth: $($file.Growth)$(if ($file.GrowthType -eq 'KB') {'KB'} else {'%'}), MaxSize: $(if ($file.MaxSize -eq -1) {'UNLIMITED'} else {$file.MaxSize + 'KB'})")
+            [void]$fgScript.AppendLine("-- NOTE: Uses SQLCMD variables for path, size, and growth")
+            [void]$fgScript.AppendLine("-- Configure via fileGroupPathMapping and fileGroupFileSizeDefaults in config file")
+            [void]$fgScript.AppendLine("ALTER DATABASE CURRENT ADD FILE (")
+            [void]$fgScript.AppendLine("    NAME = N'$($file.Name)',")
+            [void]$fgScript.AppendLine("    FILENAME = N'`$($pathVar)',")
+            [void]$fgScript.AppendLine("    SIZE = `$($sizeVar)")
+            [void]$fgScript.AppendLine("    , FILEGROWTH = `$($growthVar)")
+
+            if ($file.MaxSize -gt 0) {
+              [void]$fgScript.AppendLine("    , MAXSIZE = $($file.MaxSize)KB")
+            }
+            elseif ($file.MaxSize -eq -1) {
+              [void]$fgScript.AppendLine("    , MAXSIZE = UNLIMITED")
+            }
+
+            [void]$fgScript.AppendLine(") TO FILEGROUP [$($fg.Name)];")
+            [void]$fgScript.AppendLine("GO")
+            [void]$fgScript.AppendLine("")
+          }
+
+          # Add FileGroup metadata to export metadata
+          [void]$script:ExportMetadata.FileGroups.Add($fgMetadata)
+        }
+
+        # Ensure directory exists
+        $fgDir = Split-Path $fgFilePath -Parent
+        if (-not (Test-Path $fgDir)) {
+          New-Item -ItemType Directory -Path $fgDir -Force | Out-Null
+        }
+
+        $fgScript.ToString() | Out-File -FilePath $fgFilePath -Encoding UTF8
+        $results.FileGroups = $fileGroups.Count
+        if (-not $Quiet) {
+          Write-Host "  [SUCCESS] Exported $($fileGroups.Count) filegroup(s)" -ForegroundColor Green
+        }
+      }
+    }
+    catch {
+      if (-not $Quiet) {
+        Write-Host "  [WARNING] Error exporting FileGroups: $_" -ForegroundColor Yellow
+      }
+    }
+  }
+
+  # Database Scoped Configurations (folder 02_DatabaseConfiguration) - uses StringBuilder
+  if (-not (Test-ObjectTypeExcluded -ObjectType 'DatabaseScopedConfigurations')) {
+    try {
+      if ($Database.DatabaseScopedConfigurations -and $Database.DatabaseScopedConfigurations.Count -gt 0) {
+        $dbConfigs = @($Database.DatabaseScopedConfigurations)
+        $configFilePath = Join-Path $OutputDir '02_DatabaseConfiguration' '001_DatabaseScopedConfigurations.sql'
+        $configScript = New-Object System.Text.StringBuilder
+        [void]$configScript.AppendLine("-- Database Scoped Configurations")
+        [void]$configScript.AppendLine("-- WARNING: These settings are hardware-specific (e.g., MAXDOP)")
+        [void]$configScript.AppendLine("-- Review and adjust for target environment before applying")
+        [void]$configScript.AppendLine("")
+
+        foreach ($config in $dbConfigs) {
+          [void]$configScript.AppendLine("-- Configuration: $($config.Name)")
+          [void]$configScript.AppendLine("-- Current Value: $($config.Value)")
+          [void]$configScript.AppendLine("ALTER DATABASE SCOPED CONFIGURATION SET $($config.Name) = $($config.Value);")
+          [void]$configScript.AppendLine("GO")
+          [void]$configScript.AppendLine("")
+        }
+
+        # Ensure directory exists
+        $configDir = Split-Path $configFilePath -Parent
+        if (-not (Test-Path $configDir)) {
+          New-Item -ItemType Directory -Path $configDir -Force | Out-Null
+        }
+
+        $configScript.ToString() | Out-File -FilePath $configFilePath -Encoding UTF8
+        $results.DatabaseScopedConfigurations = $dbConfigs.Count
+        if (-not $Quiet) {
+          Write-Host "  [SUCCESS] Exported $($dbConfigs.Count) database scoped configuration(s)" -ForegroundColor Green
+        }
+      }
+    }
+    catch {
+      if (-not $Quiet) {
+        Write-Host "  [WARNING] Error exporting DatabaseScopedConfigurations: $_" -ForegroundColor Yellow
+      }
+    }
+  }
+
+  # Database Scoped Credentials (folder 02_DatabaseConfiguration)
+  # SECURITY: Export structure only - secrets cannot be exported safely
+  if (-not (Test-ObjectTypeExcluded -ObjectType 'DatabaseScopedCredentials')) {
+    try {
+      if ($Database.DatabaseScopedCredentials -and $Database.DatabaseScopedCredentials.Count -gt 0) {
+        $dbScopedCreds = @($Database.DatabaseScopedCredentials)
+        $credFilePath = Join-Path $OutputDir '02_DatabaseConfiguration' '002_DatabaseScopedCredentials.sql'
+        $credScript = New-Object System.Text.StringBuilder
+        [void]$credScript.AppendLine("-- Database Scoped Credentials (Structure Only)")
+        [void]$credScript.AppendLine("-- WARNING: Secrets cannot be exported and must be provided during import")
+        [void]$credScript.AppendLine("-- This file documents the credential names and identities for reference")
+        [void]$credScript.AppendLine("")
+
+        foreach ($cred in $dbScopedCreds) {
+          $safeIdentity = $cred.Identity -replace "'", "''"
+          [void]$credScript.AppendLine("-- Credential: $($cred.Name)")
+          [void]$credScript.AppendLine("-- Identity: $($cred.Identity)")
+          [void]$credScript.AppendLine("-- MANUAL ACTION REQUIRED: Create this credential with appropriate secret")
+          [void]$credScript.AppendLine("-- Example:")
+          [void]$credScript.AppendLine("/*")
+          [void]$credScript.AppendLine("CREATE DATABASE SCOPED CREDENTIAL [$($cred.Name)]")
+          [void]$credScript.AppendLine("WITH IDENTITY = '$safeIdentity',")
+          [void]$credScript.AppendLine("SECRET = '<PROVIDE_SECRET_HERE>';")
+          [void]$credScript.AppendLine("GO")
+          [void]$credScript.AppendLine("*/")
+          [void]$credScript.AppendLine("")
+        }
+
+        # Ensure directory exists
+        $credDir = Split-Path $credFilePath -Parent
+        if (-not (Test-Path $credDir)) {
+          New-Item -ItemType Directory -Path $credDir -Force | Out-Null
+        }
+
+        $credScript.ToString() | Out-File -FilePath $credFilePath -Encoding UTF8
+        $results.DatabaseScopedCredentials = $dbScopedCreds.Count
+        if (-not $Quiet) {
+          Write-Host "  [SUCCESS] Documented $($dbScopedCreds.Count) database scoped credential(s) (structure only)" -ForegroundColor Green
+          Write-Host "  [WARNING] Credentials exported as documentation only - secrets must be provided manually" -ForegroundColor Yellow
+        }
+      }
+    }
+    catch {
+      if (-not $Quiet) {
+        Write-Host "  [WARNING] Error exporting DatabaseScopedCredentials: $_" -ForegroundColor Yellow
+      }
+    }
+  }
+
+  return $results
+}
+
 function Invoke-ParallelExport {
   <#
   .SYNOPSIS
@@ -2590,76 +2906,8 @@ function Invoke-ParallelExport {
   #region Export Non-Parallelizable Objects Sequentially
   Write-Host "`n[INFO] Exporting non-parallelizable objects sequentially..." -ForegroundColor Cyan
 
-  # FileGroups (folder 00_FileGroups)
-  if (-not (Test-ObjectTypeExcluded -ObjectType 'FileGroups')) {
-    try {
-      $fileGroups = @($Database.FileGroups | Where-Object { $_.Name -ne 'PRIMARY' })
-      if ($fileGroups.Count -gt 0) {
-        $opts = New-ScriptingOptions -TargetVersion $TargetVersion
-        $opts.FileName = Join-Path $OutputDir '00_FileGroups' '001_FileGroups.sql'
-        $Scripter.Options = $opts
-        $Scripter.EnumScript($fileGroups) | Out-Null
-        Write-Host "  [SUCCESS] Exported $($fileGroups.Count) filegroup(s)" -ForegroundColor Green
-      }
-    }
-    catch {
-      Write-Host "  [WARNING] Error exporting FileGroups: $_" -ForegroundColor Yellow
-    }
-  }
-
-  # Database Scoped Configurations (folder 02_DatabaseConfiguration)
-  if (-not (Test-ObjectTypeExcluded -ObjectType 'DatabaseScopedConfigurations')) {
-    try {
-      if ($Database.DatabaseScopedConfigurations -and $Database.DatabaseScopedConfigurations.Count -gt 0) {
-        $dbScopedConfigs = @($Database.DatabaseScopedConfigurations)
-        $opts = New-ScriptingOptions -TargetVersion $TargetVersion
-        $opts.FileName = Join-Path $OutputDir '02_DatabaseConfiguration' '001_DatabaseScopedConfigurations.sql'
-        $Scripter.Options = $opts
-        $Scripter.EnumScript($dbScopedConfigs) | Out-Null
-        Write-Host "  [SUCCESS] Exported $($dbScopedConfigs.Count) database scoped configuration(s)" -ForegroundColor Green
-      }
-    }
-    catch {
-      Write-Host "  [WARNING] Error exporting DatabaseScopedConfigurations: $_" -ForegroundColor Yellow
-    }
-  }
-
-  # Database Scoped Credentials (folder 02_DatabaseConfiguration)
-  # SECURITY: Export structure only - secrets cannot be exported safely
-  if (-not (Test-ObjectTypeExcluded -ObjectType 'DatabaseScopedCredentials')) {
-    try {
-      if ($Database.DatabaseScopedCredentials -and $Database.DatabaseScopedCredentials.Count -gt 0) {
-        $dbScopedCreds = @($Database.DatabaseScopedCredentials)
-        $credFilePath = Join-Path $OutputDir '02_DatabaseConfiguration' '002_DatabaseScopedCredentials.sql'
-        $credScript = New-Object System.Text.StringBuilder
-        [void]$credScript.AppendLine("-- Database Scoped Credentials (Structure Only)")
-        [void]$credScript.AppendLine("-- WARNING: Secrets cannot be exported and must be provided during import")
-        [void]$credScript.AppendLine("-- This file documents the credential names and identities for reference")
-        [void]$credScript.AppendLine("")
-
-        foreach ($cred in $dbScopedCreds) {
-          [void]$credScript.AppendLine("-- Credential: $($cred.Name)")
-          [void]$credScript.AppendLine("-- Identity: $($cred.Identity)")
-          [void]$credScript.AppendLine("-- MANUAL ACTION REQUIRED: Create this credential with appropriate secret")
-          [void]$credScript.AppendLine("-- Example:")
-          [void]$credScript.AppendLine("/*")
-          [void]$credScript.AppendLine("CREATE DATABASE SCOPED CREDENTIAL [$($cred.Name)]")
-          [void]$credScript.AppendLine("WITH IDENTITY = '$($cred.Identity)',")
-          [void]$credScript.AppendLine("SECRET = '<PROVIDE_SECRET_HERE>';")
-          [void]$credScript.AppendLine("GO")
-          [void]$credScript.AppendLine("*/")
-          [void]$credScript.AppendLine("")
-        }
-
-        $credScript.ToString() | Out-File -FilePath $credFilePath -Encoding UTF8
-        Write-Host "  [SUCCESS] Documented $($dbScopedCreds.Count) database scoped credential(s) (structure only)" -ForegroundColor Green
-        Write-Host "  [WARNING] Credentials exported as documentation only - secrets must be provided manually" -ForegroundColor Yellow
-      }
-    }
-    catch {
-      Write-Host "  [WARNING] Error exporting DatabaseScopedCredentials: $_" -ForegroundColor Yellow
-    }
-  }
+  # Call shared function for FileGroups, DatabaseScopedConfigurations, DatabaseScopedCredentials
+  $nonParallelResults = Export-NonParallelizableObjects -Database $Database -OutputDir $OutputDir
 
   #endregion
 
@@ -2669,11 +2917,11 @@ function Invoke-ParallelExport {
   if ($workQueue.Count -eq 0) {
     Write-Host "[WARNING] No work items generated for parallel processing" -ForegroundColor Yellow
     return @{
-      TotalItems = 0
+      TotalItems   = 0
       SuccessCount = 0
-      ErrorCount = 0
-      Errors = @()
-      Duration = (Get-Date) - $exportStartTime
+      ErrorCount   = 0
+      Errors       = @()
+      Duration     = (Get-Date) - $exportStartTime
     }
   }
   #endregion
@@ -2692,7 +2940,8 @@ function Invoke-ParallelExport {
     $item = $workQueue[$i]
     if ($item -is [hashtable]) {
       $concurrentQueue.Enqueue($item)
-    } else {
+    }
+    else {
       Write-Host "[WARNING] Skipping work item $i of unexpected type: $($item.GetType().FullName)" -ForegroundColor Yellow
     }
   }
@@ -2762,11 +3011,11 @@ function Invoke-ParallelExport {
   }
 
   $summary = @{
-    TotalItems = $workQueue.Count
+    TotalItems   = $workQueue.Count
     SuccessCount = $successCount
-    ErrorCount = $errorItems.Count
-    Errors = @($errorItems | ForEach-Object { $_ })
-    Duration = $duration
+    ErrorCount   = $errorItems.Count
+    Errors       = @($errorItems | ForEach-Object { $_ })
+    Duration     = $duration
   }
 
   Write-Host "`n[SUCCESS] Parallel export completed in $($duration.TotalSeconds.ToString('F2')) seconds" -ForegroundColor Green
@@ -2798,6 +3047,27 @@ $script:ParallelMaxWorkers = 5
 $script:ParallelProgressInterval = 50
 $script:ConnectionInfo = $null
 $script:Config = @{}  # Will be set after config file is loaded
+
+# Export metadata tracking for delta export feature
+# This tracks all objects exported for use in incremental/delta exports
+$script:ExportMetadata = @{
+  Version               = '1.0'
+  ExportStartTimeUtc    = $null
+  ExportStartTimeServer = $null
+  ServerName            = $null
+  DatabaseName          = $null
+  GroupBy               = 'single'
+  IncludeData           = $false
+  ObjectTypes           = @{}
+  Objects               = [System.Collections.ArrayList]::new()
+  FileGroups            = [System.Collections.ArrayList]::new()  # Original file size/growth values
+}
+
+# Delta export state (set when -DeltaFrom is used)
+$script:DeltaExportEnabled = $false
+$script:DeltaMetadata = $null
+$script:DeltaFromPath = $null
+$script:DeltaChangeResults = $null
 
 # Performance metrics tracking
 $script:Metrics = @{
@@ -2855,6 +3125,933 @@ function Stop-MetricsTimer {
   $script:Metrics.TotalObjectsExported += $SuccessCount
   $script:Metrics.Errors += $FailCount
 }
+
+#region Export Metadata Functions
+
+function Initialize-ExportMetadata {
+  <#
+    .SYNOPSIS
+        Initializes export metadata tracking at the start of an export.
+    .DESCRIPTION
+        Captures server timestamps (both UTC and server local time) and
+        initializes the objects collection for tracking exported items.
+        This metadata is used for delta/incremental exports.
+    .PARAMETER Database
+        The SMO Database object being exported.
+    .PARAMETER ServerName
+        The server name for metadata.
+    .PARAMETER DatabaseName
+        The database name for metadata.
+    .PARAMETER IncludeData
+        Whether data export is enabled.
+  #>
+  param(
+    [Parameter(Mandatory)]
+    $Database,
+    [Parameter(Mandatory)]
+    [string]$ServerName,
+    [Parameter(Mandatory)]
+    [string]$DatabaseName,
+    [bool]$IncludeData = $false
+  )
+
+  # Get server time (for modify_date comparison in delta exports)
+  # SQL Server stores modify_date in server local time
+  $serverTimeQuery = "SELECT GETDATE() AS ServerTime, GETUTCDATE() AS UtcTime"
+  try {
+    $result = $Database.ExecuteWithResults($serverTimeQuery)
+    if ($result.Tables.Count -gt 0 -and $result.Tables[0].Rows.Count -gt 0) {
+      $script:ExportMetadata.ExportStartTimeServer = $result.Tables[0].Rows[0]['ServerTime'].ToString('yyyy-MM-ddTHH:mm:ss.fff')
+      $script:ExportMetadata.ExportStartTimeUtc = $result.Tables[0].Rows[0]['UtcTime'].ToString('yyyy-MM-ddTHH:mm:ss.fffZ')
+    }
+    else {
+      # Fallback to local time if query fails
+      $now = Get-Date
+      $script:ExportMetadata.ExportStartTimeServer = $now.ToString('yyyy-MM-ddTHH:mm:ss.fff')
+      $script:ExportMetadata.ExportStartTimeUtc = $now.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.fffZ')
+    }
+  }
+  catch {
+    # Fallback to local time if query fails
+    $now = Get-Date
+    $script:ExportMetadata.ExportStartTimeServer = $now.ToString('yyyy-MM-ddTHH:mm:ss.fff')
+    $script:ExportMetadata.ExportStartTimeUtc = $now.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.fffZ')
+    Write-Verbose "Could not get server time, using local time: $_"
+  }
+
+  $script:ExportMetadata.ServerName = $ServerName
+  $script:ExportMetadata.DatabaseName = $DatabaseName
+  $script:ExportMetadata.IncludeData = $IncludeData
+  $script:ExportMetadata.Objects = [System.Collections.ArrayList]::new()
+  $script:ExportMetadata.FileGroups = [System.Collections.ArrayList]::new()
+
+  # Determine groupBy setting from config
+  $groupBy = 'single'  # Default
+  if ($script:Config -and $script:Config.ContainsKey('export')) {
+    $exportConfig = $script:Config['export']
+    if ($exportConfig -and $exportConfig.ContainsKey('groupBy')) {
+      $groupBy = $exportConfig['groupBy']
+    }
+  }
+  $script:ExportMetadata.GroupBy = $groupBy
+}
+
+function Add-ExportedObject {
+  <#
+    .SYNOPSIS
+        Records an exported object in the metadata.
+    .DESCRIPTION
+        Adds an entry to the Objects collection tracking what was exported.
+        This is used by delta exports to determine what changed.
+    .PARAMETER Type
+        The object type (Table, View, StoredProcedure, etc.)
+    .PARAMETER Schema
+        The schema name (null for schema-less objects like FileGroups)
+    .PARAMETER Name
+        The object name.
+    .PARAMETER FilePath
+        The relative file path within the export folder.
+  #>
+  param(
+    [Parameter(Mandatory)]
+    [string]$Type,
+    [string]$Schema,
+    [Parameter(Mandatory)]
+    [string]$Name,
+    [Parameter(Mandatory)]
+    [string]$FilePath
+  )
+
+  $entry = [ordered]@{
+    type     = $Type
+    schema   = $Schema
+    name     = $Name
+    filePath = $FilePath
+  }
+
+  [void]$script:ExportMetadata.Objects.Add($entry)
+}
+
+function Save-ExportMetadata {
+  <#
+    .SYNOPSIS
+        Writes the export metadata to _export_metadata.json.
+    .DESCRIPTION
+        Serializes the collected metadata to JSON format and saves
+        it to the export directory. This file is required for delta exports.
+    .PARAMETER OutputDir
+        The export output directory.
+  #>
+  param(
+    [Parameter(Mandatory)]
+    [string]$OutputDir
+  )
+
+  $metadataPath = Join-Path $OutputDir '_export_metadata.json'
+
+  # Build object list by scanning exported files
+  # This approach captures all exported objects regardless of export path (sequential/parallel)
+  $objects = [System.Collections.ArrayList]::new()
+
+  # Map folder names to object types
+  $folderTypeMap = @{
+    '00_FileGroups'            = 'FileGroup'
+    '01_Security'              = 'Security'
+    '02_DatabaseConfiguration' = 'DatabaseConfiguration'
+    '03_Schemas'               = 'Schema'
+    '04_Sequences'             = 'Sequence'
+    '05_PartitionFunctions'    = 'PartitionFunction'
+    '06_PartitionSchemes'      = 'PartitionScheme'
+    '07_Types'                 = 'UserDefinedType'
+    '08_XmlSchemaCollections'  = 'XmlSchemaCollection'
+    '09_Tables_PrimaryKey'     = 'Table'
+    '10_Tables_ForeignKeys'    = 'ForeignKey'
+    '11_Indexes'               = 'Index'
+    '12_Defaults'              = 'Default'
+    '13_Rules'                 = 'Rule'
+    '14_Programmability'       = 'Programmability'
+    '15_Synonyms'              = 'Synonym'
+    '16_FullTextSearch'        = 'FullTextCatalog'
+    '17_ExternalData'          = 'ExternalData'
+    '18_SearchPropertyLists'   = 'SearchPropertyList'
+    '19_PlanGuides'            = 'PlanGuide'
+    '20_SecurityPolicies'      = 'SecurityPolicy'
+    '21_Data'                  = 'Data'
+  }
+
+  # Scan each numbered folder
+  $folders = Get-ChildItem -Path $OutputDir -Directory | Where-Object { $_.Name -match '^\d{2}_' }
+
+  foreach ($folder in $folders) {
+    $objectType = if ($folderTypeMap.ContainsKey($folder.Name)) { $folderTypeMap[$folder.Name] } else { $folder.Name -replace '^\d{2}_', '' }
+
+    # Get all SQL files in this folder
+    $sqlFiles = Get-ChildItem -Path $folder.FullName -Filter '*.sql' -Recurse
+
+    foreach ($file in $sqlFiles) {
+      # Parse schema.name from filename (e.g., "dbo.Customers.sql" -> schema=dbo, name=Customers)
+      $baseName = [System.IO.Path]::GetFileNameWithoutExtension($file.Name)
+      $schema = $null
+      $name = $baseName
+
+      # Try to parse schema.name pattern
+      if ($baseName -match '^([^.]+)\.(.+)$') {
+        $schema = $matches[1]
+        $name = $matches[2]
+      }
+
+      # Build relative path from export root
+      $relativePath = $file.FullName.Substring($OutputDir.Length).TrimStart('\', '/')
+
+      $entry = [ordered]@{
+        type     = $objectType
+        schema   = $schema
+        name     = $name
+        filePath = $relativePath
+      }
+
+      [void]$objects.Add($entry)
+    }
+  }
+
+  # Build the final metadata object
+  $metadata = [ordered]@{
+    version               = $script:ExportMetadata.Version
+    exportStartTimeUtc    = $script:ExportMetadata.ExportStartTimeUtc
+    exportStartTimeServer = $script:ExportMetadata.ExportStartTimeServer
+    serverName            = $script:ExportMetadata.ServerName
+    databaseName          = $script:ExportMetadata.DatabaseName
+    groupBy               = $script:ExportMetadata.GroupBy
+    includeData           = $script:ExportMetadata.IncludeData
+    objectCount           = $objects.Count
+    objects               = $objects
+  }
+
+  # Add fileGroups metadata if any were exported (contains original size/growth values)
+  if ($script:ExportMetadata.FileGroups -and $script:ExportMetadata.FileGroups.Count -gt 0) {
+    $metadata.fileGroups = $script:ExportMetadata.FileGroups
+  }
+
+  # Convert to JSON with proper formatting
+  $json = $metadata | ConvertTo-Json -Depth 10
+
+  # Write to file
+  $json | Out-File -FilePath $metadataPath -Encoding UTF8
+
+  Write-Output "[SUCCESS] Export metadata saved: _export_metadata.json ($($objects.Count) objects tracked)"
+}
+
+function Read-ExportMetadata {
+  <#
+    .SYNOPSIS
+        Reads and parses export metadata from a previous export.
+    .DESCRIPTION
+        Loads the _export_metadata.json file from a previous export directory
+        and returns the parsed metadata object. Used for delta export validation
+        and change detection.
+    .PARAMETER ExportPath
+        Path to the previous export directory.
+    .OUTPUTS
+        Hashtable containing the parsed metadata, or $null if not found.
+  #>
+  param(
+    [Parameter(Mandatory)]
+    [string]$ExportPath
+  )
+
+  $metadataPath = Join-Path $ExportPath '_export_metadata.json'
+
+  if (-not (Test-Path $metadataPath)) {
+    return $null
+  }
+
+  try {
+    $json = Get-Content -Path $metadataPath -Raw -Encoding UTF8
+    $metadata = $json | ConvertFrom-Json -AsHashtable
+    return $metadata
+  }
+  catch {
+    Write-Warning "Failed to parse metadata file: $_"
+    return $null
+  }
+}
+
+function Test-DeltaExportCompatibility {
+  <#
+    .SYNOPSIS
+        Validates that delta export can proceed with the given configuration.
+    .DESCRIPTION
+        Checks that the previous export exists, has valid metadata, uses
+        groupBy:single mode, and optionally warns about server/database mismatches.
+        Delta export requires groupBy:single because grouped files cannot be
+        merged incrementally.
+    .PARAMETER DeltaFromPath
+        Path to the previous export directory.
+    .PARAMETER CurrentConfig
+        The current export configuration hashtable.
+    .PARAMETER CurrentServerName
+        The current server being exported.
+    .PARAMETER CurrentDatabaseName
+        The current database being exported.
+    .OUTPUTS
+        Hashtable with:
+          - IsValid: $true if delta export can proceed
+          - Metadata: The previous export metadata (if valid)
+          - Errors: Array of error messages (if invalid)
+          - Warnings: Array of warning messages
+  #>
+  param(
+    [Parameter(Mandatory)]
+    [string]$DeltaFromPath,
+    [hashtable]$CurrentConfig,
+    [string]$CurrentServerName,
+    [string]$CurrentDatabaseName
+  )
+
+  $result = @{
+    IsValid  = $true
+    Metadata = $null
+    Errors   = [System.Collections.ArrayList]::new()
+    Warnings = [System.Collections.ArrayList]::new()
+  }
+
+  # Check 1: Previous export path exists
+  if (-not (Test-Path $DeltaFromPath)) {
+    [void]$result.Errors.Add("Delta export source path does not exist: $DeltaFromPath")
+    $result.IsValid = $false
+    return $result
+  }
+
+  # Check 2: Metadata file exists and is valid
+  $metadata = Read-ExportMetadata -ExportPath $DeltaFromPath
+  if ($null -eq $metadata) {
+    [void]$result.Errors.Add("Previous export is missing _export_metadata.json file. Delta export requires metadata from the base export. The base export may be from an older version that did not generate metadata.")
+    $result.IsValid = $false
+    return $result
+  }
+  $result.Metadata = $metadata
+
+  # Check 3: Previous export used groupBy: single
+  $previousGroupBy = if ($metadata.ContainsKey('groupBy')) { $metadata['groupBy'] } else { 'single' }
+  if ($previousGroupBy -ne 'single') {
+    [void]$result.Errors.Add("Previous export used groupBy: '$previousGroupBy'. Delta export requires groupBy: single in both exports.")
+    $result.IsValid = $false
+  }
+
+  # Check 4: Current config uses groupBy: single (or default)
+  $currentGroupBy = 'single'  # Default
+  if ($CurrentConfig -and $CurrentConfig.ContainsKey('export')) {
+    $exportConfig = $CurrentConfig['export']
+    if ($exportConfig -and $exportConfig.ContainsKey('groupBy')) {
+      $currentGroupBy = $exportConfig['groupBy']
+    }
+  }
+  if ($currentGroupBy -ne 'single') {
+    [void]$result.Errors.Add("Current config uses groupBy: '$currentGroupBy'. Delta export requires groupBy: single.")
+    $result.IsValid = $false
+  }
+
+  # Check 5: Server/database match (warning only, not blocking)
+  $previousServer = if ($metadata.ContainsKey('serverName')) { $metadata['serverName'] } else { '' }
+  $previousDb = if ($metadata.ContainsKey('databaseName')) { $metadata['databaseName'] } else { '' }
+
+  if ($CurrentServerName -and $previousServer -and ($previousServer -ne $CurrentServerName)) {
+    [void]$result.Warnings.Add("Server name mismatch: previous='$previousServer', current='$CurrentServerName'. Proceeding with delta export.")
+  }
+  if ($CurrentDatabaseName -and $previousDb -and ($previousDb -ne $CurrentDatabaseName)) {
+    [void]$result.Warnings.Add("Database name mismatch: previous='$previousDb', current='$CurrentDatabaseName'. Proceeding with delta export.")
+  }
+
+  return $result
+}
+
+function Get-DatabaseObjectsWithModifyDate {
+  <#
+    .SYNOPSIS
+        Queries the database for all objects with their modify_date.
+    .DESCRIPTION
+        Retrieves current objects from sys.objects with schema name, object name,
+        type, and modify_date. Used for delta export change detection.
+    .PARAMETER Database
+        The SMO Database object to query.
+    .OUTPUTS
+        Hashtable keyed by "Type|Schema|Name" containing object info.
+  #>
+  param(
+    [Parameter(Mandatory)]
+    $Database
+  )
+
+  $query = @"
+SELECT
+    ISNULL(s.name, '') AS SchemaName,
+    o.name AS ObjectName,
+    o.type AS TypeCode,
+    o.type_desc AS TypeDesc,
+    o.modify_date AS ModifyDate
+FROM sys.objects o
+LEFT JOIN sys.schemas s ON o.schema_id = s.schema_id
+WHERE o.is_ms_shipped = 0
+  AND o.type IN ('U', 'V', 'P', 'FN', 'IF', 'TF', 'TR', 'SN', 'SO')
+ORDER BY o.type_desc, s.name, o.name
+"@
+
+  $objects = @{}
+
+  try {
+    $result = $Database.ExecuteWithResults($query)
+    if ($result.Tables.Count -gt 0) {
+      foreach ($row in $result.Tables[0].Rows) {
+        # Map SQL Server type codes to our type names
+        $typeCode = $row['TypeCode'].ToString().Trim()
+        $typeName = switch ($typeCode) {
+          'U' { 'Table' }
+          'V' { 'View' }
+          'P' { 'StoredProcedure' }
+          'FN' { 'UserDefinedFunction' }
+          'IF' { 'UserDefinedFunction' }
+          'TF' { 'UserDefinedFunction' }
+          'TR' { 'Trigger' }
+          'SN' { 'Synonym' }
+          'SO' { 'Sequence' }
+          default { $row['TypeDesc'].ToString() }
+        }
+
+        $schema = $row['SchemaName'].ToString()
+        $name = $row['ObjectName'].ToString()
+        $modifyDate = $row['ModifyDate']
+
+        # Key format matches what we use in metadata
+        $key = "$typeName|$schema|$name"
+
+        $objects[$key] = @{
+          Type       = $typeName
+          Schema     = $schema
+          Name       = $name
+          ModifyDate = $modifyDate
+        }
+      }
+    }
+  }
+  catch {
+    Write-Warning "Failed to query database objects: $_"
+  }
+
+  return $objects
+}
+
+function Test-SafeRelativePath {
+  <#
+    .SYNOPSIS
+        Validates that a relative path doesn't contain path traversal sequences.
+    .DESCRIPTION
+        Security check to prevent malicious or corrupted metadata from causing
+        file operations outside the intended export directory. Rejects paths
+        containing "..", absolute paths, or other traversal attempts.
+    .PARAMETER RelativePath
+        The relative path to validate.
+    .OUTPUTS
+        $true if the path is safe, $false otherwise.
+  #>
+  param(
+    [Parameter(Mandatory)]
+    [string]$RelativePath
+  )
+
+  # Reject empty or null paths
+  if ([string]::IsNullOrWhiteSpace($RelativePath)) {
+    return $false
+  }
+
+  # Reject paths with parent directory traversal sequences
+  if ($RelativePath -match '\.\.' -or $RelativePath -match '\.\.\\' -or $RelativePath -match '\.\./') {
+    return $false
+  }
+
+  # Reject absolute paths (Windows drive letters or UNC paths)
+  if ($RelativePath -match '^[A-Za-z]:' -or $RelativePath -match '^\\\\' -or $RelativePath -match '^/') {
+    return $false
+  }
+
+  # Reject paths with null bytes or other suspicious characters
+  if ($RelativePath -match '\x00') {
+    return $false
+  }
+
+  return $true
+}
+
+function Compare-ExportObjects {
+  <#
+    .SYNOPSIS
+        Compares current database objects with previous export metadata.
+    .DESCRIPTION
+        Determines which objects are modified, new, deleted, or unchanged
+        by comparing modify_date with the previous export timestamp.
+    .PARAMETER CurrentObjects
+        Hashtable of current objects from Get-DatabaseObjectsWithModifyDate.
+    .PARAMETER PreviousMetadata
+        The previous export metadata hashtable.
+    .OUTPUTS
+        Hashtable with Modified, New, Deleted, Unchanged, and AlwaysExport arrays.
+  #>
+  param(
+    [Parameter(Mandatory)]
+    [hashtable]$CurrentObjects,
+    [Parameter(Mandatory)]
+    [hashtable]$PreviousMetadata
+  )
+
+  $result = @{
+    Modified     = [System.Collections.ArrayList]::new()
+    New          = [System.Collections.ArrayList]::new()
+    Deleted      = [System.Collections.ArrayList]::new()
+    Unchanged    = [System.Collections.ArrayList]::new()
+    AlwaysExport = [System.Collections.ArrayList]::new()
+  }
+
+  # Get previous export timestamp
+  $previousTimestamp = $null
+  if ($PreviousMetadata.ContainsKey('exportStartTimeServer')) {
+    $timestampStr = $PreviousMetadata['exportStartTimeServer']
+    try {
+      $previousTimestamp = [DateTime]::Parse($timestampStr)
+    }
+    catch {
+      Write-Warning "Could not parse previous export timestamp: $timestampStr"
+    }
+  }
+
+  # Build a lookup of previous objects by key
+  $previousObjects = @{}
+  if ($PreviousMetadata.ContainsKey('objects')) {
+    foreach ($obj in $PreviousMetadata['objects']) {
+      $type = $obj['type']
+      $schema = if ($obj['schema']) { $obj['schema'] } else { '' }
+      $name = $obj['name']
+      $key = "$type|$schema|$name"
+      $previousObjects[$key] = $obj
+    }
+  }
+
+  # Compare current objects with previous
+  foreach ($key in $CurrentObjects.Keys) {
+    $current = $CurrentObjects[$key]
+
+    if ($previousObjects.ContainsKey($key)) {
+      # Object exists in both - check if modified
+      $previous = $previousObjects[$key]
+
+      if ($null -eq $previousTimestamp) {
+        # No valid timestamp, treat as modified to be safe
+        [void]$result.Modified.Add($current)
+      }
+      elseif ($current.ModifyDate -gt $previousTimestamp) {
+        # Modified since last export
+        $current['FilePath'] = $previous['filePath']
+        [void]$result.Modified.Add($current)
+      }
+      else {
+        # Unchanged
+        $current['FilePath'] = $previous['filePath']
+        [void]$result.Unchanged.Add($current)
+      }
+    }
+    else {
+      # New object (in current, not in previous)
+      [void]$result.New.Add($current)
+    }
+  }
+
+  # Find deleted objects (in previous, not in current)
+  foreach ($key in $previousObjects.Keys) {
+    if (-not $CurrentObjects.ContainsKey($key)) {
+      $previous = $previousObjects[$key]
+      [void]$result.Deleted.Add(@{
+          Type     = $previous['type']
+          Schema   = $previous['schema']
+          Name     = $previous['name']
+          FilePath = $previous['filePath']
+        })
+    }
+  }
+
+  return $result
+}
+
+function Get-AlwaysExportObjectTypes {
+  <#
+    .SYNOPSIS
+        Returns object types that should always be exported (no modify_date tracking).
+    .DESCRIPTION
+        Some database objects don't have modify_date in sys.objects or are stored
+        differently. These should always be re-exported in delta mode.
+    .OUTPUTS
+        Array of object type names that should always be exported.
+  #>
+
+  # These types don't have reliable modify_date or aren't in sys.objects:
+  # - FileGroups: Database-level, no modify_date
+  # - Schemas: sys.schemas has no modify_date
+  # - DatabaseScopedConfigurations: Not in sys.objects
+  # - Security objects (Roles, Users): Different tracking
+  # - Partition Functions/Schemes: May not have accurate modify_date
+  # - XmlSchemaCollections: Separate system table
+  # - UserDefinedTypes: sys.types
+  # - Defaults/Rules: Legacy objects
+  # - FullTextCatalogs/StopLists: Separate tables
+  # - Assemblies: sys.assemblies
+  # - Certificates/Keys: Security objects
+  # - SecurityPolicies: RLS policies
+  # - PlanGuides: sys.plan_guides
+  # - ExternalData: External sources/formats
+  # - Data: Table data changes constantly
+
+  return @(
+    'FileGroup',
+    'Schema',
+    'DatabaseConfiguration',
+    'Security',
+    'PartitionFunction',
+    'PartitionScheme',
+    'XmlSchemaCollection',
+    'UserDefinedType',
+    'Default',
+    'Rule',
+    'FullTextCatalog',
+    'Assembly',
+    'Certificate',
+    'AsymmetricKey',
+    'SymmetricKey',
+    'SecurityPolicy',
+    'PlanGuide',
+    'ExternalData',
+    'Data',
+    'ForeignKey',  # FKs tracked separately from tables
+    'Index'        # Indexes tracked separately from tables
+  )
+}
+
+function Get-DeltaChangeDetection {
+  <#
+    .SYNOPSIS
+        Performs full delta change detection for an export.
+    .DESCRIPTION
+        Combines object querying, comparison, and always-export logic to produce
+        the final lists of objects to export, copy, and report as deleted.
+    .PARAMETER Database
+        The SMO Database object to query.
+    .PARAMETER PreviousMetadata
+        The previous export metadata hashtable.
+    .OUTPUTS
+        Hashtable with ToExport, ToCopy, Deleted arrays and summary stats.
+  #>
+  param(
+    [Parameter(Mandatory)]
+    $Database,
+    [Parameter(Mandatory)]
+    [hashtable]$PreviousMetadata
+  )
+
+  Write-Output "Performing delta change detection..."
+
+  # Get current objects from database
+  $currentObjects = Get-DatabaseObjectsWithModifyDate -Database $Database
+  Write-Verbose "Found $($currentObjects.Count) objects with modify_date in database"
+
+  # Compare with previous export
+  $comparison = Compare-ExportObjects -CurrentObjects $currentObjects -PreviousMetadata $PreviousMetadata
+
+  # Build always-export list from previous metadata
+  $alwaysExportTypes = Get-AlwaysExportObjectTypes
+  $alwaysExportObjects = [System.Collections.ArrayList]::new()
+
+  if ($PreviousMetadata.ContainsKey('objects')) {
+    foreach ($obj in $PreviousMetadata['objects']) {
+      $type = $obj['type']
+      if ($alwaysExportTypes -contains $type) {
+        [void]$alwaysExportObjects.Add(@{
+            Type     = $type
+            Schema   = $obj['schema']
+            Name     = $obj['name']
+            FilePath = $obj['filePath']
+          })
+      }
+    }
+  }
+
+  # Build final result
+  $result = @{
+    # Objects to export (modified + new + always-export types)
+    ToExport          = [System.Collections.ArrayList]::new()
+    # Objects to copy from previous export (unchanged, except always-export types)
+    ToCopy            = [System.Collections.ArrayList]::new()
+    # Deleted objects (informational)
+    Deleted           = $comparison.Deleted
+    # Statistics
+    ModifiedCount     = $comparison.Modified.Count
+    NewCount          = $comparison.New.Count
+    DeletedCount      = $comparison.Deleted.Count
+    UnchangedCount    = $comparison.Unchanged.Count
+    AlwaysExportCount = $alwaysExportObjects.Count
+  }
+
+  # Add modified and new to export list
+  foreach ($obj in $comparison.Modified) { [void]$result.ToExport.Add($obj) }
+  foreach ($obj in $comparison.New) { [void]$result.ToExport.Add($obj) }
+  foreach ($obj in $alwaysExportObjects) { [void]$result.ToExport.Add($obj) }
+
+  # Add unchanged to copy list (excluding always-export types which are re-exported)
+  foreach ($obj in $comparison.Unchanged) {
+    if ($alwaysExportTypes -notcontains $obj.Type) {
+      [void]$result.ToCopy.Add($obj)
+    }
+  }
+
+  # Log summary
+  Write-Output "  [INFO] Change detection complete:"
+  Write-Output "    Modified: $($comparison.Modified.Count)"
+  Write-Output "    New: $($comparison.New.Count)"
+  Write-Output "    Deleted: $($comparison.Deleted.Count)"
+  Write-Output "    Unchanged: $($comparison.Unchanged.Count)"
+  Write-Output "    Always re-export: $($alwaysExportObjects.Count)"
+  Write-Output "  [INFO] Will export: $($result.ToExport.Count) objects"
+  Write-Output "  [INFO] Will copy: $($result.ToCopy.Count) files from previous export"
+
+  return $result
+}
+
+function Copy-UnchangedFiles {
+  <#
+    .SYNOPSIS
+        Copies unchanged files from the previous export to the new export directory.
+    .DESCRIPTION
+        For delta exports, unchanged objects don't need to be re-exported.
+        This function copies their files from the previous export to maintain
+        a complete, standalone export folder.
+    .PARAMETER ToCopyList
+        Array of objects to copy, each with FilePath property.
+    .PARAMETER SourceExportPath
+        Path to the previous export directory.
+    .PARAMETER DestinationExportPath
+        Path to the new export directory.
+    .OUTPUTS
+        Hashtable with CopiedCount, FailedCount, and Errors array.
+  #>
+  param(
+    [Parameter(Mandatory)]
+    [array]$ToCopyList,
+    [Parameter(Mandatory)]
+    [string]$SourceExportPath,
+    [Parameter(Mandatory)]
+    [string]$DestinationExportPath
+  )
+
+  $result = @{
+    CopiedCount = 0
+    FailedCount = 0
+    Errors      = [System.Collections.ArrayList]::new()
+  }
+
+  if ($ToCopyList.Count -eq 0) {
+    return $result
+  }
+
+  Write-Output "Copying $($ToCopyList.Count) unchanged files from previous export..."
+
+  foreach ($obj in $ToCopyList) {
+    $filePath = $obj.FilePath
+    if (-not $filePath) {
+      [void]$result.Errors.Add("Object missing FilePath: $($obj.Type) $($obj.Schema).$($obj.Name)")
+      $result.FailedCount++
+      continue
+    }
+
+    # Security: Validate path doesn't contain traversal sequences
+    if (-not (Test-SafeRelativePath -RelativePath $filePath)) {
+      [void]$result.Errors.Add("Unsafe FilePath rejected (possible path traversal): $filePath")
+      $result.FailedCount++
+      continue
+    }
+
+    $sourcePath = Join-Path $SourceExportPath $filePath
+    $destPath = Join-Path $DestinationExportPath $filePath
+
+    if (-not (Test-Path $sourcePath)) {
+      [void]$result.Errors.Add("Source file not found: $sourcePath")
+      $result.FailedCount++
+      continue
+    }
+
+    try {
+      # Ensure destination directory exists
+      $destDir = Split-Path $destPath -Parent
+      if (-not (Test-Path $destDir)) {
+        New-Item -ItemType Directory -Path $destDir -Force | Out-Null
+      }
+
+      # Copy the file
+      Copy-Item -Path $sourcePath -Destination $destPath -Force
+      $result.CopiedCount++
+    }
+    catch {
+      [void]$result.Errors.Add("Failed to copy $filePath : $_")
+      $result.FailedCount++
+    }
+  }
+
+  Write-Output "  [SUCCESS] Copied $($result.CopiedCount) file(s)"
+  if ($result.FailedCount -gt 0) {
+    Write-Host "  [WARNING] Failed to copy $($result.FailedCount) file(s)" -ForegroundColor Yellow
+    foreach ($err in $result.Errors) {
+      Write-Verbose "    $err"
+    }
+  }
+
+  return $result
+}
+
+# Delta export lookup hashtable (built once, used for O(1) lookups)
+$script:DeltaExportLookup = $null
+
+function Initialize-DeltaExportLookup {
+  <#
+    .SYNOPSIS
+        Builds a hashtable for fast O(1) lookups during delta export filtering.
+    .DESCRIPTION
+        Creates a lookup table keyed by "Type|Schema|Name" for objects that need
+        to be exported (modified, new, or always-export types). Called once after
+        change detection, before export begins.
+  #>
+
+  if (-not $script:DeltaExportEnabled -or -not $script:DeltaChangeResults) {
+    $script:DeltaExportLookup = $null
+    return
+  }
+
+  $script:DeltaExportLookup = @{}
+
+  foreach ($obj in $script:DeltaChangeResults.ToExport) {
+    $type = $obj.Type
+    $schema = if ($obj.Schema) { $obj.Schema } else { '' }
+    $name = $obj.Name
+    $key = "$type|$schema|$name"
+    $script:DeltaExportLookup[$key] = $true
+  }
+
+  Write-Verbose "Delta export lookup initialized with $($script:DeltaExportLookup.Count) objects to export"
+}
+
+function Test-ShouldExportInDelta {
+  <#
+    .SYNOPSIS
+        Checks if an object should be exported in delta mode.
+    .DESCRIPTION
+        Returns $true if delta export is disabled (export everything) or if the
+        object is in the ToExport list (modified/new/always-export).
+        Returns $false if the object is unchanged and should be copied instead.
+    .PARAMETER ObjectType
+        The type of object (Table, View, StoredProcedure, etc.).
+    .PARAMETER Schema
+        The schema name (may be empty for schema-less objects).
+    .PARAMETER Name
+        The object name.
+    .OUTPUTS
+        $true if the object should be exported, $false if it should be skipped.
+  #>
+  param(
+    [Parameter(Mandatory)]
+    [string]$ObjectType,
+    [string]$Schema = '',
+    [Parameter(Mandatory)]
+    [string]$Name
+  )
+
+  # If delta export is not enabled, export everything
+  if (-not $script:DeltaExportEnabled) {
+    return $true
+  }
+
+  # If no lookup table (shouldn't happen), export everything to be safe
+  if ($null -eq $script:DeltaExportLookup) {
+    return $true
+  }
+
+  # Check if object is in the ToExport list
+  $key = "$ObjectType|$Schema|$Name"
+  return $script:DeltaExportLookup.ContainsKey($key)
+}
+
+function Get-DeltaFilteredCollection {
+  <#
+    .SYNOPSIS
+        Filters a collection to only include objects that should be exported in delta mode.
+    .DESCRIPTION
+        When delta export is enabled, filters out unchanged objects that will be
+        copied from the previous export. When disabled, returns the full collection.
+        This provides significant performance improvement by avoiding SMO scripting
+        for unchanged objects.
+    .PARAMETER Collection
+        The collection of SMO objects to filter.
+    .PARAMETER ObjectType
+        The delta export type name (Table, View, StoredProcedure, etc.).
+    .PARAMETER SchemaProperty
+        The property name containing the schema (default: 'Schema').
+        Set to $null for schema-less objects.
+    .PARAMETER NameProperty
+        The property name containing the object name (default: 'Name').
+    .OUTPUTS
+        Filtered array of objects to export.
+  #>
+  param(
+    [Parameter(Mandatory)]
+    [AllowEmptyCollection()]
+    [array]$Collection,
+    [Parameter(Mandatory)]
+    [string]$ObjectType,
+    [string]$SchemaProperty = 'Schema',
+    [string]$NameProperty = 'Name'
+  )
+
+  # Handle empty collection gracefully
+  if ($null -eq $Collection -or $Collection.Count -eq 0) {
+    return @()
+  }
+
+  # If delta export is not enabled, return full collection
+  if (-not $script:DeltaExportEnabled) {
+    return $Collection
+  }
+
+  # Filter collection to only objects in ToExport list
+  $filtered = @()
+  $skippedCount = 0
+
+  foreach ($obj in $Collection) {
+    $schema = if ($SchemaProperty -and $obj.PSObject.Properties[$SchemaProperty]) {
+      $obj.$SchemaProperty
+    }
+    else {
+      ''
+    }
+    $name = $obj.$NameProperty
+
+    if (Test-ShouldExportInDelta -ObjectType $ObjectType -Schema $schema -Name $name) {
+      $filtered += $obj
+    }
+    else {
+      $skippedCount++
+    }
+  }
+
+  if ($skippedCount -gt 0) {
+    Write-Verbose "  [DELTA] Skipping $skippedCount unchanged $ObjectType object(s)"
+  }
+
+  return $filtered
+}
+
+#endregion Export Metadata Functions
 
 function Write-ObjectProgress {
   <#
@@ -3862,35 +5059,37 @@ function Get-SmoObjectByIdentifier {
 
   try {
     switch ($ObjectType) {
-      'Table'                    { return $Database.Tables[$Name, $Schema] }
-      'View'                     { return $Database.Views[$Name, $Schema] }
-      'StoredProcedure'          { return $Database.StoredProcedures[$Name, $Schema] }
-      'UserDefinedFunction'      { return $Database.UserDefinedFunctions[$Name, $Schema] }
-      'Schema'                   { return $Database.Schemas[$Name] }
-      'Sequence'                 { return $Database.Sequences[$Name, $Schema] }
-      'Synonym'                  { return $Database.Synonyms[$Name, $Schema] }
-      'UserDefinedType'          { return $Database.UserDefinedTypes[$Name, $Schema] }
-      'UserDefinedDataType'      { return $Database.UserDefinedDataTypes[$Name, $Schema] }
-      'UserDefinedTableType'     { return $Database.UserDefinedTableTypes[$Name, $Schema] }
-      'XmlSchemaCollection'      { return $Database.XmlSchemaCollections[$Name, $Schema] }
-      'PartitionFunction'        { return $Database.PartitionFunctions[$Name] }
-      'PartitionScheme'          { return $Database.PartitionSchemes[$Name] }
-      'Default'                  { return $Database.Defaults[$Name, $Schema] }
-      'Rule'                     { return $Database.Rules[$Name, $Schema] }
-      'DatabaseTrigger'          { return $Database.Triggers[$Name] }
-      'FullTextCatalog'          { return $Database.FullTextCatalogs[$Name] }
-      'FullTextStopList'         { return $Database.FullTextStopLists[$Name] }
-      'SearchPropertyList'       { return $Database.SearchPropertyLists[$Name] }
-      'SecurityPolicy'           { return $Database.SecurityPolicies[$Name, $Schema] }
-      'AsymmetricKey'            { return $Database.AsymmetricKeys[$Name] }
-      'Certificate'              { return $Database.Certificates[$Name] }
-      'SymmetricKey'             { return $Database.SymmetricKeys[$Name] }
-      'ApplicationRole'          { return $Database.ApplicationRoles[$Name] }
-      'DatabaseRole'             { return $Database.Roles[$Name] }
-      'User'                     { return $Database.Users[$Name] }
-      'PlanGuide'                { return $Database.PlanGuides[$Name] }
-      'ExternalDataSource'       { return $Database.ExternalDataSources[$Name] }
-      'ExternalFileFormat'       { return $Database.ExternalFileFormats[$Name] }
+      'Table' { return $Database.Tables[$Name, $Schema] }
+      'View' { return $Database.Views[$Name, $Schema] }
+      'StoredProcedure' { return $Database.StoredProcedures[$Name, $Schema] }
+      'UserDefinedFunction' { return $Database.UserDefinedFunctions[$Name, $Schema] }
+      'Schema' { return $Database.Schemas[$Name] }
+      'Sequence' { return $Database.Sequences[$Name, $Schema] }
+      'Synonym' { return $Database.Synonyms[$Name, $Schema] }
+      'UserDefinedType' { return $Database.UserDefinedTypes[$Name, $Schema] }
+      'UserDefinedDataType' { return $Database.UserDefinedDataTypes[$Name, $Schema] }
+      'UserDefinedTableType' { return $Database.UserDefinedTableTypes[$Name, $Schema] }
+      'XmlSchemaCollection' { return $Database.XmlSchemaCollections[$Name, $Schema] }
+      'PartitionFunction' { return $Database.PartitionFunctions[$Name] }
+      'PartitionScheme' { return $Database.PartitionSchemes[$Name] }
+      'Default' { return $Database.Defaults[$Name, $Schema] }
+      'Rule' { return $Database.Rules[$Name, $Schema] }
+      'DatabaseTrigger' { return $Database.Triggers[$Name] }
+      'FullTextCatalog' { return $Database.FullTextCatalogs[$Name] }
+      'FullTextStopList' { return $Database.FullTextStopLists[$Name] }
+      'SearchPropertyList' { return $Database.SearchPropertyLists[$Name] }
+      'SecurityPolicy' { return $Database.SecurityPolicies[$Name, $Schema] }
+      'AsymmetricKey' { return $Database.AsymmetricKeys[$Name] }
+      'Certificate' { return $Database.Certificates[$Name] }
+      'SymmetricKey' { return $Database.SymmetricKeys[$Name] }
+      'ApplicationRole' { return $Database.ApplicationRoles[$Name] }
+      'DatabaseRole' { return $Database.Roles[$Name] }
+      'User' { return $Database.Users[$Name] }
+      'PlanGuide' { return $Database.PlanGuides[$Name] }
+      'ExternalDataSource' { return $Database.ExternalDataSources[$Name] }
+      'ExternalFileFormat' { return $Database.ExternalFileFormats[$Name] }
+      'UserDefinedAggregate' { return $Database.UserDefinedAggregates[$Name, $Schema] }
+      'SqlAssembly' { return $Database.Assemblies[$Name] }
       'DatabaseAuditSpecification' { return $Database.DatabaseAuditSpecifications[$Name] }
       default {
         Write-Warning "Unknown object type in Get-SmoObjectByIdentifier: $ObjectType"
@@ -3902,6 +5101,163 @@ function Get-SmoObjectByIdentifier {
     Write-Warning "Failed to get SMO object $Schema.$Name of type $ObjectType : $_"
     return $null
   }
+}
+
+function Process-ExportWorkItem {
+  <#
+  .SYNOPSIS
+      Processes a single export work item - shared by both sequential and parallel modes.
+  .DESCRIPTION
+      This function is the single source of truth for how objects are scripted.
+      Both sequential and parallel export modes use this function to ensure
+      identical output regardless of export mode.
+
+      The function:
+      1. Resolves SMO object(s) from work item identifiers
+      2. Configures scripting options
+      3. Handles special cases (SecurityPolicy headers, etc.)
+      4. Scripts objects to file
+  .PARAMETER Database
+      The SMO Database object to fetch objects from.
+  .PARAMETER Scripter
+      The SMO Scripter object for scripting.
+  .PARAMETER WorkItem
+      The work item containing object identifiers and scripting options.
+  .PARAMETER TargetVersion
+      The target SQL Server version for script compatibility.
+  .OUTPUTS
+      Hashtable with Success (bool) and Error (string if failed).
+  #>
+  [CmdletBinding()]
+  param(
+    [Parameter(Mandatory)]
+    $Database,
+
+    [Parameter(Mandatory)]
+    $Scripter,
+
+    [Parameter(Mandatory)]
+    [hashtable]$WorkItem,
+
+    [Parameter(Mandatory)]
+    $TargetVersion
+  )
+
+  $result = @{
+    WorkItemId = $WorkItem.WorkItemId
+    ObjectType = $WorkItem.ObjectType
+    OutputPath = $WorkItem.OutputPath
+    Success    = $false
+    Error      = $null
+  }
+
+  try {
+    # Ensure output directory exists
+    $outputDir = Split-Path $WorkItem.OutputPath -Parent
+    if (-not (Test-Path $outputDir)) {
+      New-Item -ItemType Directory -Path $outputDir -Force | Out-Null
+    }
+
+    # Fetch SMO objects by identifier
+    $smoObjects = [System.Collections.Generic.List[object]]::new()
+
+    foreach ($objId in $WorkItem.Objects) {
+      $smoObj = $null
+
+      # Handle special object types that need custom lookup
+      if ($WorkItem.SpecialHandler -eq 'Indexes') {
+        # For indexes, fetch the individual index object from the parent table
+        $table = $Database.Tables[$objId.TableName, $objId.TableSchema]
+        if ($table -and $table.Indexes) {
+          $smoObj = $table.Indexes[$objId.IndexName]
+        }
+      }
+      elseif ($WorkItem.SpecialHandler -eq 'ForeignKeys') {
+        # For foreign keys, fetch individual FK or parent table depending on grouping mode
+        $table = $Database.Tables[$objId.Name, $objId.Schema]
+        if ($table -and $objId.FKName -and $WorkItem.GroupingMode -eq 'single') {
+          $smoObj = $table.ForeignKeys[$objId.FKName]
+        }
+        elseif ($table) {
+          $smoObj = $table
+        }
+      }
+      elseif ($WorkItem.SpecialHandler -eq 'TableTriggers') {
+        # For triggers, fetch individual trigger or parent table depending on grouping mode
+        $table = $Database.Tables[$objId.Name, $objId.Schema]
+        if ($table -and $objId.TriggerName -and $WorkItem.GroupingMode -eq 'single') {
+          $smoObj = $table.Triggers[$objId.TriggerName]
+        }
+        elseif ($table) {
+          $smoObj = $table
+        }
+      }
+      else {
+        # Standard object lookup using Get-SmoObjectByIdentifier
+        $smoObj = Get-SmoObjectByIdentifier `
+          -Database $Database `
+          -ObjectType $WorkItem.ObjectType `
+          -Schema $objId.Schema `
+          -Name $objId.Name
+      }
+
+      if ($smoObj) {
+        $smoObjects.Add($smoObj)
+      }
+    }
+
+    if ($smoObjects.Count -eq 0) {
+      throw "No SMO objects found for work item"
+    }
+
+    # Configure scripting options - these defaults match both modes
+    $Scripter.Options = [Microsoft.SqlServer.Management.Smo.ScriptingOptions]::new()
+    $Scripter.Options.ToFileOnly = $true
+    $Scripter.Options.FileName = $WorkItem.OutputPath
+    $Scripter.Options.AppendToFile = $WorkItem.AppendToFile
+    $Scripter.Options.AnsiFile = $true
+    $Scripter.Options.IncludeHeaders = $false    # No date-stamped headers for clean diffs
+    $Scripter.Options.NoCollation = $true        # Omit explicit collation for portability
+    $Scripter.Options.ScriptBatchTerminator = $true
+    $Scripter.Options.TargetServerVersion = $TargetVersion
+
+    # Apply custom scripting options from work item
+    foreach ($optKey in $WorkItem.ScriptingOptions.Keys) {
+      try {
+        $Scripter.Options.$optKey = $WorkItem.ScriptingOptions[$optKey]
+      }
+      catch {
+        # Ignore invalid options
+      }
+    }
+
+    # Handle special cases that need custom headers or formatting
+    if ($WorkItem.SpecialHandler -eq 'SecurityPolicy') {
+      # Write custom header first (matches sequential format exactly)
+      $policyName = if ($WorkItem.Objects.Count -gt 0) {
+        "$($WorkItem.Objects[0].Schema).$($WorkItem.Objects[0].Name)"
+      }
+      else { "Unknown" }
+      $header = "-- Row-Level Security Policy: $policyName`r`n-- NOTE: Ensure predicate functions are created before applying this policy`r`n`r`n"
+      [System.IO.File]::WriteAllText($WorkItem.OutputPath, $header, (New-Object System.Text.UTF8Encoding $false))
+      $Scripter.Options.AppendToFile = $true
+    }
+
+    # Script the objects to file
+    $Scripter.EnumScript($smoObjects.ToArray()) | Out-Null
+
+    # Add trailing newline for SecurityPolicy to match sequential format
+    if ($WorkItem.SpecialHandler -eq 'SecurityPolicy') {
+      [System.IO.File]::AppendAllText($WorkItem.OutputPath, "`r`n", (New-Object System.Text.UTF8Encoding $false))
+    }
+
+    $result.Success = $true
+  }
+  catch {
+    $result.Error = $_.Exception.Message
+  }
+
+  return $result
 }
 
 #endregion Parallel Export Functions
@@ -3940,7 +5296,7 @@ function Export-DatabaseObjects {
   #region Parallel Export Branch
   # If parallel mode is enabled, use the parallel export workflow instead of sequential
   if ($script:ParallelEnabled) {
-    Write-Host "\n[INFO] Parallel mode enabled - using parallel export workflow" -ForegroundColor Cyan
+    Write-Host "[INFO] Parallel mode enabled - using parallel export workflow" -ForegroundColor Cyan
 
     try {
       $parallelSummary = Invoke-ParallelExport `
@@ -3964,177 +5320,27 @@ function Export-DatabaseObjects {
   }
   #endregion
 
-  # 0. FileGroups (Environment-specific, but captured for documentation)
+  # Non-parallelizable objects: FileGroups, DatabaseScopedConfigurations, DatabaseScopedCredentials
+  # These use StringBuilder for SQLCMD variable support and require special handling
   Write-Output ''
-  Write-Output 'Exporting filegroups...'
-  if (Test-ObjectTypeExcluded -ObjectType 'FileGroups') {
-    Write-Host '  [SKIPPED] FileGroups excluded by configuration' -ForegroundColor Yellow
+  Write-Output 'Exporting non-parallelizable objects...'
+  Write-ProgressHeader 'FileGroups'
+  Write-ProgressHeader 'DatabaseConfiguration'
+  $nonParallelResults = Export-NonParallelizableObjects -Database $Database -OutputDir $OutputDir
+  if ($nonParallelResults.FileGroups -gt 0) {
+    Write-Output "  [SUCCESS] Exported $($nonParallelResults.FileGroups) filegroup(s)"
+    Write-Output "  [WARNING] FileGroups contain environment-specific file paths - manual adjustment required"
   }
   else {
-    $fileGroups = @($Database.FileGroups | Where-Object { $_.Name -ne 'PRIMARY' })
-    if ($fileGroups.Count -gt 0) {
-      Write-ProgressHeader 'FileGroups'
-      $fgFilePath = Join-Path $OutputDir '00_FileGroups' '001_FileGroups.sql'
-      $fgScript = New-Object System.Text.StringBuilder
-      [void]$fgScript.AppendLine("-- FileGroups and Files")
-      [void]$fgScript.AppendLine("-- WARNING: Physical file paths are environment-specific")
-      [void]$fgScript.AppendLine("-- Review and update file paths before applying to target environment")
-      [void]$fgScript.AppendLine("")
-
-      foreach ($fg in $fileGroups) {
-        # Script the filegroup creation
-        [void]$fgScript.AppendLine("-- FileGroup: $($fg.Name)")
-        [void]$fgScript.AppendLine("-- Type: $($fg.FileGroupType)")
-
-        if ($fg.FileGroupType -eq 'RowsFileGroup') {
-          [void]$fgScript.AppendLine("ALTER DATABASE CURRENT ADD FILEGROUP [$($fg.Name)];")
-        }
-        else {
-          [void]$fgScript.AppendLine("ALTER DATABASE CURRENT ADD FILEGROUP [$($fg.Name)] CONTAINS FILESTREAM;")
-        }
-        [void]$fgScript.AppendLine("GO")
-
-        if ($fg.IsReadOnly) {
-          [void]$fgScript.AppendLine("ALTER DATABASE CURRENT MODIFY FILEGROUP [$($fg.Name)] READONLY;")
-          [void]$fgScript.AppendLine("GO")
-        }
-        [void]$fgScript.AppendLine("")
-
-        # Script files in the filegroup
-        foreach ($file in $fg.Files) {
-          # Generate SQLCMD variable name from FileGroup name (e.g., FG_CURRENT -> FG_CURRENT_PATH)
-          $sqlcmdVar = "$($fg.Name)_PATH"
-
-          # Extract just the filename without path for cross-platform compatibility
-          $fileName = Split-Path $file.FileName -Leaf
-          if (-not $fileName) { $fileName = "$($file.Name).ndf" }
-
-          [void]$fgScript.AppendLine("-- File: $($file.Name)")
-          [void]$fgScript.AppendLine("-- Original Path: $($file.FileName)")
-          [void]$fgScript.AppendLine("-- Size: $($file.Size)KB, Growth: $($file.Growth)$(if ($file.GrowthType -eq 'KB') {'KB'} else {'%'}), MaxSize: $(if ($file.MaxSize -eq -1) {'UNLIMITED'} else {$file.MaxSize + 'KB'})")
-          [void]$fgScript.AppendLine("-- NOTE: Uses SQLCMD variable `$($sqlcmdVar) for base directory path")
-          [void]$fgScript.AppendLine("-- Target server will append appropriate path separator and filename")
-          [void]$fgScript.AppendLine("-- Configure via fileGroupPathMapping in config file or pass as SQLCMD variable")
-          [void]$fgScript.AppendLine("ALTER DATABASE CURRENT ADD FILE (")
-          [void]$fgScript.AppendLine("    NAME = N'$($file.Name)',")
-          # Use $(...)_FILE variable that will be constructed with correct separator on target
-          [void]$fgScript.AppendLine("    FILENAME = N'`$($($sqlcmdVar)_FILE)',")
-          [void]$fgScript.AppendLine("    SIZE = $($file.Size)KB")
-
-          if ($file.Growth -gt 0) {
-            if ($file.GrowthType -eq 'KB') {
-              [void]$fgScript.AppendLine("    , FILEGROWTH = $($file.Growth)KB")
-            }
-            else {
-              [void]$fgScript.AppendLine("    , FILEGROWTH = $($file.Growth)%")
-            }
-          }
-
-          if ($file.MaxSize -gt 0) {
-            [void]$fgScript.AppendLine("    , MAXSIZE = $($file.MaxSize)KB")
-          }
-          elseif ($file.MaxSize -eq -1) {
-            [void]$fgScript.AppendLine("    , MAXSIZE = UNLIMITED")
-          }
-
-          [void]$fgScript.AppendLine(") TO FILEGROUP [$($fg.Name)];")
-          [void]$fgScript.AppendLine("GO")
-          [void]$fgScript.AppendLine("")
-        }
-      }
-
-      $fgScript.ToString() | Out-File -FilePath $fgFilePath -Encoding UTF8
-      Write-Output "  [SUCCESS] Exported $($fileGroups.Count) filegroup(s)"
-      Write-Output "  [WARNING] FileGroups contain environment-specific file paths - manual adjustment required"
-    }
-    else {
-      Write-Output "  [INFO] No user-defined filegroups found"
-    }
+    Write-Output "  [INFO] No user-defined filegroups found"
   }
-
-  # 1. Database Scoped Configurations (Hardware-specific settings)
-  Write-Output ''
-  Write-Output 'Exporting database scoped configurations...'
-  if (Test-ObjectTypeExcluded -ObjectType 'DatabaseScopedConfigurations') {
-    Write-Host '  [SKIPPED] DatabaseScopedConfigurations excluded by configuration' -ForegroundColor Yellow
+  if ($nonParallelResults.DatabaseScopedConfigurations -gt 0) {
+    Write-Output "  [SUCCESS] Exported $($nonParallelResults.DatabaseScopedConfigurations) database scoped configuration(s)"
+    Write-Output "  [INFO] Configurations are hardware-specific - review before applying"
   }
-  else {
-    try {
-      $dbConfigs = @($Database.DatabaseScopedConfigurations)
-      if ($dbConfigs.Count -gt 0) {
-        Write-ProgressHeader 'DatabaseConfiguration'
-        $configFilePath = Join-Path $OutputDir '02_DatabaseConfiguration' '001_DatabaseScopedConfigurations.sql'
-        $configScript = New-Object System.Text.StringBuilder
-        [void]$configScript.AppendLine("-- Database Scoped Configurations")
-        [void]$configScript.AppendLine("-- WARNING: These settings are hardware-specific (e.g., MAXDOP)")
-        [void]$configScript.AppendLine("-- Review and adjust for target environment before applying")
-        [void]$configScript.AppendLine("")
-
-        foreach ($config in $dbConfigs) {
-          [void]$configScript.AppendLine("-- Configuration: $($config.Name)")
-          [void]$configScript.AppendLine("-- Current Value: $($config.Value)")
-          [void]$configScript.AppendLine("ALTER DATABASE SCOPED CONFIGURATION SET $($config.Name) = $($config.Value);")
-          [void]$configScript.AppendLine("GO")
-          [void]$configScript.AppendLine("")
-        }
-
-        $configScript.ToString() | Out-File -FilePath $configFilePath -Encoding UTF8
-        Write-Output "  [SUCCESS] Exported $($dbConfigs.Count) database scoped configuration(s)"
-        Write-Output "  [INFO] Configurations are hardware-specific - review before applying"
-      }
-      else {
-        Write-Output "  [INFO] No database scoped configurations found"
-      }
-    }
-    catch {
-      Write-Output "  [INFO] Database scoped configurations not available (SQL Server 2016+)"
-    }
-  }
-
-  # Database Scoped Credentials (Structure only - secrets cannot be exported)
-  Write-Output ''
-  Write-Output 'Exporting database scoped credentials (structure only)...'
-  if (Test-ObjectTypeExcluded -ObjectType 'DatabaseScopedCredentials') {
-    Write-Host '  [SKIPPED] DatabaseScopedCredentials excluded by configuration' -ForegroundColor Yellow
-  }
-  else {
-    try {
-      # Filter to actual credentials (collection may contain null/empty elements)
-      $dbCredentials = @($Database.Credentials | Where-Object { $null -ne $_.Name -and $_.Name -ne '' })
-      if ($dbCredentials.Count -gt 0) {
-        Write-ProgressHeader 'DatabaseCredentials'
-        $credFilePath = Join-Path $OutputDir '02_DatabaseConfiguration' '002_DatabaseScopedCredentials.sql'
-        $credScript = New-Object System.Text.StringBuilder
-        [void]$credScript.AppendLine("-- Database Scoped Credentials (Structure Only)")
-        [void]$credScript.AppendLine("-- WARNING: Secrets cannot be exported and must be provided during import")
-        [void]$credScript.AppendLine("-- This file documents the credential names and identities for reference")
-        [void]$credScript.AppendLine("")
-
-        foreach ($cred in $dbCredentials) {
-          [void]$credScript.AppendLine("-- Credential: $($cred.Name)")
-          [void]$credScript.AppendLine("-- Identity: $($cred.Identity)")
-          [void]$credScript.AppendLine("-- MANUAL ACTION REQUIRED: Create this credential with appropriate secret")
-          [void]$credScript.AppendLine("-- Example:")
-          [void]$credScript.AppendLine("/*")
-          [void]$credScript.AppendLine("CREATE DATABASE SCOPED CREDENTIAL [$($cred.Name)]")
-          [void]$credScript.AppendLine("WITH IDENTITY = '$($cred.Identity)',")
-          [void]$credScript.AppendLine("SECRET = '<PROVIDE_SECRET_HERE>';")
-          [void]$credScript.AppendLine("GO")
-          [void]$credScript.AppendLine("*/")
-          [void]$credScript.AppendLine("")
-        }
-
-        $credScript.ToString() | Out-File -FilePath $credFilePath -Encoding UTF8
-        Write-Output "  [SUCCESS] Documented $($dbCredentials.Count) database scoped credential(s)"
-        Write-Output "  [WARNING] Credentials exported as documentation only - secrets must be provided manually"
-      }
-      else {
-        Write-Output "  [INFO] No database scoped credentials found"
-      }
-    }
-    catch {
-      Write-Output "  [INFO] Database scoped credentials not available (SQL Server 2016+)"
-    }
+  if ($nonParallelResults.DatabaseScopedCredentials -gt 0) {
+    Write-Output "  [SUCCESS] Documented $($nonParallelResults.DatabaseScopedCredentials) database scoped credential(s)"
+    Write-Output "  [WARNING] Credentials exported as documentation only - secrets must be provided manually"
   }
 
   # 2. Schemas
@@ -4219,10 +5425,17 @@ function Export-DatabaseObjects {
     Write-Host '  [SKIPPED] Sequences excluded by configuration' -ForegroundColor Yellow
   }
   else {
-    $sequences = @($Database.Sequences | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) })
+    $allSequences = @($Database.Sequences | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) })
+    # Apply delta filtering (Sequences have modify_date)
+    $sequences = @(Get-DeltaFilteredCollection -Collection $allSequences -ObjectType 'Sequence')
+    $skippedForDelta = $allSequences.Count - $sequences.Count
+    if ($skippedForDelta -gt 0) {
+      Write-Output "  [DELTA] Skipped $skippedForDelta unchanged sequence(s)"
+    }
     if ($sequences.Count -gt 0) {
       $groupingMode = Get-ObjectGroupingMode -ObjectType 'Sequences'
-      Write-Output "  Found $($sequences.Count) sequence(s) to export (grouping: $groupingMode)"
+      $deltaInfo = if ($skippedForDelta -gt 0) { ", $skippedForDelta unchanged" } else { '' }
+      Write-Output "  Found $($sequences.Count) sequence(s) to export$deltaInfo (grouping: $groupingMode)"
       $successCount = 0
       $failCount = 0
       $currentItem = 0
@@ -4675,16 +5888,24 @@ function Export-DatabaseObjects {
     Write-Host '  [SKIPPED] Tables excluded by configuration' -ForegroundColor Yellow
   }
   else {
-    # Use cached tables collection
-    if ($tables.Count -gt 0) {
+    # Apply delta filtering (Tables have modify_date)
+    # Note: We keep $tables unfiltered for FK/Index iteration (those are always-export types)
+    $tablesToExport = @(Get-DeltaFilteredCollection -Collection $tables -ObjectType 'Table')
+    $skippedForDelta = $tables.Count - $tablesToExport.Count
+    if ($skippedForDelta -gt 0) {
+      Write-Output "  [DELTA] Skipped $skippedForDelta unchanged table(s)"
+    }
+    if ($tablesToExport.Count -gt 0) {
       $groupingMode = Get-ObjectGroupingMode -ObjectType 'Tables'
-      Write-Output "  Found $($tables.Count) table(s) to export (grouping: $groupingMode)"
+      Write-Output "  Found $($tablesToExport.Count) table(s) to export (grouping: $groupingMode)"
       $successCount = 0
       $failCount = 0
       $opts = New-ScriptingOptions -TargetVersion $TargetVersion -Overrides @{
         DriAll              = $false
         DriPrimaryKey       = $true
         DriUniqueKeys       = $true
+        DriChecks           = $true
+        DriDefaults         = $true
         DriForeignKeys      = $false
         Indexes             = $false
         ClusteredIndexes    = $false
@@ -4699,20 +5920,20 @@ function Export-DatabaseObjects {
       if ($groupingMode -eq 'single') {
         # One file per table (current behavior)
         $currentItem = 0
-        foreach ($table in $tables) {
+        foreach ($table in $tablesToExport) {
           $currentItem++
           try {
-            Write-ObjectProgress -ObjectName "$($table.Schema).$($table.Name)" -Current $currentItem -Total $tables.Count
+            Write-ObjectProgress -ObjectName "$($table.Schema).$($table.Name)" -Current $currentItem -Total $tablesToExport.Count
             $fileName = Join-Path $OutputDir '09_Tables_PrimaryKey' "$(Get-SafeFileName $($table.Schema)).$(Get-SafeFileName $($table.Name)).sql"
             Ensure-DirectoryExists $fileName
             $opts.FileName = $fileName
             $Scripter.Options = $opts
             $Scripter.EnumScript($table) | Out-Null
-            Write-ObjectProgress -ObjectName "$($table.Schema).$($table.Name)" -Current $currentItem -Total $tables.Count -Success
+            Write-ObjectProgress -ObjectName "$($table.Schema).$($table.Name)" -Current $currentItem -Total $tablesToExport.Count -Success
             $successCount++
           }
           catch {
-            Write-ObjectProgress -ObjectName "$($table.Schema).$($table.Name)" -Current $currentItem -Total $tables.Count -Failed
+            Write-ObjectProgress -ObjectName "$($table.Schema).$($table.Name)" -Current $currentItem -Total $tablesToExport.Count -Failed
             Write-ExportError -ObjectType 'Table' -ObjectName "$($table.Schema).$($table.Name)" -ErrorRecord $_ -AdditionalContext "Exporting table structure with primary keys"
             $failCount++
           }
@@ -4720,7 +5941,7 @@ function Export-DatabaseObjects {
       }
       elseif ($groupingMode -eq 'schema') {
         # Group by schema into numbered files
-        $tablesBySchema = $tables | Group-Object -Property Schema
+        $tablesBySchema = $tablesToExport | Group-Object -Property Schema
         $schemaIndex = 0
         $currentItem = 0
         foreach ($schemaGroup in $tablesBySchema) {
@@ -4736,15 +5957,15 @@ function Export-DatabaseObjects {
           try {
             foreach ($table in $schemaTables) {
               $currentItem++
-              Write-ObjectProgress -ObjectName "$($table.Schema).$($table.Name)" -Current $currentItem -Total $tables.Count
+              Write-ObjectProgress -ObjectName "$($table.Schema).$($table.Name)" -Current $currentItem -Total $tablesToExport.Count
               $Scripter.EnumScript($table) | Out-Null
               $opts.AppendToFile = $true  # Append subsequent objects
-              Write-ObjectProgress -ObjectName "$($table.Schema).$($table.Name)" -Current $currentItem -Total $tables.Count -Success
+              Write-ObjectProgress -ObjectName "$($table.Schema).$($table.Name)" -Current $currentItem -Total $tablesToExport.Count -Success
               $successCount++
             }
           }
           catch {
-            Write-ObjectProgress -ObjectName "$($schemaName).*" -Current $currentItem -Total $tables.Count -Failed
+            Write-ObjectProgress -ObjectName "$($schemaName).*" -Current $currentItem -Total $tablesToExport.Count -Failed
             Write-ExportError -ObjectType 'Table' -ObjectName "$($schemaName) schema tables" -ErrorRecord $_ -FilePath $fileName
             $failCount++
           }
@@ -4760,25 +5981,25 @@ function Export-DatabaseObjects {
 
         $currentItem = 0
         try {
-          foreach ($table in $tables) {
+          foreach ($table in $tablesToExport) {
             $currentItem++
-            Write-ObjectProgress -ObjectName "$($table.Schema).$($table.Name)" -Current $currentItem -Total $tables.Count
+            Write-ObjectProgress -ObjectName "$($table.Schema).$($table.Name)" -Current $currentItem -Total $tablesToExport.Count
             $Scripter.EnumScript($table) | Out-Null
             $opts.AppendToFile = $true  # Append subsequent objects
-            Write-ObjectProgress -ObjectName "$($table.Schema).$($table.Name)" -Current $currentItem -Total $tables.Count -Success
+            Write-ObjectProgress -ObjectName "$($table.Schema).$($table.Name)" -Current $currentItem -Total $tablesToExport.Count -Success
             $successCount++
           }
         }
         catch {
-          Write-ObjectProgress -ObjectName "Tables" -Current $currentItem -Total $tables.Count -Failed
+          Write-ObjectProgress -ObjectName "Tables" -Current $currentItem -Total $tablesToExport.Count -Failed
           Write-ExportError -ObjectType 'Table' -ObjectName "All tables" -ErrorRecord $_ -FilePath $fileName
-          $failCount = $tables.Count - $successCount
+          $failCount = $tablesToExport.Count - $successCount
         }
       }
 
       $script:CurrentProgressLabel = $null
-      Write-Output "  [SUMMARY] Exported $successCount/$($tables.Count) table(s) successfully" + $(if ($failCount -gt 0) { " ($failCount failed)" } else { "" })
-      $functionMetrics.TotalObjects += $tables.Count
+      Write-Output "  [SUMMARY] Exported $successCount/$($tablesToExport.Count) table(s) successfully" + $(if ($failCount -gt 0) { " ($failCount failed)" } else { "" })
+      $functionMetrics.TotalObjects += $tablesToExport.Count
       $functionMetrics.SuccessCount += $successCount
       $functionMetrics.FailCount += $failCount
     }
@@ -5288,7 +6509,13 @@ function Export-DatabaseObjects {
     Write-Host '  [SKIPPED] Functions excluded by configuration' -ForegroundColor Yellow
   }
   else {
-    $functions = @($Database.UserDefinedFunctions | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) })
+    $allFunctions = @($Database.UserDefinedFunctions | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) })
+    # Apply delta filtering (UserDefinedFunctions have modify_date)
+    $functions = @(Get-DeltaFilteredCollection -Collection $allFunctions -ObjectType 'UserDefinedFunction')
+    $skippedForDelta = $allFunctions.Count - $functions.Count
+    if ($skippedForDelta -gt 0) {
+      Write-Output "  [DELTA] Skipped $skippedForDelta unchanged function(s)"
+    }
     if ($functions.Count -gt 0) {
       $groupingMode = Get-ObjectGroupingMode -ObjectType 'Functions'
       Write-Output "  Found $($functions.Count) function(s) to export (grouping: $groupingMode)"
@@ -5486,12 +6713,18 @@ function Export-DatabaseObjects {
     Write-Host '  [SKIPPED] StoredProcedures excluded by configuration' -ForegroundColor Yellow
   }
   else {
-    $storedProcs = @($Database.StoredProcedures | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) })
-    $extendedProcs = @($Database.ExtendedStoredProcedures | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) })
+    $allStoredProcs = @($Database.StoredProcedures | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) })
+    $allExtendedProcs = @($Database.ExtendedStoredProcedures | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) })
+    # Apply delta filtering (StoredProcedures have modify_date)
+    $storedProcs = @(Get-DeltaFilteredCollection -Collection $allStoredProcs -ObjectType 'StoredProcedure')
+    # Extended procs don't have modify_date, always export them
+    $extendedProcs = $allExtendedProcs
+    $skippedForDelta = $allStoredProcs.Count - $storedProcs.Count
     $totalProcs = $storedProcs.Count + $extendedProcs.Count
-    if ($totalProcs -gt 0) {
+    if ($totalProcs -gt 0 -or $skippedForDelta -gt 0) {
       $groupingMode = Get-ObjectGroupingMode -ObjectType 'StoredProcedures'
-      Write-Output "  Found $($storedProcs.Count) stored procedure(s) and $($extendedProcs.Count) extended stored procedure(s) to export (grouping: $groupingMode)"
+      $deltaInfo = if ($skippedForDelta -gt 0) { ", $skippedForDelta unchanged" } else { '' }
+      Write-Output "  Found $($storedProcs.Count) stored procedure(s) and $($extendedProcs.Count) extended stored procedure(s) to export$deltaInfo (grouping: $groupingMode)"
       $successCount = 0
       $failCount = 0
       $opts = New-ScriptingOptions -TargetVersion $TargetVersion -Overrides @{
@@ -5695,11 +6928,11 @@ function Export-DatabaseObjects {
   }
   else {
     # Use cached tables collection (already initialized at function start)
-    $tableTriggers = @()
+    $allTableTriggers = @()
     foreach ($table in $tables) {
       try {
         if ($table.Triggers -and $table.Triggers.Count -gt 0) {
-          $tableTriggers += @(
+          $allTableTriggers += @(
             $table.Triggers |
             Where-Object {
               -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $_.Parent.Schema -Name $_.Name)
@@ -5710,6 +6943,26 @@ function Export-DatabaseObjects {
       catch {
         Write-ExportError -ObjectType 'TriggerCollection' -ObjectName "$($table.Schema).$($table.Name)" -ErrorRecord $_ -AdditionalContext "Accessing triggers collection"
       }
+    }
+    # Apply delta filtering (Triggers have modify_date)
+    # Note: Triggers use Parent.Schema for schema lookup
+    $tableTriggers = @()
+    $skippedForDelta = 0
+    if ($script:DeltaExportEnabled) {
+      foreach ($trigger in $allTableTriggers) {
+        if (Test-ShouldExportInDelta -ObjectType 'Trigger' -Schema $trigger.Parent.Schema -Name $trigger.Name) {
+          $tableTriggers += $trigger
+        }
+        else {
+          $skippedForDelta++
+        }
+      }
+    }
+    else {
+      $tableTriggers = $allTableTriggers
+    }
+    if ($skippedForDelta -gt 0) {
+      Write-Output "  [DELTA] Skipped $skippedForDelta unchanged table trigger(s)"
     }
     if ($tableTriggers.Count -gt 0) {
       $groupingMode = Get-ObjectGroupingMode -ObjectType 'TableTriggers'
@@ -5812,7 +7065,13 @@ function Export-DatabaseObjects {
     Write-Host '  [SKIPPED] Views excluded by configuration' -ForegroundColor Yellow
   }
   else {
-    $views = @($Database.Views | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) })
+    $allViews = @($Database.Views | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) })
+    # Apply delta filtering (Views have modify_date)
+    $views = @(Get-DeltaFilteredCollection -Collection $allViews -ObjectType 'View')
+    $skippedForDelta = $allViews.Count - $views.Count
+    if ($skippedForDelta -gt 0) {
+      Write-Output "  [DELTA] Skipped $skippedForDelta unchanged view(s)"
+    }
     if ($views.Count -gt 0) {
       $groupingMode = Get-ObjectGroupingMode -ObjectType 'Views'
       Write-Output "  Found $($views.Count) view(s) to export (grouping: $groupingMode)"
@@ -5907,7 +7166,13 @@ function Export-DatabaseObjects {
     Write-Host '  [SKIPPED] Synonyms excluded by configuration' -ForegroundColor Yellow
   }
   else {
-    $synonyms = @($Database.Synonyms | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) })
+    $allSynonyms = @($Database.Synonyms | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) })
+    # Apply delta filtering (Synonyms have modify_date)
+    $synonyms = @(Get-DeltaFilteredCollection -Collection $allSynonyms -ObjectType 'Synonym')
+    $skippedForDelta = $allSynonyms.Count - $synonyms.Count
+    if ($skippedForDelta -gt 0) {
+      Write-Output "  [DELTA] Skipped $skippedForDelta unchanged synonym(s)"
+    }
     if ($synonyms.Count -gt 0) {
       $groupingMode = Get-ObjectGroupingMode -ObjectType 'Synonyms'
       Write-Output "  Found $($synonyms.Count) synonym(s) to export (grouping: $groupingMode)"
@@ -6678,17 +7943,19 @@ function Export-DatabaseObjects {
             $fileName = Join-Path $OutputDir '20_SecurityPolicies' "$($policy.Schema).$($policy.Name).securitypolicy.sql"
             Ensure-DirectoryExists $fileName
 
-            # Create file with header
-            $policyScript = New-Object System.Text.StringBuilder
-            [void]$policyScript.AppendLine("-- Row-Level Security Policy: $($policy.Schema).$($policy.Name)")
-            [void]$policyScript.AppendLine("-- NOTE: Ensure predicate functions are created before applying this policy")
-            [void]$policyScript.AppendLine("")
+            # Create file with header (matching parallel export format)
+            $header = "-- Row-Level Security Policy: $($policy.Schema).$($policy.Name)`r`n-- NOTE: Ensure predicate functions are created before applying this policy`r`n`r`n"
+            [System.IO.File]::WriteAllText($fileName, $header, (New-Object System.Text.UTF8Encoding $false))
 
-            $policyDef = $Scripter.Script($policy)
-            [void]$policyScript.AppendLine($policyDef -join "`n")
-            [void]$policyScript.AppendLine("GO")
+            # Use EnumScript to match parallel export (produces consistent output across platforms)
+            $Scripter.Options.ToFileOnly = $true
+            $Scripter.Options.FileName = $fileName
+            $Scripter.Options.AppendToFile = $true
+            $Scripter.Options.ScriptBatchTerminator = $true
+            $Scripter.EnumScript(@($policy)) | Out-Null
 
-            $policyScript.ToString() | Out-File -FilePath $fileName -Encoding UTF8
+            # Add trailing newline to match parallel export format
+            [System.IO.File]::AppendAllText($fileName, "`r`n", (New-Object System.Text.UTF8Encoding $false))
             Write-ObjectProgress -ObjectName "$($policy.Schema).$($policy.Name)" -Current $currentItem -Total $securityPolicies.Count -Success
             $successCount++
           }
@@ -6718,7 +7985,10 @@ function Export-DatabaseObjects {
 function Export-TableData {
   <#
     .SYNOPSIS
-        Exports table data as INSERT statements.
+        Exports table data as INSERT statements using the unified work items infrastructure.
+    .DESCRIPTION
+        Routes sequential data export through Build-WorkItems-Data for consistency with parallel mode.
+        This ensures both modes use identical logic for row-count filtering and file naming.
     .OUTPUTS
         Returns a hashtable with TablesWithData, SuccessCount, FailCount, and EmptyCount for metrics.
     #>
@@ -6743,84 +8013,67 @@ function Export-TableData {
   Write-Output 'EXPORTING TABLE DATA'
   Write-Output '═══════════════════════════════════════════════'
 
-  # Use cached tables collection (already initialized at function start)
+  # Use the same work items builder as parallel mode (ensures identical row-count filtering)
+  $workItems = @(Build-WorkItems-Data -Database $Database -OutputDir $OutputDir)
 
-  if ($tables.Count -eq 0) {
-    Write-Output 'No tables found.'
+  if ($workItems.Count -eq 0) {
+    Write-Output '  No tables with data to export.'
     return $dataMetrics
   }
 
-  Write-Output "  Found $($tables.Count) table(s) to check for data export"
+  Write-Output "  Found $($workItems.Count) table(s) with data to export"
 
-  # OPTIMIZATION: Get all row counts in a single query instead of per-table COUNT(*)
-  # This reduces N database round-trips to just 1
-  Write-Output "  Fetching row counts for all tables..."
-  $rowCountQuery = @"
-SELECT
-    s.name AS SchemaName,
-    t.name AS TableName,
-    SUM(p.rows) AS TableRowCount
-FROM sys.tables t
-INNER JOIN sys.schemas s ON t.schema_id = s.schema_id
-INNER JOIN sys.partitions p ON t.object_id = p.object_id
-WHERE p.index_id IN (0, 1)  -- Heap or clustered index
-  AND t.is_ms_shipped = 0
-GROUP BY s.name, t.name
-"@
-  $rowCountData = $Database.ExecuteWithResults($rowCountQuery)
-  $rowCountLookup = @{}
-  foreach ($row in $rowCountData.Tables[0].Rows) {
-    $key = "$($row.SchemaName).$($row.TableName)"
-    $rowCountLookup[$key] = [long]$row.TableRowCount
-  }
-  Write-Output "  [SUCCESS] Retrieved row counts for $($rowCountLookup.Count) table(s)"
-
+  # Configure scripting options for data export
   $opts = New-ScriptingOptions -TargetVersion $TargetVersion -Overrides @{
     ScriptSchema = $false
     ScriptData   = $true
   }
-  $Scripter.Options = $opts
 
   $successCount = 0
   $failCount = 0
-  $emptyCount = 0
 
   $currentItem = 0
   Write-ProgressHeader 'TableData'
-  foreach ($table in $tables) {
-    $currentItem++
-    $percentComplete = [math]::Round(($currentItem / $tables.Count) * 100)
-    try {
-      # Look up row count from pre-fetched data (no network round-trip)
-      $tableKey = "$($table.Schema).$($table.Name)"
-      $rowCount = if ($rowCountLookup.ContainsKey($tableKey)) { $rowCountLookup[$tableKey] } else { 0 }
 
-      if ($rowCount -gt 0) {
-        Write-ObjectProgress -ObjectName "$($table.Schema).$($table.Name) ($rowCount row(s))" -Current $currentItem -Total $tables.Count
-        $fileName = Join-Path $OutputDir '20_Data' "$($table.Schema).$($table.Name).data.sql"
-        Ensure-DirectoryExists $fileName
-        $opts.FileName = $fileName
-        $Scripter.Options = $opts
-        $Scripter.EnumScript($table) | Out-Null
-        Write-ObjectProgress -ObjectName "$($table.Schema).$($table.Name)" -Current $currentItem -Total $tables.Count -Success
-        $successCount++
+  foreach ($workItem in $workItems) {
+    $currentItem++
+
+    # Get table info from work item
+    $objInfo = $workItem.Objects[0]  # Single mode: one table per work item
+    $tableName = "$($objInfo.Schema).$($objInfo.Name)"
+
+    try {
+      Write-ObjectProgress -ObjectName $tableName -Current $currentItem -Total $workItems.Count
+
+      # Fetch the SMO table object
+      $table = $Database.Tables[$objInfo.Name, $objInfo.Schema]
+      if (-not $table) {
+        throw "Table not found: $tableName"
       }
-      else {
-        $emptyCount++
-      }
+
+      # Ensure output directory exists
+      Ensure-DirectoryExists $workItem.OutputPath
+
+      # Configure scripter for this file
+      $opts.FileName = $workItem.OutputPath
+      $opts.AppendToFile = $workItem.AppendToFile
+      $Scripter.Options = $opts
+
+      # Script the data
+      $Scripter.EnumScript($table) | Out-Null
+
+      Write-ObjectProgress -ObjectName $tableName -Current $currentItem -Total $workItems.Count -Success
+      $successCount++
     }
     catch {
-      Write-ObjectProgress -ObjectName "$($table.Schema).$($table.Name)" -Current $currentItem -Total $tables.Count -Failed
-      Write-ExportError -ObjectType 'TableData' -ObjectName "$($table.Schema).$($table.Name)" -ErrorRecord $_ -AdditionalContext "Exporting $rowCount row(s)"
+      Write-ObjectProgress -ObjectName $tableName -Current $currentItem -Total $workItems.Count -Failed
+      Write-ExportError -ObjectType 'TableData' -ObjectName $tableName -ErrorRecord $_
       $failCount++
     }
   }
   $script:CurrentProgressLabel = $null
 
-  Write-Output "  [SUMMARY] Exported data from $successCount/$($tables.Count) table(s) successfully"
-  if ($emptyCount -gt 0) {
-    Write-Output "  [INFO] Skipped $emptyCount empty table(s)"
-  }
+  Write-Output "  [SUMMARY] Exported data from $successCount/$($workItems.Count) table(s) successfully"
   if ($failCount -gt 0) {
     Write-Output "  [WARNING] Failed to export data from $failCount table(s)"
   }
@@ -6829,7 +8082,7 @@ GROUP BY s.name, t.name
   $dataMetrics.TablesWithData = $successCount + $failCount
   $dataMetrics.SuccessCount = $successCount
   $dataMetrics.FailCount = $failCount
-  $dataMetrics.EmptyCount = $emptyCount
+  $dataMetrics.EmptyCount = 0  # Empty tables already filtered by Build-WorkItems-Data
   return $dataMetrics
 }
 
@@ -7084,6 +8337,9 @@ try {
     }
   }
 
+  # Store IncludeData in script scope for parallel workers (Build-WorkItems-Data checks this)
+  $script:IncludeData = $IncludeData
+
   # Apply command-line overrides for object type filtering (when no config file or to override config)
   if ($IncludeObjectTypes -and $IncludeObjectTypes.Count -gt 0) {
     $config.export.includeObjectTypes = $IncludeObjectTypes
@@ -7181,6 +8437,46 @@ try {
   # Validate dependencies
   Test-Dependencies
 
+  # Early delta export validation (before connection)
+  # Check config file for deltaFrom setting if not specified on command line
+  $effectiveDeltaFrom = $DeltaFrom
+  if (-not $effectiveDeltaFrom -and $config -and $config.ContainsKey('export')) {
+    $exportConfig = $config['export']
+    if ($exportConfig -and $exportConfig.ContainsKey('deltaFrom') -and $exportConfig['deltaFrom']) {
+      $effectiveDeltaFrom = $exportConfig['deltaFrom']
+    }
+  }
+
+  if ($effectiveDeltaFrom) {
+    Write-Output "Validating delta export from: $effectiveDeltaFrom"
+
+    # Perform early validation that doesn't require database connection
+    $deltaValidation = Test-DeltaExportCompatibility `
+      -DeltaFromPath $effectiveDeltaFrom `
+      -CurrentConfig $config `
+      -CurrentServerName $Server `
+      -CurrentDatabaseName $Database
+
+    # Show any warnings
+    foreach ($warning in $deltaValidation.Warnings) {
+      Write-Host "[WARNING] $warning" -ForegroundColor Yellow
+    }
+
+    # Check for blocking errors
+    if (-not $deltaValidation.IsValid) {
+      foreach ($error in $deltaValidation.Errors) {
+        Write-Host "[ERROR] $error" -ForegroundColor Red
+      }
+      throw "Delta export validation failed. See errors above."
+    }
+
+    # Store validated delta metadata for later use
+    $script:DeltaExportEnabled = $true
+    $script:DeltaMetadata = $deltaValidation.Metadata
+    $script:DeltaFromPath = $effectiveDeltaFrom
+    Write-Output "[SUCCESS] Delta export validated. Previous export: $($script:DeltaMetadata.objectCount) objects from $($script:DeltaMetadata.exportStartTimeServer)"
+  }
+
   # Test database connection
   if (-not (Test-DatabaseConnection -ServerName $Server -DatabaseName $Database -Cred $Credential -Config $config -Timeout $effectiveConnectionTimeout)) {
     exit 1
@@ -7273,17 +8569,32 @@ For more details, see: https://go.microsoft.com/fwlink/?linkid=2226722
 
   # Store connection info for parallel workers
   $script:ConnectionInfo = @{
-    ServerName              = $Server
-    DatabaseName            = $Database
-    UseIntegratedSecurity   = ($null -eq $Credential)
-    Username                = if ($Credential) { $Credential.UserName } else { $null }
-    SecurePassword          = if ($Credential) { $Credential.Password } else { $null }
-    TrustServerCertificate  = if ($config -and $config.ContainsKey('trustServerCertificate')) { $config.trustServerCertificate } else { $false }
-    ConnectTimeout          = $effectiveConnectionTimeout
+    ServerName             = $Server
+    DatabaseName           = $Database
+    UseIntegratedSecurity  = ($null -eq $Credential)
+    Username               = if ($Credential) { $Credential.UserName } else { $null }
+    SecurePassword         = if ($Credential) { $Credential.Password } else { $null }
+    TrustServerCertificate = if ($config -and $config.ContainsKey('trustServerCertificate')) { $config.trustServerCertificate } else { $false }
+    ConnectTimeout         = $effectiveConnectionTimeout
   }
 
   Write-Output "[SUCCESS] Connected to $Server\$Database"
   Write-Log "Connected successfully to $Server\$Database" -Severity INFO
+
+  # Initialize export metadata for delta export support
+  Initialize-ExportMetadata -Database $smDatabase -ServerName $Server -DatabaseName $Database -IncludeData $IncludeData
+
+  # Log delta export settings if enabled (validation was done earlier before connection)
+  if ($script:DeltaExportEnabled) {
+    Write-Log "Delta export enabled from $script:DeltaFromPath with $($script:DeltaMetadata.objectCount) objects" -Severity INFO
+
+    # Perform change detection
+    $script:DeltaChangeResults = Get-DeltaChangeDetection -Database $smDatabase -PreviousMetadata $script:DeltaMetadata
+    Write-Log "Delta change detection: $($script:DeltaChangeResults.ToExport.Count) to export, $($script:DeltaChangeResults.ToCopy.Count) to copy" -Severity INFO
+
+    # Build lookup hashtable for O(1) filtering during export
+    Initialize-DeltaExportLookup
+  }
 
   # Record connection time
   if ($connectionTimer) {
@@ -7408,8 +8719,8 @@ For more details, see: https://go.microsoft.com/fwlink/?linkid=2226722
     }
   }
 
-  # Export data if requested with timing
-  if ($IncludeData) {
+  # Export data if requested with timing (skip if parallel mode - data already exported)
+  if ($IncludeData -and -not $script:ParallelEnabled) {
     $dataTimer = Start-MetricsTimer -Category 'DataExport'
     $dataResult = Export-TableData -Database $smDatabase -OutputDir $exportDir -Scripter $scripter -TargetVersion $sqlVersion
     if ($dataTimer) {
@@ -7422,6 +8733,24 @@ For more details, see: https://go.microsoft.com/fwlink/?linkid=2226722
         AvgMsPerObject = 0
       }
     }
+  }
+
+  # Save export metadata (required for delta exports)
+  Save-ExportMetadata -OutputDir $exportDir
+
+  # Copy unchanged files from previous export if delta mode is active
+  if ($script:DeltaExportEnabled -and $script:DeltaChangeResults -and $script:DeltaChangeResults.ToCopy.Count -gt 0) {
+    Write-Output ''
+    Write-Output 'Copying unchanged objects from previous export...'
+    $copyResult = Copy-UnchangedFiles `
+      -ToCopyList $script:DeltaChangeResults.ToCopy `
+      -SourceExportPath $script:DeltaFromPath `
+      -DestinationExportPath $exportDir
+    Write-Output "  [SUCCESS] Copied $($copyResult.CopiedCount) unchanged file(s)"
+    if ($copyResult.FailedCount -gt 0) {
+      Write-Output "  [WARNING] Failed to copy $($copyResult.FailedCount) file(s)"
+    }
+    Write-Log "Delta export copied $($copyResult.CopiedCount) unchanged files" -Severity INFO
   }
 
   # Create deployment manifest

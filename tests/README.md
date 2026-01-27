@@ -101,6 +101,27 @@ The following objects require external resources or complex setup unsuitable for
 
 This comprehensive coverage ensures the export/import scripts handle all common database object types correctly.
 
+## Known Issues
+
+### SMO PrefetchObjects Synonym Limitation
+
+During export, you may see a VERBOSE message:
+```
+VERBOSE: Could not prefetch Synonym: Exception calling "PrefetchObjects" with "1" argument(s): "Prefetch objects failed for Database 'TestDb'. "
+```
+
+**This is a non-fatal warning** caused by an SMO bug/limitation:
+- `Database.PrefetchObjects(typeof(Synonym))` fails in SMO
+- The parameterless `PrefetchObjects()` succeeds for all types including Synonyms
+- Our code catches this error gracefully and falls back to lazy loading
+
+**Impact**: None - synonyms still export correctly. The prefetch optimization simply doesn't apply to this object type.
+
+**To verify**: Run `test-synonym-prefetch.ps1` which demonstrates:
+- 5 of 6 object types prefetch successfully (Table, View, StoredProcedure, UserDefinedFunction, Schema)
+- Only Synonym fails the typed prefetch
+- Direct synonym scripting works fine
+
 ## Stopping
 
 ```bash

@@ -35,7 +35,7 @@ retryDelaySeconds: 2
 # Set to false for:
 #   - Production environments with valid certificates
 #   - Environments with proper certificate infrastructure
-# 
+#
 # If you get certificate verification errors, set this to true
 trustServerCertificate: false
 
@@ -45,7 +45,7 @@ trustServerCertificate: false
 export:
   # Include table data in export (generates INSERT statements)
   includeData: false
-  
+
   # Object types to exclude from export
   # By default, ALL object types are exported
   # Uncomment items below to exclude them
@@ -78,20 +78,20 @@ export:
     # - PlanGuides                     # Query hint overrides
     # - Security                       # Keys, certificates, roles, users, audits
     # - SecurityPolicies               # Row-Level Security policies
-  
+
   # Specific objects to exclude (supports wildcards)
   # Pattern: schema.objectname
   excludeObjects: []
     # - "dbo.LegacyTable"              # Exclude specific table
     # - "staging.*"                    # Exclude all objects in staging schema
     # - "*.TempTable"                  # Exclude all TempTable objects
-  
+
   # Schemas to exclude entirely
   excludeSchemas: []
     # - "staging"                      # Temporary staging area
     # - "temp"                         # Temporary objects
     # - "archive"                      # Old/archived objects
-  
+
   # File grouping strategy per object type
   # Options: single (default), schema, all
   # - single: One file per object (best for Git tracking)
@@ -127,6 +127,10 @@ export:
     maxWorkers: 5         # Number of parallel workers (1-20)
     progressInterval: 50  # Report progress every N items
 
+  # Delta/incremental export (optional)
+  # Path to previous export for incremental export - only changed objects re-exported
+  # deltaFrom: "./exports/localhost_MyDb_20260125_100000"
+
 # ═══════════════════════════════════════════════════════════════
 # IMPORT CONFIGURATION
 # ═══════════════════════════════════════════════════════════════
@@ -135,7 +139,7 @@ import:
   # Dev = simplified for local development (default)
   # Prod = full production deployment
   defaultMode: Dev
-  
+
   # ─────────────────────────────────────────────────────────────
   # DEPENDENCY RETRY SETTINGS
   # ─────────────────────────────────────────────────────────────
@@ -144,12 +148,12 @@ import:
   dependencyRetries:
     # Enable retry logic for programmability objects (default: true)
     enabled: true
-    
+
     # Maximum retry attempts (default: 10)
     # If objects still fail after max retries, likely due to syntax errors
     # or missing references outside the retry group
     maxRetries: 10
-    
+
     # Object types to retry together as a group (default: Functions, StoredProcedures, Views)
     # These are processed with multiple passes to resolve cross-type dependencies
     # For example: Stored procedure queries a view, or function calls another function
@@ -160,7 +164,7 @@ import:
       # - Synonyms              # Uncomment if synonyms reference other synonyms
       # - TableTriggers         # Uncomment if triggers reference each other
       # - DatabaseTriggers      # Uncomment if database triggers have dependencies
-  
+
   # ─────────────────────────────────────────────────────────────
   # DEVELOPER MODE SETTINGS (Local Development)
   # ─────────────────────────────────────────────────────────────
@@ -173,33 +177,41 @@ import:
     #   Simplifies setup by using only PRIMARY FileGroup
     #   All tables/indexes/partitions moved to PRIMARY
     fileGroupStrategy: autoRemap
-    
+
     # Legacy setting (ignored if fileGroupStrategy is set)
     # Kept for backward compatibility
     includeFileGroups: false
-    
+
     # Skip database scoped configurations (use server defaults)
     # Reason: MAXDOP and other settings are hardware-specific
     includeConfigurations: false
-    
+
     # ALWAYS FALSE: Credentials require manual setup with actual secrets
     includeDatabaseScopedCredentials: false
-    
+
     # Skip external data sources
     # Reason: Developers may not have access to production Azure resources
     includeExternalData: false
-    
+
     # Import security policies but keep them DISABLED (STATE=OFF)
     # Reason: Developers need to see all data for debugging
     enableSecurityPolicies: false
-    
+
     # Skip data import by default (can override with -IncludeData)
     includeData: false
-    
+
     # Object types to exclude in developer mode
     excludeObjectTypes: []
       # - PlanGuides                   # Environment-specific query hints
       # - ExternalLibraries            # ML Services packages
+
+    # FileGroup file size defaults (optional, prevents large allocations on dev systems)
+    # If not specified, Dev mode uses safe defaults (1 MB size, 64 MB growth)
+    # The source database may have very large file sizes (e.g., 1 GB) that can fail
+    # on developer systems with limited disk space
+    fileGroupFileSizeDefaults:
+      sizeKB: 1024         # Initial file size in KB (1 MB)
+      fileGrowthKB: 65536  # File growth increment in KB (64 MB)
 
   # ─────────────────────────────────────────────────────────────
   # PRODUCTION MODE SETTINGS (Production Deployment)
@@ -207,38 +219,45 @@ import:
   productionMode:
     # Import FileGroups with path mappings
     includeFileGroups: true
-    
+
     # Import database scoped configurations
     includeConfigurations: true
-    
+
     # ALWAYS FALSE: Credentials require manual setup with actual secrets
     includeDatabaseScopedCredentials: false
-    
+
     # Import external data sources
     includeExternalData: true
-    
+
     # Enable Row-Level Security policies (STATE=ON)
     enableSecurityPolicies: true
-    
+
     # Skip data import by default (can override with -IncludeData)
     includeData: false
-    
+
     # No object types excluded in production mode
     excludeObjectTypes: []
-    
+
     # FileGroup path mappings (REQUIRED if includeFileGroups=true)
     # Map logical FileGroup names to physical paths on target server
     fileGroupPathMapping:
       FG_CURRENT: "E:\\SQLData\\Current"
       FG_ARCHIVE: "F:\\SQLArchive\\Archive"
       FG_HISTORICAL: "G:\\SQLHistory\\Data"
-    
+
     # External data source URL replacements
     # Map logical names to environment-specific connection strings
     externalConnectionStrings:
       AzureDataLake: "https://proddatalake.blob.core.windows.net/data"
       AzureBackup: "https://prodbackup.blob.core.windows.net/backup"
       OnPremDataSource: "sqlserver://onprem-server.domain.com/database"
+
+    # FileGroup file size defaults (optional, use source values or custom sizes)
+    # In production, you may want larger initial sizes to match capacity planning
+    # If not specified, Prod mode uses the original source database values
+    fileGroupFileSizeDefaults:
+      sizeKB: 1048576       # Initial file size in KB (1 GB)
+      fileGrowthKB: 262144  # File growth increment in KB (256 MB)
 
 # ═══════════════════════════════════════════════════════════════
 # USAGE EXAMPLES

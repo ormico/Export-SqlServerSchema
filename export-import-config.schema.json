@@ -168,6 +168,10 @@
             }
           },
           "additionalProperties": false
+        },
+        "deltaFrom": {
+          "type": "string",
+          "description": "Path to previous export for delta/incremental export. Only changed objects will be re-exported."
         }
       },
       "additionalProperties": false
@@ -291,6 +295,37 @@
             {
               "FG_CURRENT": "E:\\SQLData\\Current",
               "FG_ARCHIVE": "F:\\SQLArchive\\Archive"
+            }
+          ]
+        },
+        "fileGroupFileSizeDefaults": {
+          "type": "object",
+          "description": "Override file SIZE and FILEGROWTH for FileGroup data files (prevents large allocations on dev systems)",
+          "properties": {
+            "sizeKB": {
+              "type": "integer",
+              "description": "Initial file size in KB (default: 1024 = 1MB)",
+              "default": 1024,
+              "minimum": 64,
+              "maximum": 1073741824
+            },
+            "fileGrowthKB": {
+              "type": "integer",
+              "description": "File growth increment in KB (default: 65536 = 64MB)",
+              "default": 65536,
+              "minimum": 64,
+              "maximum": 1073741824
+            }
+          },
+          "additionalProperties": false,
+          "examples": [
+            {
+              "sizeKB": 1024,
+              "fileGrowthKB": 65536
+            },
+            {
+              "sizeKB": 10240,
+              "fileGrowthKB": 102400
             }
           ]
         },
