@@ -85,6 +85,10 @@
         "/^pwsh -NoProfile -File run-integration-test\\.ps1 2>&1 \\| Tee-Object -FilePath \"\\$env:TEMP\\\\test-output\\.txt\"$/": {
             "approve": true,
             "matchCommandLine": true
+        },
+        "/^pwsh -NoProfile -File run-perf-test\\.ps1 2>&1 \\| Tee-Object -FilePath perf-test-output\\.log$/": {
+            "approve": true,
+            "matchCommandLine": true
         }
     }
 }

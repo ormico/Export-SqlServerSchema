@@ -239,10 +239,25 @@ try {
     Write-Host "  SQL files created: $($sqlFiles.Count)" -ForegroundColor White
     Write-TestStep "Export verified" -Type Success
 
-    # Step 4.5: Test parallel export
+    # Step 4.5: Test parallel export (schema only, for comparison with sequential schema)
     Write-Host "`n" -NoNewline
-    Write-TestStep "Step 4.5: Testing parallel export mode..." -Type Info
+    Write-TestStep "Step 4.5: Testing parallel export mode (schema only)..." -Type Info
 
+    # First, do a sequential schema-only export for comparison
+    $seqSchemaExportPath = Join-Path $PSScriptRoot "exports_seq_schema"
+    if (Test-Path $seqSchemaExportPath) {
+        Write-Host "  Cleaning previous sequential schema exports..." -ForegroundColor Gray
+        Remove-Item $seqSchemaExportPath -Recurse -Force
+    }
+
+    Write-Host "  Running sequential schema-only export for comparison..." -ForegroundColor Gray
+    & $exportScript -Server $TEST_SERVER -Database $SourceDatabase -OutputPath $seqSchemaExportPath -Credential $credential -ConfigFile $exportConfigPath -Verbose 2>&1 | Out-Null
+
+    $seqSchemaDirs = Get-ChildItem $seqSchemaExportPath -Directory | Where-Object { $_.Name -match "^$($TEST_SERVER)_" }
+    $seqSchemaDir = $seqSchemaDirs[0].FullName
+    $seqSchemaFiles = Get-ChildItem $seqSchemaDir -Recurse -Filter "*.sql"
+
+    # Now do parallel schema-only export
     $parallelExportPath = Join-Path $PSScriptRoot "exports_parallel"
     if (Test-Path $parallelExportPath) {
         Write-Host "  Cleaning previous parallel exports..." -ForegroundColor Gray
@@ -272,27 +287,141 @@ try {
             $parallelDir = $parallelDirs[0].FullName
             $parallelSqlFiles = Get-ChildItem $parallelDir -Recurse -Filter "*.sql"
             Write-Host "  Parallel SQL files: $($parallelSqlFiles.Count)" -ForegroundColor White
-            Write-Host "  Sequential SQL files: $($sqlFiles.Count)" -ForegroundColor White
+            Write-Host "  Sequential SQL files (schema only): $($seqSchemaFiles.Count)" -ForegroundColor White
 
-            if ($parallelSqlFiles.Count -eq $sqlFiles.Count) {
-                Write-TestStep "Parallel export file count matches sequential" -Type Success
-                $parallelExportValid = $true
-            } else {
-                # Show differences for debugging
-                $seqFiles = $sqlFiles | Select-Object -ExpandProperty Name | Sort-Object
-                $parFiles = $parallelSqlFiles | Select-Object -ExpandProperty Name | Sort-Object
-                $diff = Compare-Object $seqFiles $parFiles
-                if ($diff) {
-                    Write-Host "  File differences:" -ForegroundColor Yellow
-                    $diff | ForEach-Object {
-                        $indicator = if ($_.SideIndicator -eq '<=') { 'Sequential only' } else { 'Parallel only' }
-                        Write-Host "    [$indicator] $($_.InputObject)" -ForegroundColor Yellow
+            # Compare relative paths (not just filenames)
+            $seqRelPaths = $seqSchemaFiles | ForEach-Object { $_.FullName.Replace($seqSchemaDir + [IO.Path]::DirectorySeparatorChar, '') } | Sort-Object
+            $parRelPaths = $parallelSqlFiles | ForEach-Object { $_.FullName.Replace($parallelDir + [IO.Path]::DirectorySeparatorChar, '') } | Sort-Object
+
+            $pathDiff = Compare-Object $seqRelPaths $parRelPaths
+            if ($pathDiff) {
+                Write-Host "  [ERROR] File path differences found:" -ForegroundColor Red
+                $pathDiff | ForEach-Object {
+                    $indicator = if ($_.SideIndicator -eq '<=') { 'Sequential only' } else { 'Parallel only' }
+                    Write-Host "    [$indicator] $($_.InputObject)" -ForegroundColor Yellow
+                }
+                throw "Parallel export file paths must match sequential export"
+            }
+            Write-TestStep "Parallel export file paths match sequential" -Type Success
+
+            # Compare file contents using hashes
+            Write-Host "  Comparing file contents..." -ForegroundColor Gray
+            $contentMismatches = @()
+            $emptyFiles = @()
+
+            foreach ($seqFile in $seqSchemaFiles) {
+                $relPath = $seqFile.FullName.Replace($seqSchemaDir + [IO.Path]::DirectorySeparatorChar, '')
+                $parFile = Join-Path $parallelDir $relPath
+
+                if (Test-Path $parFile) {
+                    # Check for empty files (except known empty ones like public.role.sql)
+                    $seqSize = (Get-Item $seqFile.FullName).Length
+                    $parSize = (Get-Item $parFile).Length
+
+                    if ($seqSize -gt 0 -and $parSize -eq 0) {
+                        $emptyFiles += $relPath
+                    }
+                    elseif ($seqSize -eq 0 -and $parSize -gt 0) {
+                        $emptyFiles += "$relPath (sequential empty, parallel has content)"
+                    }
+                    elseif ($seqSize -gt 0 -and $parSize -gt 0) {
+                        # Compare hashes for non-empty files
+                        $seqHash = (Get-FileHash $seqFile.FullName -Algorithm MD5).Hash
+                        $parHash = (Get-FileHash $parFile -Algorithm MD5).Hash
+
+                        if ($seqHash -ne $parHash) {
+                            $contentMismatches += $relPath
+                        }
                     }
                 }
-                Write-TestStep "Parallel export file count mismatch (parallel: $($parallelSqlFiles.Count), sequential: $($sqlFiles.Count))" -Type Error
-                throw "Parallel export must produce the same files as sequential export"
+            }
+
+            if ($emptyFiles.Count -gt 0) {
+                Write-Host "  [ERROR] Files with unexpected empty content:" -ForegroundColor Red
+                $emptyFiles | ForEach-Object { Write-Host "    - $_" -ForegroundColor Yellow }
+                throw "Parallel export produced empty files that should have content"
+            }
+
+            if ($contentMismatches.Count -gt 0) {
+                Write-Host "  [ERROR] Files with content differences:" -ForegroundColor Red
+                $contentMismatches | ForEach-Object { Write-Host "    - $_" -ForegroundColor Yellow }
+                throw "Parallel export file contents must match sequential export"
+            }
+
+            Write-TestStep "Parallel export file contents match sequential" -Type Success
+            $parallelExportValid = $true
+        }
+    }
+
+    # Step 4.6: Test parallel export WITH DATA (regression test for data export bugs)
+    Write-Host "`n" -NoNewline
+    Write-TestStep "Step 4.6: Testing parallel export with data (regression test)..." -Type Info
+
+    $parallelDataExportPath = Join-Path $PSScriptRoot "exports_parallel_data"
+    if (Test-Path $parallelDataExportPath) {
+        Write-Host "  Cleaning previous parallel data exports..." -ForegroundColor Gray
+        Remove-Item $parallelDataExportPath -Recurse -Force
+    }
+
+    Write-Host "  Running parallel export WITH data..." -ForegroundColor Gray
+    $parallelDataStart = Get-Date
+
+    try {
+        # Run parallel export with IncludeData
+        & $exportScript -Server $TEST_SERVER -Database $SourceDatabase -OutputPath $parallelDataExportPath -IncludeData -Credential $credential -ConfigFile $parallelConfigPath -Verbose 2>&1 | Out-Null
+        $parallelDataDuration = ((Get-Date) - $parallelDataStart).TotalSeconds
+        Write-Host "  Parallel data export completed in $($parallelDataDuration.ToString('F2'))s" -ForegroundColor White
+
+        # Verify parallel data export
+        $parallelDataDirs = Get-ChildItem $parallelDataExportPath -Directory | Where-Object { $_.Name -match "^$($TEST_SERVER)_" }
+        if ($parallelDataDirs.Count -gt 0) {
+            $parallelDataDir = $parallelDataDirs[0].FullName
+            $parallelDataFolder = Join-Path $parallelDataDir "21_Data"
+
+            # Check that 21_Data folder exists and has files
+            if (Test-Path $parallelDataFolder) {
+                $parallelDataFiles = Get-ChildItem $parallelDataFolder -Filter "*.sql" -ErrorAction SilentlyContinue
+                Write-Host "  Data files in parallel export: $($parallelDataFiles.Count)" -ForegroundColor White
+
+                # Verify data files are not empty
+                $emptyDataFiles = @()
+                foreach ($dataFile in $parallelDataFiles) {
+                    if ((Get-Item $dataFile.FullName).Length -eq 0) {
+                        $emptyDataFiles += $dataFile.Name
+                    }
+                }
+
+                if ($emptyDataFiles.Count -gt 0) {
+                    Write-Host "  [ERROR] Empty data files found:" -ForegroundColor Red
+                    $emptyDataFiles | ForEach-Object { Write-Host "    - $_" -ForegroundColor Yellow }
+                    throw "Parallel data export produced empty data files"
+                }
+
+                # Verify data file count matches tables with data
+                $tablesWithData = Invoke-SqlCommand @"
+SELECT COUNT(DISTINCT t.name) FROM sys.tables t
+INNER JOIN sys.partitions p ON t.object_id = p.object_id
+WHERE t.is_ms_shipped = 0 AND p.index_id IN (0, 1) AND p.rows > 0
+"@ $SourceDatabase
+
+                Write-Host "  Tables with data in source: $($tablesWithData.Trim())" -ForegroundColor White
+
+                if ($parallelDataFiles.Count -eq [int]$tablesWithData.Trim()) {
+                    Write-TestStep "Parallel data export file count matches tables with data" -Type Success
+                } else {
+                    Write-Host "  [WARNING] Data file count mismatch: $($parallelDataFiles.Count) files vs $($tablesWithData.Trim()) tables" -ForegroundColor Yellow
+                }
+
+                Write-TestStep "Parallel data export successful" -Type Success
+            } else {
+                Write-Host "  [ERROR] 21_Data folder not found in parallel export" -ForegroundColor Red
+                throw "Parallel data export did not create 21_Data folder"
             }
         }
+    } catch {
+        Write-TestStep "Parallel data export failed" -Type Error
+        Write-Host "  Error: $_" -ForegroundColor Red
+        throw "Parallel data export regression test failed: $_"
     }
 
     # Step 5: Prepare target databases
@@ -600,6 +729,8 @@ WHERE fg.name IN ('FG_CURRENT', 'FG_ARCHIVE')
 
     Write-TestStep "Database Creation: PASSED" -Type Success
     Write-TestStep "Schema Export: PASSED" -Type Success
+    Write-TestStep "Parallel Export (schema): PASSED" -Type Success
+    Write-TestStep "Parallel Export (with data): PASSED" -Type Success
     Write-TestStep "Dev Mode Import: PASSED" -Type Success
     Write-TestStep "Dev Mode Verification: PASSED" -Type Success
     Write-TestStep "Prod Mode Import: PASSED" -Type Success

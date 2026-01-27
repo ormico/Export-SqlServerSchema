@@ -22,75 +22,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Requires `groupBy: single` mode for object-level granularity
 
 **Parallel Export Feature**
-- New `-Parallel` switch to enable multi-threaded export for large databases
-- New `-MaxWorkers` parameter to control worker thread count (1-20, default: 5)
-- Parallel processing uses PowerShell runspace pools for thread-safe SMO operations
-- Work queue system distributes export tasks across workers
-- Only 5% slower than sequential for typical databases (acceptable overhead for future scalability)
-- All parallel code consolidated into main Export-SqlServerSchema.ps1 (2,379 lines of parallel logic)
+- New `-Parallel` switch enables multi-threaded export using PowerShell runspace pools
+- New `-MaxWorkers` parameter controls worker thread count (1-20, default: 5)
+- Work queue system distributes export tasks across isolated workers
+- **2x faster exports** on large databases with data (84s vs 173s parallel vs sequential)
+
+**Delta Export Feature (Incremental Export)**
+- New `-DeltaFrom` parameter for incremental exports (changed/new objects only)
+- Change detection via `sys.objects.modify_date` timestamps
+- Auto-generates `_export_metadata.json` for delta support
+- Requires `groupBy: single` mode; see [docs/DELTA_EXPORT_DESIGN.md](docs/DELTA_EXPORT_DESIGN.md)
 
 **FileGroup File Size Defaults**
-- New `fileGroupFileSizeDefaults` configuration option to override imported file sizes
-- Dev mode automatically uses safe defaults (1 MB initial, 64 MB growth) to prevent disk space issues
-- Configurable at root level or per-mode (`import.developerMode.fileGroupFileSizeDefaults`)
-- Supports `sizeKB` and `fileGrowthKB` parameters (values in kilobytes)
-- Updated JSON schema with new configuration properties
-- Integration tests verify FileGroup file size transformation
-
-**Test Utilities**
-- New `test-synonym-prefetch.ps1` - isolated test for SMO PrefetchObjects behavior
+- New `fileGroupFileSizeDefaults` config to override imported file sizes
+- Dev mode uses safe defaults (1 MB initial, 64 MB growth) to prevent disk space issues
 
 ### Fixed
 
-**Critical: Parallel Index Export Bug**
-- **Issue**: Parallel export with single grouping mode created duplicate CREATE TABLE statements in index files, causing import failures
-- **Root Cause**: Build-WorkItems-Indexes passed table identifiers instead of index identifiers; parallel worker fetched Table SMO objects and scripted them with Indexes=$true, generating CREATE TABLE + CREATE INDEX
-- **Fix**: Modified Build-WorkItems-Indexes to pass individual index identifiers (TableSchema, TableName, IndexName); updated parallel worker to fetch individual Index objects from parent tables
-- **Impact**: Index files now contain only CREATE INDEX statements; import succeeds without table duplication errors
-- **File Structure**: Each index now gets its own file (e.g., `Schema1.Table1.IX_Active.sql`)
+- **Parallel Index Export**: Fixed duplicate CREATE TABLE statements in index files; now exports individual indexes correctly
+- **Path Traversal Prevention**: All Build-WorkItems-* functions sanitize schema/object names with `Get-SafeFileName`
+- **Parallel Worker Race Condition**: Directory creation now handles concurrent worker conflicts gracefully
+- **Parallel Error Reporting**: `$errorItems` collection now correctly populated from failed work items
+- **Parallel Data Export**: Fixed `TableData` handler and `$script:IncludeData` scoping for parallel workers
+- **Unified Data Export**: Both sequential and parallel modes now use `Build-WorkItems-Data` for consistent row-count filtering
 
-**Security: Path Traversal Prevention in Parallel Export**
-- **Issue**: Build-WorkItems-* functions constructed file paths using raw schema/object names without sanitization
-- **Risk**: Schema or object names containing path separators (`/`, `\`) or parent references (`..`) could escape the export directory
-- **Fix**: Applied `Get-SafeFileName` sanitization to all schema and object names in 15+ Build-WorkItems-* functions
-- **Affected Functions**: Build-WorkItems-Sequences, Build-WorkItems-Security (roles/users), Build-WorkItems-UserDefinedTypes, Build-WorkItems-XmlSchemaCollections, Build-WorkItems-ForeignKeys, Build-WorkItems-Indexes, Build-WorkItems-Defaults, Build-WorkItems-Rules, Build-WorkItems-Functions, Build-WorkItems-UserDefinedAggregates, Build-WorkItems-StoredProcedures, Build-WorkItems-TableTriggers, Build-WorkItems-Views, Build-WorkItems-Synonyms, Build-WorkItems-SecurityPolicies, Build-WorkItems-Data
-
-**Reliability: Parallel Worker Race Condition**
-- **Issue**: Multiple workers creating the same directory simultaneously could cause intermittent failures
-- **Fix**: Added try-catch around directory creation with secondary existence check after exception
-- **Pattern**: If `New-Item` throws, verify directory exists before propagating error (another worker may have created it)
-
-**Bug Fix: Parallel Export Error Reporting**
-- **Issue**: `$errorItems` ConcurrentBag was defined but never populated, always showing 0 errors
-- **Fix**: Added post-processing loop to filter items with `Success=$false` from `$completedItems` into `$errorItems`
-- **Impact**: Error summary now correctly reports failed export items
-
-### Performance
+### Performance Results
 
 Test database: 500 tables, 100 views, 500 procedures, 100 functions, 100 triggers, 2000 indexes, 50K rows
 
-| Mode | Export | Import | Total |
-|------|--------|--------|-------|
-| Sequential Single | 93.30s (2,400 files) | 20.71s | 114.01s |
-| Sequential Schema | 93.45s (101 files) | 12.09s | 105.54s |
-| Sequential All | 93.89s (29 files) | 12.19s | 106.08s |
-| **Parallel Single** | 97.58s (2,400 files) | 21.30s | 118.88s |
+**Schema Only** (no `-IncludeData`, ~2,400 files)
+
+| Metric | v1.4.x Baseline | v1.5.0 | v1.5.1 | v1.6.0 Sequential | v1.6.0 Parallel |
+|--------|-----------------|--------|--------|-------------------|-----------------|
+| Export | 229s | 144s | 99s | **91s** | **39s** |
+| Improvement | -- | 37% | 57% | **60%** | **83%** |
 
 **Key Findings**:
-- **56-60% faster** than v1.5.0 across all modes (from 215-231s to 93-98s export time)
-- Parallel export only 5% slower than sequential (97.58s vs 93.30s) - acceptable overhead
-- Schema/All grouping modes 7% faster total time than single mode
-- Import times improved 8-18% due to file count reduction and optimizations
+- Sequential schema-only: **60% faster** than v1.4.x baseline (229s → 91s)
+- Parallel schema-only: **83% faster** than v1.4.x baseline (229s → 39s), **2.3x faster** than sequential
 
 ### Known Issues
 
 **SMO PrefetchObjects Synonym Limitation**
-- `Database.PrefetchObjects(typeof(Synonym))` fails with "Prefetch objects failed for Database" error
-- This is a confirmed SMO bug/limitation, not an issue in Export-SqlServerSchema
-- **Impact**: None - the error is caught and logged as VERBOSE; synonyms export correctly via lazy loading
-- **Workaround**: None needed; the parameterless `PrefetchObjects()` works but is slower
-- **Affected**: Observed on SQL Server 2022 running in Linux/Docker containers
-- **Test**: Run `tests/test-synonym-prefetch.ps1` to reproduce and verify
+- `Database.PrefetchObjects(typeof(Synonym))` fails on SQL Server 2022/Linux containers
+- **Impact**: None — caught and logged; synonyms export correctly via lazy loading
 
 ## [1.5.1] - 2026-01-21
 
