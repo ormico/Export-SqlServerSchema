@@ -2408,6 +2408,10 @@ function Build-WorkItems-Data {
   <#
   .SYNOPSIS
   Builds work items for table data export if -IncludeData is enabled.
+
+  .DESCRIPTION
+  Pre-fetches row counts for all tables in a single query to avoid N round-trips.
+  Only includes tables that have data (skips empty tables for efficiency).
   #>
   param($Database, $OutputDir)
 
@@ -2417,6 +2421,36 @@ function Build-WorkItems-Data {
   $tables = @($Database.Tables | Where-Object {
     -not $_.IsSystemObject -and
     -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name)
+  })
+
+  if ($tables.Count -eq 0) { return @() }
+
+  # OPTIMIZATION: Pre-fetch row counts in a single query (same as Export-TableData)
+  # This reduces N database round-trips to just 1
+  $rowCountQuery = @"
+SELECT
+    s.name AS SchemaName,
+    t.name AS TableName,
+    SUM(p.rows) AS TableRowCount
+FROM sys.tables t
+INNER JOIN sys.schemas s ON t.schema_id = s.schema_id
+INNER JOIN sys.partitions p ON t.object_id = p.object_id
+WHERE p.index_id IN (0, 1)  -- Heap or clustered index
+  AND t.is_ms_shipped = 0
+GROUP BY s.name, t.name
+HAVING SUM(p.rows) > 0
+"@
+  $rowCountData = $Database.ExecuteWithResults($rowCountQuery)
+  $tablesWithData = @{}
+  foreach ($row in $rowCountData.Tables[0].Rows) {
+    $key = "$($row.SchemaName).$($row.TableName)"
+    $tablesWithData[$key] = [long]$row.TableRowCount
+  }
+
+  # Filter to only tables with data
+  $tables = @($tables | Where-Object {
+    $key = "$($_.Schema).$($_.Name)"
+    $tablesWithData.ContainsKey($key)
   })
 
   if ($tables.Count -eq 0) { return @() }
@@ -2431,7 +2465,7 @@ function Build-WorkItems-Data {
       foreach ($table in $tables) {
         $safeSchema = Get-SafeFileName $table.Schema
         $safeName = Get-SafeFileName $table.Name
-        $fileName = "Data.$safeSchema.$safeName.sql"
+        $fileName = "$safeSchema.$safeName.data.sql"
         $workItems += New-ExportWorkItem `
           -ObjectType 'TableData' `
           -GroupingMode 'single' `
