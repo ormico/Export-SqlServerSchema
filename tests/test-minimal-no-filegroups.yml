@@ -1,0 +1,9 @@
+# Minimal config with FileGroups SKIPPED (removeToPrimary strategy)
+# All FileGroup references are remapped to PRIMARY
+$schema: "../export-import-config.schema.json"
+
+trustServerCertificate: true
+
+import:
+  developerMode:
+    fileGroupStrategy: removeToPrimary

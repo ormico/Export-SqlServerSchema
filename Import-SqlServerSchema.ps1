@@ -187,7 +187,7 @@ function Export-Metrics {
     [string]$OutputPath
   )
 
-  if (-not $CollectMetrics) { return }
+  if (-not $script:CollectMetrics) { return }
 
   $script:Metrics.timestamp = (Get-Date).ToString('o')
   $script:Metrics.server = $Server
@@ -1293,7 +1293,6 @@ function Get-ScriptFiles {
       # Simplified config or no config - use Dev defaults
       @{
         fileGroupStrategy                = 'autoRemap'  # Default: auto-remap FileGroups
-        includeFileGroups                = $false       # Will be overridden by strategy
         includeConfigurations            = $false
         includeDatabaseScopedCredentials = $false
         includeExternalData              = $false
@@ -1343,9 +1342,21 @@ function Get-ScriptFiles {
       # Skip FileGroups entirely, transformations will handle references
     }
   }
-  elseif ($modeSettings.includeFileGroups) {
-    # Prod mode - use explicit includeFileGroups setting
-    $orderedDirs += '00_FileGroups'
+  else {
+    # Prod mode - also use fileGroupStrategy
+    $prodStrategy = if ($modeSettings.ContainsKey('fileGroupStrategy')) {
+      $modeSettings.fileGroupStrategy
+    } else {
+      'autoRemap'  # Default strategy
+    }
+    
+    if ($prodStrategy -eq 'autoRemap') {
+      $sourceFileGroups = Join-Path $Path '00_FileGroups'
+      if (Test-Path $sourceFileGroups) {
+        $orderedDirs += '00_FileGroups'
+      }
+    }
+    # removeToPrimary: Skip FileGroups entirely
   }
 
   # Security - MUST come before schemas since schemas may have GRANT statements referencing roles/users
@@ -1649,7 +1660,7 @@ function Show-ImportConfiguration {
     else {
       # Simplified config or no config - use Dev defaults
       @{
-        includeFileGroups                = $false
+        fileGroupStrategy                = 'autoRemap'  # Default: auto-remap FileGroups
         includeConfigurations            = $false
         includeDatabaseScopedCredentials = $false
         includeExternalData              = $false
@@ -1666,7 +1677,7 @@ function Show-ImportConfiguration {
     else {
       # Simplified config or no config - use Prod defaults
       @{
-        includeFileGroups                = $true
+        fileGroupStrategy                = 'autoRemap'  # Default: auto-remap FileGroups
         includeConfigurations            = $true
         includeDatabaseScopedCredentials = $false
         includeExternalData              = $true
@@ -1675,8 +1686,9 @@ function Show-ImportConfiguration {
     }
   }
 
-  # Display mode-specific settings
-  if ($modeSettings.includeFileGroups) {
+  # Display mode-specific settings - determine from fileGroupStrategy
+  $displayStrategy = if ($modeSettings.ContainsKey('fileGroupStrategy')) { $modeSettings.fileGroupStrategy } else { 'autoRemap' }
+  if ($displayStrategy -eq 'autoRemap') {
     Write-Host "[ENABLED] FileGroups" -ForegroundColor Green
   }
   else {
@@ -1722,8 +1734,9 @@ function Show-ImportConfiguration {
 #region Main Script
 
 try {
-  # Start overall timing if collecting metrics
-  if ($CollectMetrics) {
+  # Start overall timing if collecting metrics (CLI switch, config applied later)
+  $script:CollectMetrics = $CollectMetrics.IsPresent
+  if ($script:CollectMetrics) {
     $script:ImportStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
     $script:InitStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
   }
@@ -1733,14 +1746,14 @@ try {
     import = @{
       defaultMode    = 'Dev'
       developerMode  = @{
-        includeFileGroups                = $false
+        fileGroupStrategy                = 'autoRemap'
         includeConfigurations            = $false
         includeDatabaseScopedCredentials = $false
         includeExternalData              = $false
         enableSecurityPolicies           = $false
       }
       productionMode = @{
-        includeFileGroups                = $true
+        fileGroupStrategy                = 'autoRemap'
         includeConfigurations            = $true
         includeDatabaseScopedCredentials = $false
         includeExternalData              = $true
@@ -1758,24 +1771,82 @@ try {
       # Support both simplified config (importMode at root) and full config (import.defaultMode nested)
       $configImportMode = if ($config.importMode) { $config.importMode } else { $config.import.defaultMode }
 
-      # Override ImportMode if specified in config
-      if ($configImportMode -and $ImportMode -eq 'Dev') {
+      # Override ImportMode from config ONLY if not explicitly set on command line
+      # Command-line parameters always take precedence over config file
+      if ($configImportMode -and -not $PSBoundParameters.ContainsKey('ImportMode')) {
         $ImportMode = $configImportMode
         Write-Output "[INFO] Import mode set from config file: $ImportMode"
       }
 
-      # Override IncludeData if specified in config
+      # Override IncludeData from config ONLY if not explicitly set on command line
       # Support both simplified config (includeData at root) and full config (nested mode settings)
       Write-Verbose "Config includeData value: $($config.includeData), Parameter IncludeData: $IncludeData"
-      if ($config.includeData -and -not $IncludeData) {
-        $IncludeData = $config.includeData
-        Write-Output "[INFO] Data import enabled from config file"
-      }
-      elseif ($config.import) {
-        $modeSettings = if ($ImportMode -eq 'Dev') { $config.import.developerMode } else { $config.import.productionMode }
-        if ($modeSettings.includeData -and -not $IncludeData) {
-          $IncludeData = $modeSettings.includeData
+      if (-not $PSBoundParameters.ContainsKey('IncludeData')) {
+        # Check root-level includeData first
+        if ($config.includeData) {
+          $IncludeData = $config.includeData
           Write-Output "[INFO] Data import enabled from config file"
+        }
+        # Then check mode-specific settings
+        elseif ($config.import) {
+          $modeSettings = if ($ImportMode -eq 'Dev') { $config.import.developerMode } else { $config.import.productionMode }
+          if ($modeSettings -and $modeSettings.includeData) {
+            $IncludeData = $modeSettings.includeData
+            Write-Output "[INFO] Data import enabled from config file ($ImportMode mode)"
+          }
+        }
+      }
+
+      # Override CreateDatabase from config ONLY if not explicitly set on command line
+      if (-not $PSBoundParameters.ContainsKey('CreateDatabase')) {
+        if ($config.import.createDatabase) {
+          $CreateDatabase = $config.import.createDatabase
+          Write-Verbose "[INFO] CreateDatabase set from config file: $CreateDatabase"
+        }
+      }
+
+      # Override Force from config ONLY if not explicitly set on command line
+      if (-not $PSBoundParameters.ContainsKey('Force')) {
+        if ($config.import.force) {
+          $Force = $config.import.force
+          Write-Verbose "[INFO] Force set from config file: $Force"
+        }
+      }
+
+      # Override ContinueOnError from config ONLY if not explicitly set on command line
+      if (-not $PSBoundParameters.ContainsKey('ContinueOnError')) {
+        if ($config.import.continueOnError) {
+          $ContinueOnError = $config.import.continueOnError
+          $ErrorActionPreference = 'Continue'
+          Write-Verbose "[INFO] ContinueOnError set from config file: $ContinueOnError"
+        }
+      }
+
+      # Override ShowSQL from config ONLY if not explicitly set on command line
+      if (-not $PSBoundParameters.ContainsKey('ShowSQL')) {
+        if ($config.import.showSql) {
+          $ShowSQL = $config.import.showSql
+          Write-Verbose "[INFO] ShowSQL set from config file: $ShowSQL"
+        }
+      }
+
+      # Override CollectMetrics from config ONLY if not explicitly set on command line
+      if (-not $PSBoundParameters.ContainsKey('CollectMetrics')) {
+        if ($config.collectMetrics) {
+          $script:CollectMetrics = $config.collectMetrics
+          # Start metrics if enabled by config (if not already started)
+          if ($script:CollectMetrics -and -not $script:ImportStopwatch) {
+            $script:ImportStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+            $script:InitStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+          }
+        }
+      }
+
+      # Override IncludeObjectTypes from config ONLY if not explicitly set on command line
+      if (-not $PSBoundParameters.ContainsKey('IncludeObjectTypes')) {
+        if ($config.import.includeObjectTypes -and $config.import.includeObjectTypes.Count -gt 0) {
+          $script:IncludeObjectTypesFilter = $config.import.includeObjectTypes
+          Write-Verbose "[INFO] IncludeObjectTypes set from config file: $($config.import.includeObjectTypes -join ', ')"
         }
       }
     }
@@ -1857,7 +1928,7 @@ try {
   Write-Output ''
 
   # End initialization timing, start preliminary checks timing
-  if ($CollectMetrics) {
+  if ($script:CollectMetrics) {
     $script:InitStopwatch.Stop()
     $script:Metrics.initializationSeconds = $script:InitStopwatch.Elapsed.TotalSeconds
     $script:PrelimStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
@@ -1867,7 +1938,7 @@ try {
   # Create shared connection for preliminary checks and script execution
   # This eliminates connection overhead from multiple check functions
   # Note: Connect to 'master' first if -CreateDatabase is used (target DB might not exist yet)
-  if ($CollectMetrics) {
+  if ($script:CollectMetrics) {
     $script:ConnectionStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
     Write-Verbose "[TIMING] Creating shared connection..."
   }
@@ -1881,30 +1952,30 @@ try {
     Write-Log "Failed to create connection to $Server" -Severity ERROR
     exit 1
   }
-  if ($CollectMetrics) {
+  if ($script:CollectMetrics) {
     $script:ConnectionStopwatch.Stop()
     $script:Metrics.connectionTimeSeconds = $script:ConnectionStopwatch.Elapsed.TotalSeconds
     Write-Verbose "[TIMING] Shared connection created in $([math]::Round($script:ConnectionStopwatch.Elapsed.TotalSeconds, 3))s"
   }
 
   # Test connection to server (reuse shared connection)
-  if ($CollectMetrics) { Write-Verbose "[TIMING] Starting Test-DatabaseConnection..." }
+  if ($script:CollectMetrics) { Write-Verbose "[TIMING] Starting Test-DatabaseConnection..." }
   $testConnSw = [System.Diagnostics.Stopwatch]::StartNew()
   if (-not (Test-DatabaseConnection -ServerName $Server -Cred $Credential -Config $config -Timeout $effectiveConnectionTimeout -Connection $script:SharedConnection)) {
     Write-Log "Connection test failed to $Server" -Severity ERROR
     exit 1
   }
   $testConnSw.Stop()
-  if ($CollectMetrics) { Write-Verbose "[TIMING] Test-DatabaseConnection completed in $([math]::Round($testConnSw.Elapsed.TotalSeconds, 3))s" }
+  if ($script:CollectMetrics) { Write-Verbose "[TIMING] Test-DatabaseConnection completed in $([math]::Round($testConnSw.Elapsed.TotalSeconds, 3))s" }
   Write-Log "Connection test successful to $Server" -Severity INFO
   Write-Output ''
 
   # Check if database exists (reuse shared connection)
-  if ($CollectMetrics) { Write-Verbose "[TIMING] Starting Test-DatabaseExists..." }
+  if ($script:CollectMetrics) { Write-Verbose "[TIMING] Starting Test-DatabaseExists..." }
   $testDbSw = [System.Diagnostics.Stopwatch]::StartNew()
   $dbExists = Test-DatabaseExists -ServerName $Server -DatabaseName $Database -Cred $Credential -Config $config -Timeout $effectiveConnectionTimeout -Connection $script:SharedConnection
   $testDbSw.Stop()
-  if ($CollectMetrics) { Write-Verbose "[TIMING] Test-DatabaseExists completed in $([math]::Round($testDbSw.Elapsed.TotalSeconds, 3))s" }
+  if ($script:CollectMetrics) { Write-Verbose "[TIMING] Test-DatabaseExists completed in $([math]::Round($testDbSw.Elapsed.TotalSeconds, 3))s" }
 
   if (-not $dbExists) {
     if ($CreateDatabase) {
@@ -1933,7 +2004,7 @@ try {
   Write-Output ''
 
   # Check for existing schema (reuse shared connection)
-  if ($CollectMetrics) { Write-Verbose "[TIMING] Starting Test-SchemaExists..." }
+  if ($script:CollectMetrics) { Write-Verbose "[TIMING] Starting Test-SchemaExists..." }
   $testSchemaSw = [System.Diagnostics.Stopwatch]::StartNew()
   if (Test-SchemaExists -ServerName $Server -DatabaseName $Database -Cred $Credential -Config $config -Timeout $effectiveConnectionTimeout -Connection $script:SharedConnection) {
     if (-not $Force) {
@@ -1944,13 +2015,13 @@ try {
     Write-Output '[INFO] Proceeding with redeployment due to -Force flag'
   }
   $testSchemaSw.Stop()
-  if ($CollectMetrics) { Write-Verbose "[TIMING] Test-SchemaExists completed in $([math]::Round($testSchemaSw.Elapsed.TotalSeconds, 3))s" }
+  if ($script:CollectMetrics) { Write-Verbose "[TIMING] Test-SchemaExists completed in $([math]::Round($testSchemaSw.Elapsed.TotalSeconds, 3))s" }
   Write-Output ''
 
-  if ($CollectMetrics) { Write-Verbose "[TIMING] Preliminary checks total so far: $([math]::Round($script:PrelimStopwatch.Elapsed.TotalSeconds, 3))s" }
+  if ($script:CollectMetrics) { Write-Verbose "[TIMING] Preliminary checks total so far: $([math]::Round($script:PrelimStopwatch.Elapsed.TotalSeconds, 3))s" }
 
   # End preliminary checks timing, start script collection timing
-  if ($CollectMetrics) {
+  if ($script:CollectMetrics) {
     $script:PrelimStopwatch.Stop()
     $script:Metrics.preliminaryChecksSeconds = $script:PrelimStopwatch.Elapsed.TotalSeconds
     $script:ScriptCollectStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
@@ -1976,7 +2047,7 @@ try {
   Write-Verbose "Using path separator for $targetOS`: $pathSeparator"
 
   # End script collection timing
-  if ($CollectMetrics) {
+  if ($script:CollectMetrics) {
     $script:ScriptCollectStopwatch.Stop()
     $script:Metrics.scriptCollectionSeconds = $script:ScriptCollectStopwatch.Elapsed.TotalSeconds
   }
@@ -2303,7 +2374,7 @@ try {
   $nonDataScripts = $scripts | Where-Object { $_.Name -notmatch '\.data\.sql$' }
 
   # Track counts for metrics
-  if ($CollectMetrics) {
+  if ($script:CollectMetrics) {
     $script:Metrics.dataScriptsCount = $dataScripts.Count
     $script:Metrics.nonDataScriptsCount = $nonDataScripts.Count
     $script:ScriptStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
@@ -2505,7 +2576,7 @@ try {
     # Disable all foreign key constraints
     # Get list of FKs and disable them individually
     $smServer = $null
-    if ($CollectMetrics) { $script:FKStopwatch = [System.Diagnostics.Stopwatch]::StartNew() }
+    if ($script:CollectMetrics) { $script:FKStopwatch = [System.Diagnostics.Stopwatch]::StartNew() }
     try {
       Write-Verbose "Connecting to $Server database $Database to disable FKs..."
       $smServer = [Microsoft.SqlServer.Management.Smo.Server]::new($Server)
@@ -2558,7 +2629,7 @@ try {
       if ($smServer -and $smServer.ConnectionContext.IsOpen) {
         $smServer.ConnectionContext.Disconnect()
       }
-      if ($CollectMetrics -and $script:FKStopwatch) {
+      if ($script:CollectMetrics -and $script:FKStopwatch) {
         $script:FKStopwatch.Stop()
         $script:Metrics.fkDisableSeconds = $script:FKStopwatch.Elapsed.TotalSeconds
       }
@@ -2591,7 +2662,7 @@ try {
 
     # Re-enable all foreign key constraints and validate data
     $smServer = $null
-    if ($CollectMetrics) { $script:FKStopwatch = [System.Diagnostics.Stopwatch]::StartNew() }
+    if ($script:CollectMetrics) { $script:FKStopwatch = [System.Diagnostics.Stopwatch]::StartNew() }
     try {
       $smServer = [Microsoft.SqlServer.Management.Smo.Server]::new($Server)
       if ($Credential) {
@@ -2648,7 +2719,7 @@ try {
       if ($smServer -and $smServer.ConnectionContext.IsOpen) {
         $smServer.ConnectionContext.Disconnect()
       }
-      if ($CollectMetrics -and $script:FKStopwatch) {
+      if ($script:CollectMetrics -and $script:FKStopwatch) {
         $script:FKStopwatch.Stop()
         $script:Metrics.fkEnableSeconds = $script:FKStopwatch.Elapsed.TotalSeconds
       }
@@ -2662,7 +2733,7 @@ try {
   }
 
   # Stop script execution timing
-  if ($CollectMetrics -and $script:ScriptStopwatch) {
+  if ($script:CollectMetrics -and $script:ScriptStopwatch) {
     $script:ScriptStopwatch.Stop()
     $script:Metrics.scriptExecutionSeconds = $script:ScriptStopwatch.Elapsed.TotalSeconds
   }
@@ -2787,7 +2858,7 @@ try {
   }
 
   # Stop overall timing and export metrics
-  if ($CollectMetrics) {
+  if ($script:CollectMetrics) {
     if ($script:ImportStopwatch) {
       $script:ImportStopwatch.Stop()
       $script:Metrics.totalDurationSeconds = $script:ImportStopwatch.Elapsed.TotalSeconds
@@ -2837,3 +2908,4 @@ catch {
 }
 
 #endregion
+

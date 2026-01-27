@@ -1,11 +1,14 @@
 # Export-SqlServerSchema Configuration File
 # This file controls which objects are exported and how they are imported
+#
+# MINIMAL CONFIG: Every property has a safe default. An empty config file works!
+# You only need to specify properties you want to override.
 
 # JSON Schema for validation
 $schema: "./export-import-config.schema.json"
 
 # ═══════════════════════════════════════════════════════════════
-# CONNECTION SETTINGS
+# GLOBAL SETTINGS (shared by export and import)
 # ═══════════════════════════════════════════════════════════════
 
 # Connection timeout in seconds (default: 30)
@@ -39,12 +42,37 @@ retryDelaySeconds: 2
 # If you get certificate verification errors, set this to true
 trustServerCertificate: false
 
+# Collect performance metrics and save to JSON file (default: false)
+# Useful for benchmarking export/import operations
+# collectMetrics: false
+
+# Target SQL Server version for generated scripts (default: Sql2022)
+# Options: Sql2012, Sql2014, Sql2016, Sql2017, Sql2019, Sql2022
+# targetSqlVersion: Sql2022
+
+# ═══════════════════════════════════════════════════════════════
+# SIMPLIFIED SETTINGS (root level alternatives to nested settings)
+# Command-line parameters ALWAYS override these values
+# ═══════════════════════════════════════════════════════════════
+
+# Import mode: Dev (default) or Prod
+# - Dev = developer mode (skips infrastructure, safe defaults)
+# - Prod = production mode (full import with FileGroups)
+# importMode: Dev
+
+# Include table data in export/import (default: false)
+# includeData: false
+
 # ═══════════════════════════════════════════════════════════════
 # EXPORT CONFIGURATION
 # ═══════════════════════════════════════════════════════════════
 export:
   # Include table data in export (generates INSERT statements)
   includeData: false
+
+  # Object types to include (if specified, ONLY these types are exported)
+  # Mutually exclusive with excludeObjectTypes
+  # includeObjectTypes: []
 
   # Object types to exclude from export
   # By default, ALL object types are exported
@@ -134,11 +162,30 @@ export:
 # ═══════════════════════════════════════════════════════════════
 # IMPORT CONFIGURATION
 # ═══════════════════════════════════════════════════════════════
+
 import:
   # Default import mode: Dev or Prod
   # Dev = simplified for local development (default)
   # Prod = full production deployment
   defaultMode: Dev
+
+  # Create target database if it does not exist (default: false)
+  # Requires appropriate server-level permissions
+  # createDatabase: false
+
+  # Skip check for existing schema and apply all scripts (default: false)
+  # Use with caution in production
+  # force: false
+
+  # Continue applying scripts even if individual scripts fail (default: false)
+  # Useful for idempotent applications where some scripts may fail due to existing objects
+  # continueOnError: false
+
+  # Display SQL scripts during execution for debugging (default: false)
+  # showSql: false
+
+  # Object types to include in import (if specified, only these types are imported)
+  # includeObjectTypes: []
 
   # ─────────────────────────────────────────────────────────────
   # DEPENDENCY RETRY SETTINGS
@@ -178,10 +225,6 @@ import:
     #   All tables/indexes/partitions moved to PRIMARY
     fileGroupStrategy: autoRemap
 
-    # Legacy setting (ignored if fileGroupStrategy is set)
-    # Kept for backward compatibility
-    includeFileGroups: false
-
     # Skip database scoped configurations (use server defaults)
     # Reason: MAXDOP and other settings are hardware-specific
     includeConfigurations: false
@@ -218,7 +261,7 @@ import:
   # ─────────────────────────────────────────────────────────────
   productionMode:
     # Import FileGroups with path mappings
-    includeFileGroups: true
+    fileGroupStrategy: autoRemap
 
     # Import database scoped configurations
     includeConfigurations: true
@@ -238,7 +281,8 @@ import:
     # No object types excluded in production mode
     excludeObjectTypes: []
 
-    # FileGroup path mappings (REQUIRED if includeFileGroups=true)
+    # FileGroup path mappings (optional for fileGroupStrategy: autoRemap)
+    # Paths are auto-detected, but can be overridden if needed
     # Map logical FileGroup names to physical paths on target server
     fileGroupPathMapping:
       FG_CURRENT: "E:\\SQLData\\Current"

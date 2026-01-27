@@ -5,6 +5,34 @@ All notable changes to Export-SqlServerSchema will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.7.0] - 2026-01-27
+
+### Changed
+
+**Simplified FileGroup Configuration**
+- Replaced confusing `includeFileGroups` boolean with `fileGroupStrategy` setting
+- `fileGroupStrategy: autoRemap` (default) - imports FileGroups with auto-detected paths using `SERVERPROPERTY('InstanceDefaultDataPath')`
+- `fileGroupStrategy: removeToPrimary` - skips FileGroups (has known limitation with partitioned tables)
+- Both Dev and Prod modes now default to `autoRemap`
+- Updated config schema, example files, and documentation
+
+### Improved
+
+- **Config Schema Documentation**: Added `importMode` and `includeData` at root level in JSON schema for simplified configuration
+- **Config Example Clarity**: Added simplified config examples in `export-import-config.example.yml` showing root-level options
+- **Complete CLI/Config Parity**: All command-line parameters now have config file equivalents with safe defaults:
+  - Export: `targetSqlVersion` (default: Sql2022), `collectMetrics` (default: false), `export.includeObjectTypes`
+  - Import: `import.createDatabase` (default: false), `import.force` (default: false), `import.continueOnError` (default: false), `import.showSql` (default: false), `import.includeObjectTypes`
+- **Minimal Config Support**: Empty config files now work correctly; all properties have sensible defaults
+
+### Known Issues
+
+**removeToPrimary FileGroup Strategy Limitation**
+- The `fileGroupStrategy: removeToPrimary` option does not work with databases containing partitioned tables
+- **Root Cause**: Partition schemes cannot reference PRIMARY directly; they require a valid partition scheme
+- **Workaround**: Use `fileGroupStrategy: autoRemap` (the default) which imports FileGroups with auto-detected paths
+- **Impact**: Dev mode still works correctly with `autoRemap`; only affects users who explicitly set `removeToPrimary`
+
 
 ## [1.6.0] - 2026-01-27
 

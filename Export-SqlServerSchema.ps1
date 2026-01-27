@@ -5909,13 +5909,9 @@ function Show-ExportSummary {
 #region Main Script
 
 try {
-  # Initialize metrics collection
+  # Initialize metrics collection (CLI switch or config file)
   $script:CollectMetrics = $CollectMetrics.IsPresent
-  if ($script:CollectMetrics) {
-    $script:Metrics.StartTime = Get-Date
-    Write-Output '[INFO] Performance metrics collection enabled'
-  }
-
+  
   # Load configuration if provided
   $config = @{ export = @{ includeObjectTypes = @(); excludeObjectTypes = @(); includeData = $false; excludeObjects = @() } }
   $configSource = "None (using defaults)"
@@ -5926,16 +5922,33 @@ try {
       $script:Config = $config  # Store for parallel workers
       $configSource = $ConfigFile
 
-      # Override IncludeData if specified in config
-      if ($config.export.includeData -and -not $IncludeData) {
+      # Override IncludeData from config ONLY if not explicitly set on command line
+      # Command-line parameters always take precedence over config file
+      if ($config.export.includeData -and -not $PSBoundParameters.ContainsKey('IncludeData')) {
         $IncludeData = $config.export.includeData
         Write-Output "[INFO] Data export enabled from config file"
+      }
+
+      # Override CollectMetrics from config ONLY if not explicitly set on command line
+      if ($config.collectMetrics -and -not $PSBoundParameters.ContainsKey('CollectMetrics')) {
+        $script:CollectMetrics = $config.collectMetrics
+      }
+
+      # Override TargetSqlVersion from config ONLY if not explicitly set on command line
+      if ($config.targetSqlVersion -and -not $PSBoundParameters.ContainsKey('TargetSqlVersion')) {
+        $TargetSqlVersion = $config.targetSqlVersion
+        Write-Verbose "[INFO] Target SQL version set from config file: $TargetSqlVersion"
       }
     }
     else {
       Write-Warning "Config file not found: $ConfigFile"
       Write-Warning "Continuing with default settings..."
     }
+  }
+
+  if ($script:CollectMetrics) {
+    $script:Metrics.StartTime = Get-Date
+    Write-Output '[INFO] Performance metrics collection enabled'
   }
 
   # Store IncludeData in script scope for parallel workers (Build-WorkItems-Data checks this)

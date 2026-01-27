@@ -208,23 +208,30 @@ This section provides complete documentation of all configuration options. Setti
 
 | Property | Type | Default | Description |
 |----------|------|---------|-------------|
-| `fileGroupStrategy` | string | autoRemap | FileGroup handling: `autoRemap` or `removeToPrimary` |
-| `includeFileGroups` | bool | false | Import FileGroup definitions (legacy) |
+| `fileGroupStrategy` | string | autoRemap | FileGroup handling: `autoRemap` (import with auto-detected paths) or `removeToPrimary` (skip FileGroups) |
 | `includeConfigurations` | bool | false | Import database scoped configurations |
 | `includeExternalData` | bool | false | Import external data sources |
 | `enableSecurityPolicies` | bool | false | Enable Row-Level Security (STATE ON) |
 | `includeData` | bool | false | Import table data |
 | `excludeObjectTypes` | string[] | [] | Object types to exclude in this mode |
-| `fileGroupPathMapping` | object | {} | Map FileGroup names to physical paths |
+| `fileGroupPathMapping` | object | {} | Map FileGroup names to physical paths (optional, paths auto-detected) |
 | `fileGroupFileSizeDefaults.sizeKB` | int | 1024 | Initial file size in KB |
 | `fileGroupFileSizeDefaults.fileGrowthKB` | int | 65536 | File growth increment in KB |
 | `externalConnectionStrings` | object | {} | Map external data source names to URLs |
 
 ### 3.3 Example Configuration Files
 
-**Minimal Dev Configuration:**
+**Minimal Configuration (works for both export and import):**
+```yaml
+# Minimal config - all settings have sensible defaults
+# Only needed if using Docker/self-signed certificates
+trustServerCertificate: true
+```
+
+**Minimal Dev Import Configuration:**
 ```yaml
 importMode: Dev
+trustServerCertificate: true
 ```
 
 **Full Export with Parallel Processing:**
@@ -247,10 +254,10 @@ export:
 import:
   defaultMode: Prod
   productionMode:
-    fileGroupStrategy: autoRemap
-    includeFileGroups: true
+    fileGroupStrategy: autoRemap  # Default: auto-detects paths
     includeConfigurations: true
     enableSecurityPolicies: true
+    # Optional: override auto-detected paths
     fileGroupPathMapping:
       FG_DATA: "E:\\SQLData\\"
       FG_INDEX: "E:\\SQLIndexes\\"

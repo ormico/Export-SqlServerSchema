@@ -603,9 +603,17 @@ ALL TO ([PRIMARY]);  -- ← Changed from TO ([FG_ARCHIVE], [FG_CURRENT], [PRIMAR
 
 Use a YAML configuration file instead of long command-line arguments:
 
+**Minimal Configuration** (all settings have sensible defaults):
+```yaml
+# Only needed for Docker/self-signed certificates
+trustServerCertificate: true
+```
+
+**Full Configuration Example**:
 ```yaml
 importMode: Dev  # or Prod
 includeData: true
+trustServerCertificate: true
 
 export:
   parallel:
@@ -620,6 +628,8 @@ import:
   dependencyRetries:
     enabled: true
     maxRetries: 10
+  developerMode:
+    fileGroupStrategy: autoRemap  # Default: imports FileGroups with auto-detected paths
 
 connectionTimeout: 30
 commandTimeout: 300
@@ -631,9 +641,9 @@ Usage:
 ./Export-SqlServerSchema.ps1 -Server localhost -Database MyDb -ConfigFile config.yml
 ```
 
-**FileGroup Strategies** (Developer Mode):
-- **`autoRemap`** (default): Imports FileGroups with auto-detected paths
-- **`removeToPrimary`**: Skips FileGroups, remaps everything to PRIMARY
+**FileGroup Strategies**:
+- **`autoRemap`** (default): Imports FileGroups with auto-detected paths using `SERVERPROPERTY('InstanceDefaultDataPath')`
+- **`removeToPrimary`**: Skips FileGroups (note: has known limitations with partitioned tables)
 
 For complete configuration reference including all options, see the [User Guide](docs/USER_GUIDE.md#3-configuration-reference).
 
