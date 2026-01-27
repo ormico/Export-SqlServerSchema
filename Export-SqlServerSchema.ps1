@@ -3540,6 +3540,47 @@ ORDER BY o.type_desc, s.name, o.name
   return $objects
 }
 
+function Test-SafeRelativePath {
+  <#
+    .SYNOPSIS
+        Validates that a relative path doesn't contain path traversal sequences.
+    .DESCRIPTION
+        Security check to prevent malicious or corrupted metadata from causing
+        file operations outside the intended export directory. Rejects paths
+        containing "..", absolute paths, or other traversal attempts.
+    .PARAMETER RelativePath
+        The relative path to validate.
+    .OUTPUTS
+        $true if the path is safe, $false otherwise.
+  #>
+  param(
+    [Parameter(Mandatory)]
+    [string]$RelativePath
+  )
+
+  # Reject empty or null paths
+  if ([string]::IsNullOrWhiteSpace($RelativePath)) {
+    return $false
+  }
+
+  # Reject paths with parent directory traversal sequences
+  if ($RelativePath -match '\.\.' -or $RelativePath -match '\.\.\\' -or $RelativePath -match '\.\./') {
+    return $false
+  }
+
+  # Reject absolute paths (Windows drive letters or UNC paths)
+  if ($RelativePath -match '^[A-Za-z]:' -or $RelativePath -match '^\\\\' -or $RelativePath -match '^/') {
+    return $false
+  }
+
+  # Reject paths with null bytes or other suspicious characters
+  if ($RelativePath -match '\x00') {
+    return $false
+  }
+
+  return $true
+}
+
 function Compare-ExportObjects {
   <#
     .SYNOPSIS
@@ -3822,6 +3863,13 @@ function Copy-UnchangedFiles {
     $filePath = $obj.FilePath
     if (-not $filePath) {
       [void]$result.Errors.Add("Object missing FilePath: $($obj.Type) $($obj.Schema).$($obj.Name)")
+      $result.FailedCount++
+      continue
+    }
+
+    # Security: Validate path doesn't contain traversal sequences
+    if (-not (Test-SafeRelativePath -RelativePath $filePath)) {
+      [void]$result.Errors.Add("Unsafe FilePath rejected (possible path traversal): $filePath")
       $result.FailedCount++
       continue
     }
