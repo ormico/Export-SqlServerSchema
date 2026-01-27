@@ -95,6 +95,20 @@ jobs:
         run: |
           Write-Host "Running exclusion feature tests..."
           ./test-exclude-feature.ps1
+
+      - name: Run minimal config tests
+        shell: pwsh
+        working-directory: ./tests
+        run: |
+          Write-Host "Running minimal config tests..."
+          ./test-minimal-config.ps1
+
+      - name: Run FileGroup strategy tests
+        shell: pwsh
+        working-directory: ./tests
+        run: |
+          Write-Host "Running FileGroup strategy tests..."
+          ./test-minimal-filegroups.ps1
       
       - name: Cleanup
         if: always()

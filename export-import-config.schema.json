@@ -38,10 +38,72 @@
       "description": "Trust server certificate (required for SQL Server with self-signed certificates). Set to true for local/dev environments with self-signed certs, false for production with valid certificates.",
       "default": false
     },
+    "importMode": {
+      "type": "string",
+      "enum": ["Dev", "Prod"],
+      "description": "Simplified import mode setting (alternative to import.defaultMode). Dev = developer mode (default, skips infrastructure), Prod = production mode (full import)",
+      "default": "Dev"
+    },
+    "includeData": {
+      "type": "boolean",
+      "description": "Simplified data import setting (alternative to import.developerMode.includeData or import.productionMode.includeData). When true, imports table data.",
+      "default": false
+    },
+    "collectMetrics": {
+      "type": "boolean",
+      "description": "Collect performance metrics and save to JSON file. Useful for benchmarking export/import operations.",
+      "default": false
+    },
+    "targetSqlVersion": {
+      "type": "string",
+      "enum": ["Sql2012", "Sql2014", "Sql2016", "Sql2017", "Sql2019", "Sql2022"],
+      "description": "Target SQL Server version for generated scripts. Affects syntax compatibility.",
+      "default": "Sql2022"
+    },
     "export": {
       "type": "object",
       "description": "Export operation settings",
       "properties": {
+        "includeObjectTypes": {
+          "type": "array",
+          "description": "Object types to include in export (if specified, only these types are exported). Mutually exclusive with excludeObjectTypes.",
+          "items": {
+            "type": "string",
+            "enum": [
+              "FileGroups",
+              "DatabaseScopedConfigurations",
+              "DatabaseScopedCredentials",
+              "Schemas",
+              "Sequences",
+              "PartitionFunctions",
+              "PartitionSchemes",
+              "UserDefinedTypes",
+              "XmlSchemaCollections",
+              "Tables",
+              "ForeignKeys",
+              "Indexes",
+              "Defaults",
+              "Rules",
+              "Assemblies",
+              "Functions",
+              "UserDefinedAggregates",
+              "StoredProcedures",
+              "DatabaseTriggers",
+              "TableTriggers",
+              "Views",
+              "Synonyms",
+              "FullTextCatalogs",
+              "ExternalDataSources",
+              "ExternalFileFormats",
+              "SearchPropertyLists",
+              "PlanGuides",
+              "SecurityObjects",
+              "SecurityPolicies",
+              "Data"
+            ]
+          },
+          "uniqueItems": true
+        },
         "excludeObjectTypes": {
           "type": "array",
           "description": "Object types to exclude from export (all included by default)",
@@ -186,6 +248,60 @@
           "description": "Default import mode (Dev or Prod)",
           "default": "Dev"
         },
+        "createDatabase": {
+          "type": "boolean",
+          "description": "Create target database if it does not exist. Requires appropriate server-level permissions.",
+          "default": false
+        },
+        "force": {
+          "type": "boolean",
+          "description": "Skip check for existing schema and apply all scripts. Use with caution in production.",
+          "default": false
+        },
+        "continueOnError": {
+          "type": "boolean",
+          "description": "Continue applying scripts even if individual scripts fail. Useful for idempotent applications.",
+          "default": false
+        },
+        "showSql": {
+          "type": "boolean",
+          "description": "Display SQL scripts during execution for debugging.",
+          "default": false
+        },
+        "includeObjectTypes": {
+          "type": "array",
+          "description": "Object types to include in import (if specified, only these types are imported)",
+          "items": {
+            "type": "string",
+            "enum": [
+              "FileGroups",
+              "DatabaseConfiguration",
+              "Schemas",
+              "Sequences",
+              "PartitionFunctions",
+              "PartitionSchemes",
+              "Types",
+              "XmlSchemaCollections",
+              "Tables",
+              "ForeignKeys",
+              "Indexes",
+              "Defaults",
+              "Rules",
+              "Programmability",
+              "Views",
+              "Functions",
+              "StoredProcedures",
+              "Synonyms",
+              "SearchPropertyLists",
+              "PlanGuides",
+              "DatabaseRoles",
+              "DatabaseUsers",
+              "SecurityPolicies",
+              "Data"
+            ]
+          },
+          "uniqueItems": true
+        },
         "dependencyRetries": {
           "type": "object",
           "description": "Retry settings for handling cross-object dependencies in programmability objects",
@@ -236,13 +352,8 @@
         "fileGroupStrategy": {
           "type": "string",
           "enum": ["autoRemap", "removeToPrimary"],
-          "description": "FileGroup handling strategy (autoRemap = import with auto-detected paths, removeToPrimary = skip FileGroups and remap to PRIMARY)",
+          "description": "FileGroup handling strategy (autoRemap = import FileGroups with auto-detected paths, removeToPrimary = skip FileGroups and remap all ON clauses to PRIMARY)",
           "default": "autoRemap"
-        },
-        "includeFileGroups": {
-          "type": "boolean",
-          "description": "Import FileGroup definitions and create files (legacy, ignored if fileGroupStrategy is set)",
-          "default": false
         },
         "includeConfigurations": {
           "type": "boolean",
@@ -286,7 +397,7 @@
         },
         "fileGroupPathMapping": {
           "type": "object",
-          "description": "Map FileGroup names to physical paths (required if includeFileGroups=true)",
+          "description": "Map FileGroup names to physical paths (used with fileGroupStrategy: autoRemap when paths cannot be auto-detected)",
           "additionalProperties": {
             "type": "string",
             "description": "Physical path for FileGroup data files"

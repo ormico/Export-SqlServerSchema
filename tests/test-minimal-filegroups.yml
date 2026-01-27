@@ -1,0 +1,11 @@
+# Minimal config with FileGroups enabled for Dev mode
+# Tests that FileGroups can be imported with minimal configuration
+# fileGroupStrategy: autoRemap is the default, but we set it explicitly to test
+$schema: "../export-import-config.schema.json"
+
+trustServerCertificate: true
+
+import:
+  developerMode:
+    fileGroupStrategy: autoRemap
+    # fileGroupFileSizeDefaults not needed - defaults to 1024KB size, 65536KB growth

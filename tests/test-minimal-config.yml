@@ -1,0 +1,5 @@
+# Minimal config file - demonstrates that all properties have safe defaults
+# This file only sets trustServerCertificate (common for Docker/local dev)
+$schema: "../export-import-config.schema.json"
+
+trustServerCertificate: true
