@@ -636,7 +636,9 @@ function Build-WorkItems-Sequences {
 
   if (Test-ObjectTypeExcluded -ObjectType 'Sequences') { return @() }
 
-  $sequences = @($Database.Sequences | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) })
+  $allSequences = @($Database.Sequences | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) })
+  # Apply delta filtering (Sequences have modify_date)
+  $sequences = @(Get-DeltaFilteredCollection -Collection $allSequences -ObjectType 'Sequence')
   if ($sequences.Count -eq 0) { return @() }
 
   $workItems = @()
@@ -795,9 +797,9 @@ function Build-WorkItems-UserDefinedTypes {
 
   # Collect all type variations
   $allTypes = @()
-  try { $allTypes += @($Database.UserDefinedDataTypes | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) }) } catch { }
-  try { $allTypes += @($Database.UserDefinedTableTypes | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) }) } catch { }
-  try { $allTypes += @($Database.UserDefinedTypes | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) }) } catch { }
+  try { $allTypes += @($Database.UserDefinedDataTypes | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) }) } catch { Write-Verbose "Could not access UserDefinedDataTypes: $_" }
+  try { $allTypes += @($Database.UserDefinedTableTypes | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) }) } catch { Write-Verbose "Could not access UserDefinedTableTypes: $_" }
+  try { $allTypes += @($Database.UserDefinedTypes | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) }) } catch { Write-Verbose "Could not access UserDefinedTypes (CLR types): $_" }
 
   if ($allTypes.Count -eq 0) { return @() }
 
@@ -933,7 +935,9 @@ function Build-WorkItems-Tables {
 
   if (Test-ObjectTypeExcluded -ObjectType 'Tables') { return @() }
 
-  $tables = @($Database.Tables | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) })
+  $allTables = @($Database.Tables | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) })
+  # Apply delta filtering (Tables have modify_date)
+  $tables = @(Get-DeltaFilteredCollection -Collection $allTables -ObjectType 'Table')
   if ($tables.Count -eq 0) { return @() }
 
   $workItems = @()
@@ -1392,7 +1396,9 @@ function Build-WorkItems-Functions {
 
   if (Test-ObjectTypeExcluded -ObjectType 'Functions') { return @() }
 
-  $functions = @($Database.UserDefinedFunctions | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) })
+  $allFunctions = @($Database.UserDefinedFunctions | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) })
+  # Apply delta filtering (UserDefinedFunctions have modify_date)
+  $functions = @(Get-DeltaFilteredCollection -Collection $allFunctions -ObjectType 'UserDefinedFunction')
   if ($functions.Count -eq 0) { return @() }
 
   $workItems = @()
@@ -1461,6 +1467,7 @@ function Build-WorkItems-UserDefinedAggregates {
     $aggregates = @($Database.UserDefinedAggregates | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) })
   }
   catch {
+    Write-Verbose "Could not access UserDefinedAggregates (may not be supported on this SQL Server version): $_"
     return @()
   }
 
@@ -1528,7 +1535,9 @@ function Build-WorkItems-StoredProcedures {
 
   if (Test-ObjectTypeExcluded -ObjectType 'StoredProcedures') { return @() }
 
-  $procs = @($Database.StoredProcedures | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) })
+  $allProcs = @($Database.StoredProcedures | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) })
+  # Apply delta filtering (StoredProcedures have modify_date)
+  $procs = @(Get-DeltaFilteredCollection -Collection $allProcs -ObjectType 'StoredProcedure')
   if ($procs.Count -eq 0) { return @() }
 
   $workItems = @()
@@ -1646,10 +1655,13 @@ function Build-WorkItems-TableTriggers {
   foreach ($table in $tables) {
     if ($table.Triggers.Count -gt 0) {
       foreach ($trigger in $table.Triggers) {
-        $triggerList += @{
-          TableSchema  = $table.Schema
-          TableName    = $table.Name
-          TriggerName  = $trigger.Name
+        # Apply delta filtering (Triggers have modify_date)
+        if (Test-ShouldExportInDelta -ObjectType 'Trigger' -Schema $table.Schema -Name $trigger.Name) {
+          $triggerList += @{
+            TableSchema  = $table.Schema
+            TableName    = $table.Name
+            TriggerName  = $trigger.Name
+          }
         }
       }
     }
@@ -1723,7 +1735,9 @@ function Build-WorkItems-Views {
 
   if (Test-ObjectTypeExcluded -ObjectType 'Views') { return @() }
 
-  $views = @($Database.Views | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) })
+  $allViews = @($Database.Views | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) })
+  # Apply delta filtering (Views have modify_date)
+  $views = @(Get-DeltaFilteredCollection -Collection $allViews -ObjectType 'View')
   if ($views.Count -eq 0) { return @() }
 
   $workItems = @()
@@ -1787,7 +1801,9 @@ function Build-WorkItems-Synonyms {
 
   if (Test-ObjectTypeExcluded -ObjectType 'Synonyms') { return @() }
 
-  $synonyms = @($Database.Synonyms | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) })
+  $allSynonyms = @($Database.Synonyms | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) })
+  # Apply delta filtering (Synonyms have modify_date)
+  $synonyms = @(Get-DeltaFilteredCollection -Collection $allSynonyms -ObjectType 'Synonym')
   if ($synonyms.Count -eq 0) { return @() }
 
   $workItems = @()
@@ -1855,6 +1871,7 @@ function Build-WorkItems-FullTextCatalogs {
     $ftCatalogs = @($Database.FullTextCatalogs | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $null -Name $_.Name) })
   }
   catch {
+    Write-Verbose "Could not access FullTextCatalogs (may not be supported on this SQL Server version): $_"
     return @()
   }
 
@@ -1908,6 +1925,7 @@ function Build-WorkItems-FullTextStopLists {
     $ftStopLists = @($Database.FullTextStopLists | Where-Object { -not (Test-ObjectExcluded -Schema $null -Name $_.Name) })
   }
   catch {
+    Write-Verbose "Could not access FullTextStopLists (may not be supported on this SQL Server version): $_"
     return @()
   }
 
@@ -1960,6 +1978,7 @@ function Build-WorkItems-ExternalDataSources {
     $extDS = @($Database.ExternalDataSources | Where-Object { -not (Test-ObjectExcluded -Schema $null -Name $_.Name) })
   }
   catch {
+    Write-Verbose "Could not access ExternalDataSources (may not be supported on this SQL Server version): $_"
     return @()
   }
 
@@ -2012,6 +2031,7 @@ function Build-WorkItems-ExternalFileFormats {
     $extFF = @($Database.ExternalFileFormats | Where-Object { -not (Test-ObjectExcluded -Schema $null -Name $_.Name) })
   }
   catch {
+    Write-Verbose "Could not access ExternalFileFormats (may not be supported on this SQL Server version): $_"
     return @()
   }
 
@@ -2064,6 +2084,7 @@ function Build-WorkItems-SearchPropertyLists {
     $searchPropLists = @($Database.SearchPropertyLists | Where-Object { -not (Test-ObjectExcluded -Schema $null -Name $_.Name) })
   }
   catch {
+    Write-Verbose "Could not access SearchPropertyLists (may not be supported on this SQL Server version): $_"
     return @()
   }
 
@@ -2116,6 +2137,7 @@ function Build-WorkItems-PlanGuides {
     $planGuides = @($Database.PlanGuides | Where-Object { -not (Test-ObjectExcluded -Schema $null -Name $_.Name) })
   }
   catch {
+    Write-Verbose "Could not access PlanGuides (may not be supported on this SQL Server version): $_"
     return @()
   }
 
@@ -2181,7 +2203,7 @@ function Build-WorkItems-Security {
           -ScriptingOptions @{}
       }
     }
-    catch { }
+    catch { Write-Verbose "Could not access Certificates collection: $_" }
   }
 
   # Asymmetric Keys
@@ -2198,7 +2220,7 @@ function Build-WorkItems-Security {
           -ScriptingOptions @{}
       }
     }
-    catch { }
+    catch { Write-Verbose "Could not access AsymmetricKeys collection: $_" }
   }
 
   # Symmetric Keys
@@ -2215,7 +2237,7 @@ function Build-WorkItems-Security {
           -ScriptingOptions @{}
       }
     }
-    catch { }
+    catch { Write-Verbose "Could not access SymmetricKeys collection: $_" }
   }
 
   # Database Roles - respect grouping mode (default: single to match sequential export)
@@ -2251,7 +2273,7 @@ function Build-WorkItems-Security {
         }
       }
     }
-    catch { }
+    catch { Write-Verbose "Could not access Roles collection: $_" }
 
     # Application Roles
     try {
@@ -2282,7 +2304,7 @@ function Build-WorkItems-Security {
         }
       }
     }
-    catch { }
+    catch { Write-Verbose "Could not access ApplicationRoles collection: $_" }
   }
 
   # Database Users - respect grouping mode (default: single to match sequential export)
@@ -2318,7 +2340,7 @@ function Build-WorkItems-Security {
         }
       }
     }
-    catch { }
+    catch { Write-Verbose "Could not access Users collection: $_" }
   }
 
   return $workItems
@@ -2341,6 +2363,7 @@ function Build-WorkItems-SecurityPolicies {
     $secPolicies = @($Database.SecurityPolicies | Where-Object { -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) })
   }
   catch {
+    Write-Verbose "Could not access SecurityPolicies (may not be supported on this SQL Server version): $_"
     return @()
   }
 
@@ -3838,6 +3861,138 @@ function Copy-UnchangedFiles {
   return $result
 }
 
+# Delta export lookup hashtable (built once, used for O(1) lookups)
+$script:DeltaExportLookup = $null
+
+function Initialize-DeltaExportLookup {
+  <#
+    .SYNOPSIS
+        Builds a hashtable for fast O(1) lookups during delta export filtering.
+    .DESCRIPTION
+        Creates a lookup table keyed by "Type|Schema|Name" for objects that need
+        to be exported (modified, new, or always-export types). Called once after
+        change detection, before export begins.
+  #>
+
+  if (-not $script:DeltaExportEnabled -or -not $script:DeltaChangeResults) {
+    $script:DeltaExportLookup = $null
+    return
+  }
+
+  $script:DeltaExportLookup = @{}
+
+  foreach ($obj in $script:DeltaChangeResults.ToExport) {
+    $type = $obj.Type
+    $schema = if ($obj.Schema) { $obj.Schema } else { '' }
+    $name = $obj.Name
+    $key = "$type|$schema|$name"
+    $script:DeltaExportLookup[$key] = $true
+  }
+
+  Write-Verbose "Delta export lookup initialized with $($script:DeltaExportLookup.Count) objects to export"
+}
+
+function Test-ShouldExportInDelta {
+  <#
+    .SYNOPSIS
+        Checks if an object should be exported in delta mode.
+    .DESCRIPTION
+        Returns $true if delta export is disabled (export everything) or if the
+        object is in the ToExport list (modified/new/always-export).
+        Returns $false if the object is unchanged and should be copied instead.
+    .PARAMETER ObjectType
+        The type of object (Table, View, StoredProcedure, etc.).
+    .PARAMETER Schema
+        The schema name (may be empty for schema-less objects).
+    .PARAMETER Name
+        The object name.
+    .OUTPUTS
+        $true if the object should be exported, $false if it should be skipped.
+  #>
+  param(
+    [Parameter(Mandatory)]
+    [string]$ObjectType,
+    [string]$Schema = '',
+    [Parameter(Mandatory)]
+    [string]$Name
+  )
+
+  # If delta export is not enabled, export everything
+  if (-not $script:DeltaExportEnabled) {
+    return $true
+  }
+
+  # If no lookup table (shouldn't happen), export everything to be safe
+  if ($null -eq $script:DeltaExportLookup) {
+    return $true
+  }
+
+  # Check if object is in the ToExport list
+  $key = "$ObjectType|$Schema|$Name"
+  return $script:DeltaExportLookup.ContainsKey($key)
+}
+
+function Get-DeltaFilteredCollection {
+  <#
+    .SYNOPSIS
+        Filters a collection to only include objects that should be exported in delta mode.
+    .DESCRIPTION
+        When delta export is enabled, filters out unchanged objects that will be
+        copied from the previous export. When disabled, returns the full collection.
+        This provides significant performance improvement by avoiding SMO scripting
+        for unchanged objects.
+    .PARAMETER Collection
+        The collection of SMO objects to filter.
+    .PARAMETER ObjectType
+        The delta export type name (Table, View, StoredProcedure, etc.).
+    .PARAMETER SchemaProperty
+        The property name containing the schema (default: 'Schema').
+        Set to $null for schema-less objects.
+    .PARAMETER NameProperty
+        The property name containing the object name (default: 'Name').
+    .OUTPUTS
+        Filtered array of objects to export.
+  #>
+  param(
+    [Parameter(Mandatory)]
+    [array]$Collection,
+    [Parameter(Mandatory)]
+    [string]$ObjectType,
+    [string]$SchemaProperty = 'Schema',
+    [string]$NameProperty = 'Name'
+  )
+
+  # If delta export is not enabled, return full collection
+  if (-not $script:DeltaExportEnabled) {
+    return $Collection
+  }
+
+  # Filter collection to only objects in ToExport list
+  $filtered = @()
+  $skippedCount = 0
+
+  foreach ($obj in $Collection) {
+    $schema = if ($SchemaProperty -and $obj.PSObject.Properties[$SchemaProperty]) {
+      $obj.$SchemaProperty
+    } else {
+      ''
+    }
+    $name = $obj.$NameProperty
+
+    if (Test-ShouldExportInDelta -ObjectType $ObjectType -Schema $schema -Name $name) {
+      $filtered += $obj
+    } else {
+      $skippedCount++
+    }
+  }
+
+  if ($skippedCount -gt 0) {
+    Write-Verbose "  [DELTA] Skipping $skippedCount unchanged $ObjectType object(s)"
+  }
+
+  return $filtered
+}
+
 #endregion Export Metadata Functions
 
 function Write-ObjectProgress {
@@ -5212,10 +5367,14 @@ function Export-DatabaseObjects {
     Write-Host '  [SKIPPED] Sequences excluded by configuration' -ForegroundColor Yellow
   }
   else {
-    $sequences = @($Database.Sequences | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) })
-    if ($sequences.Count -gt 0) {
+    $allSequences = @($Database.Sequences | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) })
+    # Apply delta filtering (Sequences have modify_date)
+    $sequences = @(Get-DeltaFilteredCollection -Collection $allSequences -ObjectType 'Sequence')
+    $skippedForDelta = $allSequences.Count - $sequences.Count
+    if ($sequences.Count -gt 0 -or $skippedForDelta -gt 0) {
       $groupingMode = Get-ObjectGroupingMode -ObjectType 'Sequences'
-      Write-Output "  Found $($sequences.Count) sequence(s) to export (grouping: $groupingMode)"
+      $deltaInfo = if ($skippedForDelta -gt 0) { ", $skippedForDelta unchanged" } else { '' }
+      Write-Output "  Found $($sequences.Count) sequence(s) to export$deltaInfo (grouping: $groupingMode)"
       $successCount = 0
       $failCount = 0
       $currentItem = 0
@@ -5668,10 +5827,14 @@ function Export-DatabaseObjects {
     Write-Host '  [SKIPPED] Tables excluded by configuration' -ForegroundColor Yellow
   }
   else {
-    # Use cached tables collection
-    if ($tables.Count -gt 0) {
+    # Apply delta filtering (Tables have modify_date)
+    # Note: We keep $tables unfiltered for FK/Index iteration (those are always-export types)
+    $tablesToExport = @(Get-DeltaFilteredCollection -Collection $tables -ObjectType 'Table')
+    $skippedForDelta = $tables.Count - $tablesToExport.Count
+    if ($tablesToExport.Count -gt 0 -or $skippedForDelta -gt 0) {
       $groupingMode = Get-ObjectGroupingMode -ObjectType 'Tables'
-      Write-Output "  Found $($tables.Count) table(s) to export (grouping: $groupingMode)"
+      $deltaInfo = if ($skippedForDelta -gt 0) { ", $skippedForDelta unchanged" } else { '' }
+      Write-Output "  Found $($tablesToExport.Count) table(s) to export$deltaInfo (grouping: $groupingMode)"
       $successCount = 0
       $failCount = 0
       $opts = New-ScriptingOptions -TargetVersion $TargetVersion -Overrides @{
@@ -5694,20 +5857,20 @@ function Export-DatabaseObjects {
       if ($groupingMode -eq 'single') {
         # One file per table (current behavior)
         $currentItem = 0
-        foreach ($table in $tables) {
+        foreach ($table in $tablesToExport) {
           $currentItem++
           try {
-            Write-ObjectProgress -ObjectName "$($table.Schema).$($table.Name)" -Current $currentItem -Total $tables.Count
+            Write-ObjectProgress -ObjectName "$($table.Schema).$($table.Name)" -Current $currentItem -Total $tablesToExport.Count
             $fileName = Join-Path $OutputDir '09_Tables_PrimaryKey' "$(Get-SafeFileName $($table.Schema)).$(Get-SafeFileName $($table.Name)).sql"
             Ensure-DirectoryExists $fileName
             $opts.FileName = $fileName
             $Scripter.Options = $opts
             $Scripter.EnumScript($table) | Out-Null
-            Write-ObjectProgress -ObjectName "$($table.Schema).$($table.Name)" -Current $currentItem -Total $tables.Count -Success
+            Write-ObjectProgress -ObjectName "$($table.Schema).$($table.Name)" -Current $currentItem -Total $tablesToExport.Count -Success
             $successCount++
           }
           catch {
-            Write-ObjectProgress -ObjectName "$($table.Schema).$($table.Name)" -Current $currentItem -Total $tables.Count -Failed
+            Write-ObjectProgress -ObjectName "$($table.Schema).$($table.Name)" -Current $currentItem -Total $tablesToExport.Count -Failed
             Write-ExportError -ObjectType 'Table' -ObjectName "$($table.Schema).$($table.Name)" -ErrorRecord $_ -AdditionalContext "Exporting table structure with primary keys"
             $failCount++
           }
@@ -5715,7 +5878,7 @@ function Export-DatabaseObjects {
       }
       elseif ($groupingMode -eq 'schema') {
         # Group by schema into numbered files
-        $tablesBySchema = $tables | Group-Object -Property Schema
+        $tablesBySchema = $tablesToExport | Group-Object -Property Schema
         $schemaIndex = 0
         $currentItem = 0
         foreach ($schemaGroup in $tablesBySchema) {
@@ -5731,15 +5894,15 @@ function Export-DatabaseObjects {
           try {
             foreach ($table in $schemaTables) {
               $currentItem++
-              Write-ObjectProgress -ObjectName "$($table.Schema).$($table.Name)" -Current $currentItem -Total $tables.Count
+              Write-ObjectProgress -ObjectName "$($table.Schema).$($table.Name)" -Current $currentItem -Total $tablesToExport.Count
               $Scripter.EnumScript($table) | Out-Null
               $opts.AppendToFile = $true  # Append subsequent objects
-              Write-ObjectProgress -ObjectName "$($table.Schema).$($table.Name)" -Current $currentItem -Total $tables.Count -Success
+              Write-ObjectProgress -ObjectName "$($table.Schema).$($table.Name)" -Current $currentItem -Total $tablesToExport.Count -Success
               $successCount++
             }
           }
           catch {
-            Write-ObjectProgress -ObjectName "$($schemaName).*" -Current $currentItem -Total $tables.Count -Failed
+            Write-ObjectProgress -ObjectName "$($schemaName).*" -Current $currentItem -Total $tablesToExport.Count -Failed
             Write-ExportError -ObjectType 'Table' -ObjectName "$($schemaName) schema tables" -ErrorRecord $_ -FilePath $fileName
             $failCount++
           }
@@ -5755,25 +5918,25 @@ function Export-DatabaseObjects {
 
         $currentItem = 0
         try {
-          foreach ($table in $tables) {
+          foreach ($table in $tablesToExport) {
             $currentItem++
-            Write-ObjectProgress -ObjectName "$($table.Schema).$($table.Name)" -Current $currentItem -Total $tables.Count
+            Write-ObjectProgress -ObjectName "$($table.Schema).$($table.Name)" -Current $currentItem -Total $tablesToExport.Count
             $Scripter.EnumScript($table) | Out-Null
             $opts.AppendToFile = $true  # Append subsequent objects
-            Write-ObjectProgress -ObjectName "$($table.Schema).$($table.Name)" -Current $currentItem -Total $tables.Count -Success
+            Write-ObjectProgress -ObjectName "$($table.Schema).$($table.Name)" -Current $currentItem -Total $tablesToExport.Count -Success
             $successCount++
           }
         }
         catch {
-          Write-ObjectProgress -ObjectName "Tables" -Current $currentItem -Total $tables.Count -Failed
+          Write-ObjectProgress -ObjectName "Tables" -Current $currentItem -Total $tablesToExport.Count -Failed
           Write-ExportError -ObjectType 'Table' -ObjectName "All tables" -ErrorRecord $_ -FilePath $fileName
-          $failCount = $tables.Count - $successCount
+          $failCount = $tablesToExport.Count - $successCount
         }
       }
 
       $script:CurrentProgressLabel = $null
-      Write-Output "  [SUMMARY] Exported $successCount/$($tables.Count) table(s) successfully" + $(if ($failCount -gt 0) { " ($failCount failed)" } else { "" })
-      $functionMetrics.TotalObjects += $tables.Count
+      Write-Output "  [SUMMARY] Exported $successCount/$($tablesToExport.Count) table(s) successfully" + $(if ($failCount -gt 0) { " ($failCount failed)" } else { "" })
+      $functionMetrics.TotalObjects += $tablesToExport.Count
       $functionMetrics.SuccessCount += $successCount
       $functionMetrics.FailCount += $failCount
     }
@@ -6283,10 +6446,14 @@ function Export-DatabaseObjects {
     Write-Host '  [SKIPPED] Functions excluded by configuration' -ForegroundColor Yellow
   }
   else {
-    $functions = @($Database.UserDefinedFunctions | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) })
-    if ($functions.Count -gt 0) {
+    $allFunctions = @($Database.UserDefinedFunctions | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) })
+    # Apply delta filtering (UserDefinedFunctions have modify_date)
+    $functions = @(Get-DeltaFilteredCollection -Collection $allFunctions -ObjectType 'UserDefinedFunction')
+    $skippedForDelta = $allFunctions.Count - $functions.Count
+    if ($functions.Count -gt 0 -or $skippedForDelta -gt 0) {
       $groupingMode = Get-ObjectGroupingMode -ObjectType 'Functions'
-      Write-Output "  Found $($functions.Count) function(s) to export (grouping: $groupingMode)"
+      $deltaInfo = if ($skippedForDelta -gt 0) { ", $skippedForDelta unchanged" } else { '' }
+      Write-Output "  Found $($functions.Count) function(s) to export$deltaInfo (grouping: $groupingMode)"
       $successCount = 0
       $failCount = 0
       $opts = New-ScriptingOptions -TargetVersion $TargetVersion -Overrides @{
@@ -6481,12 +6648,18 @@ function Export-DatabaseObjects {
     Write-Host '  [SKIPPED] StoredProcedures excluded by configuration' -ForegroundColor Yellow
   }
   else {
-    $storedProcs = @($Database.StoredProcedures | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) })
-    $extendedProcs = @($Database.ExtendedStoredProcedures | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) })
+    $allStoredProcs = @($Database.StoredProcedures | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) })
+    $allExtendedProcs = @($Database.ExtendedStoredProcedures | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) })
+    # Apply delta filtering (StoredProcedures have modify_date)
+    $storedProcs = @(Get-DeltaFilteredCollection -Collection $allStoredProcs -ObjectType 'StoredProcedure')
+    # Extended procs don't have modify_date, always export them
+    $extendedProcs = $allExtendedProcs
+    $skippedForDelta = $allStoredProcs.Count - $storedProcs.Count
     $totalProcs = $storedProcs.Count + $extendedProcs.Count
-    if ($totalProcs -gt 0) {
+    if ($totalProcs -gt 0 -or $skippedForDelta -gt 0) {
       $groupingMode = Get-ObjectGroupingMode -ObjectType 'StoredProcedures'
-      Write-Output "  Found $($storedProcs.Count) stored procedure(s) and $($extendedProcs.Count) extended stored procedure(s) to export (grouping: $groupingMode)"
+      $deltaInfo = if ($skippedForDelta -gt 0) { ", $skippedForDelta unchanged" } else { '' }
+      Write-Output "  Found $($storedProcs.Count) stored procedure(s) and $($extendedProcs.Count) extended stored procedure(s) to export$deltaInfo (grouping: $groupingMode)"
       $successCount = 0
       $failCount = 0
       $opts = New-ScriptingOptions -TargetVersion $TargetVersion -Overrides @{
@@ -6690,11 +6863,11 @@ function Export-DatabaseObjects {
   }
   else {
     # Use cached tables collection (already initialized at function start)
-    $tableTriggers = @()
+    $allTableTriggers = @()
     foreach ($table in $tables) {
       try {
         if ($table.Triggers -and $table.Triggers.Count -gt 0) {
-          $tableTriggers += @(
+          $allTableTriggers += @(
             $table.Triggers |
             Where-Object {
               -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $_.Parent.Schema -Name $_.Name)
@@ -6706,9 +6879,25 @@ function Export-DatabaseObjects {
         Write-ExportError -ObjectType 'TriggerCollection' -ObjectName "$($table.Schema).$($table.Name)" -ErrorRecord $_ -AdditionalContext "Accessing triggers collection"
       }
     }
-    if ($tableTriggers.Count -gt 0) {
+    # Apply delta filtering (Triggers have modify_date)
+    # Note: Triggers use Parent.Schema for schema lookup
+    $tableTriggers = @()
+    $skippedForDelta = 0
+    if ($script:DeltaExportEnabled) {
+      foreach ($trigger in $allTableTriggers) {
+        if (Test-ShouldExportInDelta -ObjectType 'Trigger' -Schema $trigger.Parent.Schema -Name $trigger.Name) {
+          $tableTriggers += $trigger
+        } else {
+          $skippedForDelta++
+        }
+      }
+    } else {
+      $tableTriggers = $allTableTriggers
+    }
+    if ($tableTriggers.Count -gt 0 -or $skippedForDelta -gt 0) {
       $groupingMode = Get-ObjectGroupingMode -ObjectType 'TableTriggers'
-      Write-Output "  Found $($tableTriggers.Count) table trigger(s) to export (grouping: $groupingMode)"
+      $deltaInfo = if ($skippedForDelta -gt 0) { ", $skippedForDelta unchanged" } else { '' }
+      Write-Output "  Found $($tableTriggers.Count) table trigger(s) to export$deltaInfo (grouping: $groupingMode)"
       $successCount = 0
       $failCount = 0
       $opts = New-ScriptingOptions -TargetVersion $TargetVersion -Overrides @{
@@ -6807,10 +6996,14 @@ function Export-DatabaseObjects {
     Write-Host '  [SKIPPED] Views excluded by configuration' -ForegroundColor Yellow
   }
   else {
-    $views = @($Database.Views | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) })
-    if ($views.Count -gt 0) {
+    $allViews = @($Database.Views | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) })
+    # Apply delta filtering (Views have modify_date)
+    $views = @(Get-DeltaFilteredCollection -Collection $allViews -ObjectType 'View')
+    $skippedForDelta = $allViews.Count - $views.Count
+    if ($views.Count -gt 0 -or $skippedForDelta -gt 0) {
       $groupingMode = Get-ObjectGroupingMode -ObjectType 'Views'
-      Write-Output "  Found $($views.Count) view(s) to export (grouping: $groupingMode)"
+      $deltaInfo = if ($skippedForDelta -gt 0) { ", $skippedForDelta unchanged" } else { '' }
+      Write-Output "  Found $($views.Count) view(s) to export$deltaInfo (grouping: $groupingMode)"
       $successCount = 0
       $failCount = 0
       $opts = New-ScriptingOptions -TargetVersion $TargetVersion
@@ -6902,10 +7095,14 @@ function Export-DatabaseObjects {
     Write-Host '  [SKIPPED] Synonyms excluded by configuration' -ForegroundColor Yellow
   }
   else {
-    $synonyms = @($Database.Synonyms | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) })
-    if ($synonyms.Count -gt 0) {
+    $allSynonyms = @($Database.Synonyms | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) })
+    # Apply delta filtering (Synonyms have modify_date)
+    $synonyms = @(Get-DeltaFilteredCollection -Collection $allSynonyms -ObjectType 'Synonym')
+    $skippedForDelta = $allSynonyms.Count - $synonyms.Count
+    if ($synonyms.Count -gt 0 -or $skippedForDelta -gt 0) {
       $groupingMode = Get-ObjectGroupingMode -ObjectType 'Synonyms'
-      Write-Output "  Found $($synonyms.Count) synonym(s) to export (grouping: $groupingMode)"
+      $deltaInfo = if ($skippedForDelta -gt 0) { ", $skippedForDelta unchanged" } else { '' }
+      Write-Output "  Found $($synonyms.Count) synonym(s) to export$deltaInfo (grouping: $groupingMode)"
       $successCount = 0
       $failCount = 0
       $currentItem = 0
@@ -8319,6 +8516,9 @@ For more details, see: https://go.microsoft.com/fwlink/?linkid=2226722
     # Perform change detection
     $script:DeltaChangeResults = Get-DeltaChangeDetection -Database $smDatabase -PreviousMetadata $script:DeltaMetadata
     Write-Log "Delta change detection: $($script:DeltaChangeResults.ToExport.Count) to export, $($script:DeltaChangeResults.ToCopy.Count) to copy" -Severity INFO
+
+    # Build lookup hashtable for O(1) filtering during export
+    Initialize-DeltaExportLookup
   }
 
   # Record connection time

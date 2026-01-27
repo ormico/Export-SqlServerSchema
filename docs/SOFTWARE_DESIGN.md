@@ -23,14 +23,15 @@ The architecture separates concerns into two specialized scripts:
 1. [Design Philosophy](#1-design-philosophy)
 2. [System Architecture](#2-system-architecture)
 3. [Export Pipeline Architecture](#3-export-pipeline-architecture)
-4. [Import Pipeline Architecture](#4-import-pipeline-architecture)
-5. [Concurrency Model](#5-concurrency-model)
-6. [Configuration System](#6-configuration-system)
-7. [Error Handling & Resilience](#7-error-handling--resilience)
-8. [Security Considerations](#8-security-considerations)
-9. [Testing Strategy](#9-testing-strategy)
-10. [Extension Points](#10-extension-points)
-11. [Appendices](#appendices)
+4. [Delta Export Architecture](#4-delta-export-architecture)
+5. [Import Pipeline Architecture](#5-import-pipeline-architecture)
+6. [Concurrency Model](#6-concurrency-model)
+7. [Configuration System](#7-configuration-system)
+8. [Error Handling & Resilience](#8-error-handling--resilience)
+9. [Security Considerations](#9-security-considerations)
+10. [Testing Strategy](#10-testing-strategy)
+11. [Extension Points](#11-extension-points)
+12. [Appendices](#appendices)
 
 ---
 
@@ -106,6 +107,7 @@ flowchart TB
         F14[14_Programmability]
         F21[21_Data]
         MAN[_DEPLOYMENT_README.md]
+        META[_export_metadata.json]
     end
 
     subgraph Import["Import Process"]
@@ -163,7 +165,8 @@ Export Output/
 ├── 19_PlanGuides/              # Query plan hints
 ├── 20_SecurityPolicies/        # Row-Level Security (RLS)
 ├── 21_Data/                    # INSERT statements (optional)
-└── _DEPLOYMENT_README.md       # Human-readable deployment checklist
+├── _DEPLOYMENT_README.md       # Human-readable deployment checklist
+└── _export_metadata.json       # Export metadata (timestamps, object inventory)
 ```
 
 ### 2.3 Critical Dependency Decisions
@@ -313,11 +316,155 @@ single mode:                    schema mode:                  all mode:
 └── Sales.Regions.sql
 ```
 
+### 3.6 Export Metadata Generation
+
+Every export generates `_export_metadata.json` containing a complete manifest of the export operation:
+
+```json
+{
+  "version": "1.0",
+  "exportStartTimeUtc": "2026-01-26T15:30:00.000Z",
+  "exportStartTimeServer": "2026-01-26T10:30:00.000",
+  "serverName": "localhost",
+  "databaseName": "TestDb",
+  "groupBy": "single",
+  "includeData": false,
+  "objectCount": 57,
+  "objects": [
+    { "type": "Table", "schema": "dbo", "name": "Customers", "filePath": "09_Tables_PrimaryKey/dbo.Customers.sql" }
+  ],
+  "fileGroups": [
+    {
+      "name": "FG_ARCHIVE",
+      "files": [{
+        "name": "TestDb_Archive",
+        "originalSizeKB": 8192,
+        "originalGrowthKB": 65536,
+        "sizeVariable": "FG_ARCHIVE_SIZE",
+        "growthVariable": "FG_ARCHIVE_GROWTH"
+      }]
+    }
+  ]
+}
+```
+
+**Metadata Purposes:**
+- **Delta Export**: Provides baseline timestamp and object inventory for change detection
+- **Import Reference**: FileGroup original values used as fallback when no config specified
+- **Audit Trail**: Documents what was exported, when, and from where
+
 ---
 
-## 4. Import Pipeline Architecture
+## 4. Delta Export Architecture
 
-### 4.1 Execution Phases
+Delta export enables efficient incremental exports by detecting and scripting only objects modified since a previous export. This dramatically reduces export time for large, stable databases.
+
+### 4.1 Design Goals
+
+| Goal | Implementation |
+|------|----------------|
+| **Minimize export time** | Script only changed objects; copy unchanged files |
+| **Produce complete output** | Delta export folder is standalone and importable |
+| **Detect all change types** | Modified, New, Deleted object tracking |
+| **Maintain compatibility** | Output works with existing Import-SqlServerSchema.ps1 |
+
+### 4.2 Change Detection Algorithm
+
+```mermaid
+flowchart TB
+    subgraph Validation["Phase 1: Validation"]
+        V1[Read previous _export_metadata.json]
+        V2[Verify groupBy: single]
+        V3[Verify server/database match]
+    end
+
+    subgraph Detection["Phase 2: Change Detection"]
+        D1[Query sys.objects.modify_date]
+        D2[Compare against previous timestamp]
+        D3{Categorize Objects}
+    end
+
+    subgraph Categories["Object Categories"]
+        MOD[MODIFIED<br/>modify_date > timestamp]
+        NEW[NEW<br/>in DB, not in metadata]
+        DEL[DELETED<br/>in metadata, not in DB]
+        UNC[UNCHANGED<br/>modify_date ≤ timestamp]
+    end
+
+    subgraph Export["Phase 3: Export"]
+        E1[Script MODIFIED + NEW]
+        E2[Copy UNCHANGED files]
+        E3[Log DELETED objects]
+        E4[Write new metadata]
+    end
+
+    V1 --> V2 --> V3 --> D1
+    D1 --> D2 --> D3
+    D3 --> MOD & NEW & DEL & UNC
+    MOD & NEW --> E1
+    UNC --> E2
+    DEL --> E3
+    E1 & E2 & E3 --> E4
+
+    style MOD fill:#fff9c4
+    style NEW fill:#c8e6c9
+    style DEL fill:#ffcdd2
+    style UNC fill:#e0e0e0
+```
+
+### 4.3 Objects Without modify_date
+
+SQL Server's `sys.objects` does not track modification dates for all object types. These are **always exported** in delta mode:
+
+| Object Type | Has modify_date | Delta Behavior |
+|-------------|-----------------|----------------|
+| Tables, Views, Procedures | Yes | Compare timestamps |
+| Functions, Triggers, Synonyms | Yes | Compare timestamps |
+| Sequences, Types | Yes | Compare timestamps |
+| **Schemas** | No | Always export |
+| **FileGroups** | No | Always export |
+| **Partition Functions/Schemes** | No | Always export |
+| **Security (Roles/Users)** | No | Always export |
+| **Foreign Keys, Indexes** | No | Always export (safety) |
+| **Database Configs** | No | Always export |
+
+**Rationale**: For objects without reliable change tracking, the cost of always re-exporting is minimal compared to the risk of missing changes.
+
+### 4.4 GroupBy Restriction
+
+Delta export **requires `groupBy: single`** for all object types:
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                     WHY SINGLE MODE IS REQUIRED                              │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  groupBy: single                       groupBy: schema / all                 │
+│  ───────────────                       ─────────────────────                 │
+│  One file = One object                 One file = Multiple objects           │
+│  ✓ Can copy unchanged files            ✗ Cannot copy partial files          │
+│  ✓ Clear change attribution            ✗ Any change = re-export entire file │
+│  ✓ Minimal delta overhead              ✗ No benefit over full export        │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### 4.5 Performance Characteristics
+
+For a database with 2,400 objects where 50 changed since last export:
+
+| Export Type | Objects Scripted | Files Copied | Typical Time |
+|-------------|------------------|--------------|--------------|
+| Full Export | 2,400 | 0 | ~90 seconds |
+| Delta Export | 50 + always-export (~100) | 2,250 | ~15 seconds |
+
+**Key Insight**: File copy operations are orders of magnitude faster than SMO scripting. Delta export leverages this by copying unchanged files directly from the previous export.
+
+---
+
+## 5. Import Pipeline Architecture
+
+### 5.1 Execution Phases
 
 ```mermaid
 stateDiagram-v2
@@ -347,7 +494,7 @@ stateDiagram-v2
     Summary --> [*]
 ```
 
-### 4.2 Import Modes
+### 5.2 Import Modes
 
 The import script supports two operational modes with distinct behaviors:
 
@@ -369,7 +516,7 @@ The import script supports two operational modes with distinct behaviors:
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
-### 4.3 FileGroup Transformation Strategies
+### 5.3 FileGroup Transformation Strategies
 
 FileGroup handling is one of the most complex aspects of schema migration:
 
@@ -406,7 +553,7 @@ Input:  CREATE DATABASE ADD FILE (NAME = N'Data1', FILENAME = 'E:\Production\Dat
 Output: CREATE DATABASE ADD FILE (NAME = N'TargetDb_Data1', FILENAME = '$(FG_DATA_PATH_FILE)')
 ```
 
-### 4.4 Script Transformation Pipeline
+### 5.4 Script Transformation Pipeline
 
 Every script passes through the transformation engine before execution:
 
@@ -434,7 +581,7 @@ flowchart TB
 | Database Current | `ALTER DATABASE CURRENT` | `ALTER DATABASE [ActualName]` |
 | Logical Names | `NAME = N'Original'` | `NAME = N'Database_Original'` |
 
-### 4.5 Dependency Retry Algorithm
+### 5.5 Dependency Retry Algorithm
 
 Programmability objects (functions, procedures, views) may have cross-dependencies that SMO scripting order cannot resolve. The import script uses a multi-pass retry strategy:
 
@@ -461,9 +608,9 @@ flowchart TB
 
 ---
 
-## 5. Concurrency Model
+## 6. Concurrency Model
 
-### 5.1 Parallel Export Architecture
+### 6.1 Parallel Export Architecture
 
 The parallel export system uses PowerShell runspace pools with a producer-consumer pattern:
 
@@ -503,7 +650,7 @@ flowchart TB
     style Shared fill:#e8eaf6
 ```
 
-### 5.2 Work Item Design
+### 6.2 Work Item Design
 
 Work items are **identifiers only**, not SMO objects:
 
@@ -526,7 +673,7 @@ WorkItem = @{
 - Each worker creates its own SMO connection and resolves objects by name
 - Eliminates serialization/deserialization overhead
 
-### 5.3 Connection Isolation
+### 6.3 Connection Isolation
 
 Each parallel worker maintains complete connection isolation:
 
@@ -562,7 +709,7 @@ Each parallel worker maintains complete connection isolation:
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
-### 5.4 Fallback Behavior
+### 6.4 Fallback Behavior
 
 If parallel export fails (e.g., runspace initialization error), the system falls back to sequential export:
 
@@ -580,9 +727,9 @@ catch {
 
 ---
 
-## 6. Configuration System
+## 7. Configuration System
 
-### 6.1 Configuration Schema
+### 7.1 Configuration Schema
 
 The configuration uses YAML format with JSON Schema validation:
 
@@ -637,7 +784,7 @@ import:
       - Views
 ```
 
-### 6.2 Schema Validation
+### 7.2 Schema Validation
 
 The configuration schema (`export-import-config.schema.json`) enforces:
 
@@ -648,9 +795,9 @@ The configuration schema (`export-import-config.schema.json`) enforces:
 
 ---
 
-## 7. Error Handling & Resilience
+## 8. Error Handling & Resilience
 
-### 7.1 Retry Strategy
+### 8.1 Retry Strategy
 
 Both scripts implement `Invoke-WithRetry` with exponential backoff:
 
@@ -681,7 +828,7 @@ flowchart LR
 | `connection.*lost` | Connection drop |
 | `53`, `233`, `64` | Transport errors |
 
-### 7.2 Error Logging
+### 8.2 Error Logging
 
 The `Write-ExportError` function captures full exception chains:
 
@@ -697,7 +844,7 @@ The `Write-ExportError` function captures full exception chains:
         SQL Error 207, Line 15
 ```
 
-### 7.3 Import Safety Checks
+### 8.3 Import Safety Checks
 
 Before any write operations, the import script validates:
 
@@ -708,9 +855,9 @@ Before any write operations, the import script validates:
 
 ---
 
-## 8. Security Considerations
+## 9. Security Considerations
 
-### 8.1 Credential Management
+### 9.1 Credential Management
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
@@ -736,7 +883,7 @@ Before any write operations, the import script validates:
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
-### 8.2 Input Sanitization
+### 9.2 Input Sanitization
 
 FileGroup and file names are sanitized before SQLCMD variable substitution:
 
@@ -750,7 +897,7 @@ if ($fgName -notmatch '^[a-zA-Z0-9_-]+$') {
 
 This prevents SQL injection via malicious FileGroup names like `FG'; DROP TABLE Users;--`.
 
-### 8.3 Certificate Trust
+### 9.3 Certificate Trust
 
 The `trustServerCertificate` setting is deliberately conservative:
 
@@ -766,9 +913,9 @@ trustServerCertificate: true  # SECURITY RISK
 
 ---
 
-## 9. Testing Strategy
+## 10. Testing Strategy
 
-### 9.1 Test Architecture
+### 10.1 Test Architecture
 
 ```
 tests/
@@ -782,7 +929,7 @@ tests/
 └── *.yml                       # Test configurations
 ```
 
-### 9.2 Integration Test Workflow
+### 10.2 Integration Test Workflow
 
 ```mermaid
 flowchart TB
@@ -812,7 +959,7 @@ flowchart TB
     Setup --> Export --> Import --> Cleanup
 ```
 
-### 9.3 Test Coverage
+### 10.3 Test Coverage
 
 | Category | Test Scenarios |
 |----------|----------------|
@@ -825,9 +972,9 @@ flowchart TB
 
 ---
 
-## 10. Extension Points
+## 11. Extension Points
 
-### 10.1 Adding New Object Types
+### 11.1 Adding New Object Types
 
 1. **Create builder function**: `Build-WorkItems-NewType` in export script
 2. **Add to orchestrator list** in `Build-ParallelWorkQueue`
@@ -836,7 +983,7 @@ flowchart TB
 5. **Update import folder discovery** in `Get-ScriptFiles`
 6. **Add to config schema** for exclude/include options
 
-### 10.2 Custom Transformations
+### 11.2 Custom Transformations
 
 Add new transforms in `Invoke-SqlScript`:
 
@@ -847,7 +994,7 @@ if ($SqlCmdVariables.ContainsKey('__CustomTransform__')) {
 }
 ```
 
-### 10.3 Alternative Output Formats
+### 11.3 Alternative Output Formats
 
 The current architecture supports alternative outputs by modifying the scripter pipeline:
 
@@ -882,8 +1029,8 @@ $scriptOutput = $scripter.EnumScript($objects)
 |-----------------|---------|
 | `$(FG_NAME_PATH)` | Base path for FileGroup |
 | `$(FG_NAME_PATH_FILE)` | Full path for first file |
-| `$(FG_NAME_PATH_FILE2)` | Full path for second file |
-| `$(__RemapFileGroupsToPrimary__)` | Flag to enable PRIMARY remapping |
+| `$(FG_NAME_PATH_FILE2)` | Full path for second file || `$(FG_NAME_SIZE)` | Initial file size (e.g., `1024KB`) |
+| `$(FG_NAME_GROWTH)` | File growth increment (e.g., `65536KB`) || `$(__RemapFileGroupsToPrimary__)` | Flag to enable PRIMARY remapping |
 
 ### C. Performance Characteristics
 
@@ -892,8 +1039,7 @@ $scriptOutput = $scripter.EnumScript($objects)
 | SMO Connection | 100-150ms | Network latency, auth method |
 | Metadata Prefetch | 500ms-5s | Object count, complexity |
 | Single Object Script | 5-50ms | Object size, options |
-| Parallel Speedup | 2-4x | Worker count, I/O bound |
-| Import Transform | <1ms | Script size |
+| Parallel Speedup | 2-4x | Worker count, I/O bound || Delta Export (unchanged) | <1ms/file | File copy vs. scripting || Import Transform | <1ms | Script size |
 | Batch Execution | 10ms-10s | SQL complexity, data volume |
 
 ---

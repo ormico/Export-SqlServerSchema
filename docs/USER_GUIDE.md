@@ -41,6 +41,53 @@ You can whitelist or blacklist specific object types.
 -   **Whitelist**: `-IncludeObjectTypes Tables,Views`
 -   **Blacklist**: `-ExcludeObjectTypes Data,SecurityPolicies`
 
+### 1.5 Delta Export (Incremental)
+
+For databases where most objects rarely change, delta export dramatically reduces export time by only re-scripting modified objects.
+
+```powershell
+# First export (full) - creates metadata for future deltas
+./Export-SqlServerSchema.ps1 -Server "localhost" -Database "MyDatabase"
+
+# Subsequent exports (delta) - only changed objects
+./Export-SqlServerSchema.ps1 -Server "localhost" -Database "MyDatabase" `
+    -DeltaFrom "./DbScripts/localhost_MyDatabase_20260125_103000"
+```
+
+**How Delta Export Works:**
+
+1. Reads `_export_metadata.json` from the previous export
+2. Queries SQL Server for current objects with their `modify_date`
+3. Compares timestamps to categorize objects:
+   - **Modified**: `modify_date` > previous export time
+   - **New**: Exists in database but not in previous metadata
+   - **Deleted**: Exists in previous metadata but not in database
+   - **Unchanged**: Same object, not modified since last export
+4. Exports only Modified and New objects
+5. Copies Unchanged files from previous export (fast file copy)
+6. Logs Deleted objects for review
+
+**Requirements:**
+- Previous export must have `_export_metadata.json` (generated automatically)
+- Both exports must use `groupBy: single` (the default)
+- Server and database must match
+
+**Always-Export Objects:**
+Some objects don't have reliable `modify_date` and are always re-exported:
+- FileGroups, Schemas, Security (Roles/Users)
+- Partition Functions/Schemes, Database Configurations
+- Foreign Keys, Indexes (safety measure)
+
+### 1.6 Export Metadata
+
+Every export generates `_export_metadata.json` containing:
+- Export timestamp (UTC and server local time)
+- Complete object inventory with file paths
+- FileGroup details with original sizes (for import reference)
+- Grouping mode used
+
+This metadata enables delta exports and provides an audit trail.
+
 ## 2. Importing Databases
 
 The `Import-SqlServerSchema.ps1` script rebuilds a database from the exported files.
@@ -115,9 +162,19 @@ fileGroupPathMapping:
 
 ### 4.3 FileGroup File Size Defaults
 
-Exported FileGroup scripts include the original SIZE and FILEGROWTH values from the source database. These can be very large (e.g., 1GB initial size) and may cause imports to fail on developer systems with limited disk space.
+Exported FileGroup scripts use **SQLCMD variables** for SIZE and FILEGROWTH values, allowing flexible configuration at import time. The original values from the source database are preserved in `_export_metadata.json` for reference.
 
-**Dev Mode Default Behavior**: In Dev mode, the import automatically uses safe defaults (1 MB initial size, 64 MB growth) unless you override them.
+**Exported SQL Example:**
+```sql
+ALTER DATABASE CURRENT ADD FILE (
+    NAME = N'TestDb_Archive',
+    FILENAME = N'$(FG_ARCHIVE_PATH_FILE)',
+    SIZE = $(FG_ARCHIVE_SIZE),
+    FILEGROWTH = $(FG_ARCHIVE_GROWTH)
+) TO FILEGROUP [FG_ARCHIVE];
+```
+
+**Dev Mode Default Behavior**: In Dev mode, the import automatically uses safe defaults (1 MB initial size, 64 MB growth) unless you override them. If no config is provided, the original values from `_export_metadata.json` are used.
 
 **Custom Configuration**: You can override these values in either mode via the config file:
 
@@ -139,6 +196,11 @@ import:
       fileGrowthKB: 262144  # 256 MB growth for production
 ```
 
+**Value Resolution Order:**
+1. Config file `fileGroupFileSizeDefaults` (highest priority)
+2. Original values from `_export_metadata.json`
+3. Dev mode safe defaults (1 MB / 64 MB)
+
 **Note**: The size values are in KB. Common conversions:
 -   1 MB = 1024 KB
 -   64 MB = 65536 KB
@@ -146,6 +208,28 @@ import:
 
 ## 5. Troubleshooting
 
+### Common Issues
+
 -   **Logs**: Check the `export-log.txt` or `import-log.txt` in the output folder.
 -   **Connection Errors**: Use `-ConnectionTimeout` (default 30s) if the server is slow to respond.
 -   **Throttling**: The script automatically retries on Azure SQL throttling errors (40501, etc.).
+-   **Disk Space**: Use `fileGroupFileSizeDefaults` in config to reduce FileGroup file sizes for dev.
+
+### Delta Export Issues
+
+-   **"GroupBy must be 'single'"**: Delta export requires `groupBy: single` for both exports.
+-   **"Metadata not found"**: Ensure the previous export contains `_export_metadata.json`.
+-   **"Server/Database mismatch"**: Delta exports must be between the same server and database.
+
+### FileGroup Issues
+
+-   **"Cannot create file"**: Check disk space and permissions on target path.
+-   **Large file sizes**: Production databases may have large FileGroup sizes. Use config to override.
+-   **Path variables not substituted**: Ensure config has `fileGroupPathMapping` for Prod mode.
+
+## 6. Further Reading
+
+-   [README.md](../README.md) - Quick start and parameter reference
+-   [SOFTWARE_DESIGN.md](SOFTWARE_DESIGN.md) - Internal architecture and design decisions
+-   [DELTA_EXPORT_DESIGN.md](DELTA_EXPORT_DESIGN.md) - Delta export implementation details
+-   [tests/README.md](../tests/README.md) - Integration testing with Docker

@@ -2193,51 +2193,50 @@ try {
   # NOTE: FileGroup file size defaults are now handled via SQLCMD variables
   # $(FG_NAME_SIZE) and $(FG_NAME_GROWTH) are populated earlier from config or metadata
 
-    if ($fgSizeDefaults) {
-      # Validate file group file size defaults to provide clear errors for invalid configuration values.
-      [int]$parsedSizeKB = 0
-      [int]$parsedFileGrowthKB = 0
-      [int]$minFileSizeKB = 64
-      [int]$maxFileSizeKB = 1073741824
+  if ($fgSizeDefaults) {
+    # Validate file group file size defaults to provide clear errors for invalid configuration values.
+    [int]$parsedSizeKB = 0
+    [int]$parsedFileGrowthKB = 0
+    [int]$minFileSizeKB = 64
+    [int]$maxFileSizeKB = 1073741824
 
-      if ($fgSizeDefaults.sizeKB -ne $null) {
-        if (-not [int]::TryParse($fgSizeDefaults.sizeKB.ToString(), [ref]$parsedSizeKB)) {
-          Write-Host "[ERROR] Invalid configuration value for fileGroupFileSizeDefaults.sizeKB: '$($fgSizeDefaults.sizeKB)'. Expected an integer value in kilobytes between $minFileSizeKB and $maxFileSizeKB." -ForegroundColor Red
-          throw "Invalid configuration value for fileGroupFileSizeDefaults.sizeKB."
-        }
-        elseif ($parsedSizeKB -lt $minFileSizeKB -or $parsedSizeKB -gt $maxFileSizeKB) {
-          Write-Host "[ERROR] Configuration value for fileGroupFileSizeDefaults.sizeKB ($parsedSizeKB) is out of range. Allowed range is $minFileSizeKB KB to $maxFileSizeKB KB." -ForegroundColor Red
-          throw "Out-of-range configuration value for fileGroupFileSizeDefaults.sizeKB."
-        }
+    if ($fgSizeDefaults.sizeKB -ne $null) {
+      if (-not [int]::TryParse($fgSizeDefaults.sizeKB.ToString(), [ref]$parsedSizeKB)) {
+        Write-Host "[ERROR] Invalid configuration value for fileGroupFileSizeDefaults.sizeKB: '$($fgSizeDefaults.sizeKB)'. Expected an integer value in kilobytes between $minFileSizeKB and $maxFileSizeKB." -ForegroundColor Red
+        throw "Invalid configuration value for fileGroupFileSizeDefaults.sizeKB."
       }
+      elseif ($parsedSizeKB -lt $minFileSizeKB -or $parsedSizeKB -gt $maxFileSizeKB) {
+        Write-Host "[ERROR] Configuration value for fileGroupFileSizeDefaults.sizeKB ($parsedSizeKB) is out of range. Allowed range is $minFileSizeKB KB to $maxFileSizeKB KB." -ForegroundColor Red
+        throw "Out-of-range configuration value for fileGroupFileSizeDefaults.sizeKB."
+      }
+    }
 
-      if ($fgSizeDefaults.fileGrowthKB -ne $null) {
-        if (-not [long]::TryParse($fgSizeDefaults.fileGrowthKB.ToString(), [ref]$parsedFileGrowthKB)) {
-          Write-Host "[ERROR] Invalid configuration value for fileGroupFileSizeDefaults.fileGrowthKB: '$($fgSizeDefaults.fileGrowthKB)'. Expected an integer value in kilobytes between $minFileSizeKB and $maxFileSizeKB." -ForegroundColor Red
-          throw "Invalid configuration value for fileGroupFileSizeDefaults.fileGrowthKB."
-        }
-        elseif ($parsedFileGrowthKB -lt $minFileSizeKB -or $parsedFileGrowthKB -gt $maxFileSizeKB) {
-          Write-Host "[ERROR] Configuration value for fileGroupFileSizeDefaults.fileGrowthKB ($parsedFileGrowthKB) is out of range. Allowed range is $minFileSizeKB KB to $maxFileSizeKB KB." -ForegroundColor Red
-          throw "Out-of-range configuration value for fileGroupFileSizeDefaults.fileGrowthKB."
-        }
+    if ($fgSizeDefaults.fileGrowthKB -ne $null) {
+      if (-not [long]::TryParse($fgSizeDefaults.fileGrowthKB.ToString(), [ref]$parsedFileGrowthKB)) {
+        Write-Host "[ERROR] Invalid configuration value for fileGroupFileSizeDefaults.fileGrowthKB: '$($fgSizeDefaults.fileGrowthKB)'. Expected an integer value in kilobytes between $minFileSizeKB and $maxFileSizeKB." -ForegroundColor Red
+        throw "Invalid configuration value for fileGroupFileSizeDefaults.fileGrowthKB."
       }
+      elseif ($parsedFileGrowthKB -lt $minFileSizeKB -or $parsedFileGrowthKB -gt $maxFileSizeKB) {
+        Write-Host "[ERROR] Configuration value for fileGroupFileSizeDefaults.fileGrowthKB ($parsedFileGrowthKB) is out of range. Allowed range is $minFileSizeKB KB to $maxFileSizeKB KB." -ForegroundColor Red
+        throw "Out-of-range configuration value for fileGroupFileSizeDefaults.fileGrowthKB."
+      }
+    }
 
-      $script:FileGroupFileSizeDefaults = @{}
-      if ($fgSizeDefaults.sizeKB -ne $null) {
-        $script:FileGroupFileSizeDefaults['sizeKB'] = $parsedSizeKB
-      }
-      if ($fgSizeDefaults.fileGrowthKB -ne $null) {
-        $script:FileGroupFileSizeDefaults['fileGrowthKB'] = $parsedFileGrowthKB
-      }
+    $script:FileGroupFileSizeDefaults = @{}
+    if ($fgSizeDefaults.sizeKB -ne $null) {
+      $script:FileGroupFileSizeDefaults['sizeKB'] = $parsedSizeKB
+    }
+    if ($fgSizeDefaults.fileGrowthKB -ne $null) {
+      $script:FileGroupFileSizeDefaults['fileGrowthKB'] = $parsedFileGrowthKB
+    }
 
-      if ($script:FileGroupFileSizeDefaults.Count -gt 0) {
-        Write-Output "[INFO] FileGroup file size defaults configured:"
-        if ($script:FileGroupFileSizeDefaults.ContainsKey('sizeKB')) {
-          Write-Output "  - SIZE = $($script:FileGroupFileSizeDefaults.sizeKB)KB"
-        }
-        if ($script:FileGroupFileSizeDefaults.ContainsKey('fileGrowthKB')) {
-          Write-Output "  - FILEGROWTH = $($script:FileGroupFileSizeDefaults.fileGrowthKB)KB"
-        }
+    if ($script:FileGroupFileSizeDefaults.Count -gt 0) {
+      Write-Output "[INFO] FileGroup file size defaults configured:"
+      if ($script:FileGroupFileSizeDefaults.ContainsKey('sizeKB')) {
+        Write-Output "  - SIZE = $($script:FileGroupFileSizeDefaults.sizeKB)KB"
+      }
+      if ($script:FileGroupFileSizeDefaults.ContainsKey('fileGrowthKB')) {
+        Write-Output "  - FILEGROWTH = $($script:FileGroupFileSizeDefaults.fileGrowthKB)KB"
       }
     }
   }
