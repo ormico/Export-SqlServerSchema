@@ -3,6 +3,10 @@ exports/*
 exports_exclude_test/*
 exports_perf/*
 exports_parallel/*
+exports_parallel_data/*
 exports_perf_parallel/*
+exports_perf_schema_parallel/*
+exports_seq_schema/*
+exports_perf_schema/*
 exports_parallel_test/*
 perf-metrics-*.json
