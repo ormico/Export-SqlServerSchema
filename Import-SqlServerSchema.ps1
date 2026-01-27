@@ -1735,7 +1735,7 @@ function Show-ImportConfiguration {
 
 try {
   # Start overall timing if collecting metrics (CLI switch, config applied later)
-  $script:CollectMetrics = $script:CollectMetrics.IsPresent
+  $script:CollectMetrics = $CollectMetrics.IsPresent
   if ($script:CollectMetrics) {
     $script:ImportStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
     $script:InitStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
