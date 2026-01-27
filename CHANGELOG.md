@@ -20,7 +20,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Compatibility validation ensures delta exports use same server, database, and groupBy settings
 - Copy unchanged files from previous export to create complete output
 - Requires `groupBy: single` mode for object-level granularity
-- Design document: [docs/DELTA_EXPORT_DESIGN.md](docs/DELTA_EXPORT_DESIGN.md)
 
 **Parallel Export Feature**
 - New `-Parallel` switch to enable multi-threaded export for large databases
