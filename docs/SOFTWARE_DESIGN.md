@@ -13,8 +13,10 @@
 The Export-SqlServerSchema toolkit is a PowerShell-based solution for deterministic, version-control-friendly SQL Server database schema migration. It addresses the core challenge of moving database schemas between environments while respecting object dependencies, environment-specific configurations, and the operational differences between development and production deployments.
 
 The architecture separates concerns into two specialized scripts:
-- **Export-SqlServerSchema.ps1** (~7,000 lines) — Deterministic schema extraction with parallel processing
+- **Export-SqlServerSchema.ps1** (~6,400 lines) — Deterministic schema extraction with unified hybrid architecture
 - **Import-SqlServerSchema.ps1** (~2,600 lines) — Safe reconstruction with environment-aware transformations
+
+**Key Architectural Achievement**: Both sequential and parallel export modes share a unified code path through `Build-ParallelWorkQueue` and `Process-ExportWorkItem`, eliminating ~2,500 lines of duplicate code while ensuring consistent output regardless of execution mode.
 
 ---
 
@@ -709,21 +711,42 @@ Each parallel worker maintains complete connection isolation:
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
-### 6.4 Fallback Behavior
+### 6.4 Hybrid Architecture (Unified Code Path)
 
-If parallel export fails (e.g., runspace initialization error), the system falls back to sequential export:
+Both sequential and parallel modes share the same work item generation and processing logic:
 
-```powershell
-try {
-    if ($script:ParallelEnabled) {
-        $result = Invoke-ParallelExport @params
-    }
-}
-catch {
-    Write-Warning "Parallel export failed, falling back to sequential: $_"
-    Export-DatabaseObjects @params  # Sequential path
-}
+```text
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                        UNIFIED EXPORT ARCHITECTURE                           │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  Build-ParallelWorkQueue                Process-ExportWorkItem               │
+│  ──────────────────────                 ─────────────────────                │
+│  • Single source of truth for          • Single implementation for          │
+│    work item generation                   object scripting                  │
+│  • Used by BOTH modes                   • Used by BOTH modes                │
+│  • Handles all object types             • Handles special cases             │
+│  • Respects grouping config             • (FKs, Indexes, Triggers)          │
+│                                                                              │
+│  Sequential Mode                        Parallel Mode                        │
+│  ───────────────                        ─────────────                        │
+│  • Processes work items in              • Distributes work items            │
+│    main thread loop                       across runspace pool              │
+│  • Uses same Process-ExportWorkItem     • Each worker calls same            │
+│  • Progress grouped by ObjectType         Process-ExportWorkItem            │
+│                                                                              │
+│  RESULT: Identical output regardless of execution mode                      │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
 ```
+
+**TableData Filtering**: Work items of type `TableData` are filtered out before sequential processing since data exports are handled separately by `Export-TableData`. Parallel workers have explicit handlers for `TableData` work items.
+
+**Benefits of Unified Architecture**:
+- ~2,500 lines of duplicate code eliminated (28% reduction)
+- Bug fixes automatically apply to both modes
+- Consistent file naming and content across modes
+- Easier maintenance and testing
 
 ---
 
