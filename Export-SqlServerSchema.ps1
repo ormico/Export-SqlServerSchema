@@ -2631,11 +2631,20 @@ function Export-NonParallelizableObjects {
         $fgFilePath = Join-Path $OutputDir '00_FileGroups' '001_FileGroups.sql'
         $fgScript = New-Object System.Text.StringBuilder
         [void]$fgScript.AppendLine("-- FileGroups and Files")
-        [void]$fgScript.AppendLine("-- WARNING: Physical file paths are environment-specific")
-        [void]$fgScript.AppendLine("-- Review and update file paths before applying to target environment")
+        [void]$fgScript.AppendLine("-- WARNING: Physical file paths and sizes are environment-specific")
+        [void]$fgScript.AppendLine("-- Review and update via config file before applying to target environment")
+        [void]$fgScript.AppendLine("-- Uses SQLCMD variables: `$(FG_NAME_PATH_FILE), `$(FG_NAME_SIZE), `$(FG_NAME_GROWTH)")
         [void]$fgScript.AppendLine("")
 
         foreach ($fg in $fileGroups) {
+          # Build metadata entry for this FileGroup
+          $fgMetadata = [ordered]@{
+            name     = $fg.Name
+            type     = $fg.FileGroupType.ToString()
+            isReadOnly = $fg.IsReadOnly
+            files    = [System.Collections.ArrayList]::new()
+          }
+
           [void]$fgScript.AppendLine("-- FileGroup: $($fg.Name)")
           [void]$fgScript.AppendLine("-- Type: $($fg.FileGroupType)")
 
@@ -2654,30 +2663,44 @@ function Export-NonParallelizableObjects {
           [void]$fgScript.AppendLine("")
 
           # Script files in the filegroup
+          $fileIdx = 0
           foreach ($file in $fg.Files) {
-            $sqlcmdVar = "$($fg.Name)_PATH"
+            $fileIdx++
+            $sqlcmdVarBase = $fg.Name
             $fileName = Split-Path $file.FileName -Leaf
             if (-not $fileName) { $fileName = "$($file.Name).ndf" }
 
+            # Build variable names (consistent with path variables)
+            $pathVar = if ($fileIdx -eq 1) { "${sqlcmdVarBase}_PATH_FILE" } else { "${sqlcmdVarBase}_PATH_FILE${fileIdx}" }
+            $sizeVar = if ($fileIdx -eq 1) { "${sqlcmdVarBase}_SIZE" } else { "${sqlcmdVarBase}_SIZE${fileIdx}" }
+            $growthVar = if ($fileIdx -eq 1) { "${sqlcmdVarBase}_GROWTH" } else { "${sqlcmdVarBase}_GROWTH${fileIdx}" }
+
+            # Store original values in metadata
+            $fileMetadata = [ordered]@{
+              name              = $file.Name
+              originalPath      = $file.FileName
+              originalFileName  = $fileName
+              originalSizeKB    = $file.Size
+              originalGrowthKB  = if ($file.GrowthType -eq 'KB') { $file.Growth } else { $null }
+              originalGrowthPct = if ($file.GrowthType -ne 'KB') { $file.Growth } else { $null }
+              originalGrowthType = $file.GrowthType.ToString()
+              originalMaxSizeKB = $file.MaxSize
+              pathVariable      = $pathVar
+              sizeVariable      = $sizeVar
+              growthVariable    = $growthVar
+            }
+            [void]$fgMetadata.files.Add($fileMetadata)
+
             [void]$fgScript.AppendLine("-- File: $($file.Name)")
             [void]$fgScript.AppendLine("-- Original Path: $($file.FileName)")
-            [void]$fgScript.AppendLine("-- Size: $($file.Size)KB, Growth: $($file.Growth)$(if ($file.GrowthType -eq 'KB') {'KB'} else {'%'}), MaxSize: $(if ($file.MaxSize -eq -1) {'UNLIMITED'} else {$file.MaxSize + 'KB'})")
-            [void]$fgScript.AppendLine("-- NOTE: Uses SQLCMD variable `$($sqlcmdVar) for base directory path")
-            [void]$fgScript.AppendLine("-- Target server will append appropriate path separator and filename")
-            [void]$fgScript.AppendLine("-- Configure via fileGroupPathMapping in config file or pass as SQLCMD variable")
+            [void]$fgScript.AppendLine("-- Original Size: $($file.Size)KB, Growth: $($file.Growth)$(if ($file.GrowthType -eq 'KB') {'KB'} else {'%'}), MaxSize: $(if ($file.MaxSize -eq -1) {'UNLIMITED'} else {$file.MaxSize + 'KB'})")
+            [void]$fgScript.AppendLine("-- NOTE: Uses SQLCMD variables for path, size, and growth")
+            [void]$fgScript.AppendLine("-- Configure via fileGroupPathMapping and fileGroupFileSizeDefaults in config file")
             [void]$fgScript.AppendLine("ALTER DATABASE CURRENT ADD FILE (")
             [void]$fgScript.AppendLine("    NAME = N'$($file.Name)',")
-            [void]$fgScript.AppendLine("    FILENAME = N'`$($($sqlcmdVar)_FILE)',")
-            [void]$fgScript.AppendLine("    SIZE = $($file.Size)KB")
-
-            if ($file.Growth -gt 0) {
-              if ($file.GrowthType -eq 'KB') {
-                [void]$fgScript.AppendLine("    , FILEGROWTH = $($file.Growth)KB")
-              }
-              else {
-                [void]$fgScript.AppendLine("    , FILEGROWTH = $($file.Growth)%")
-              }
-            }
+            [void]$fgScript.AppendLine("    FILENAME = N'`$($pathVar)',")
+            [void]$fgScript.AppendLine("    SIZE = `$($sizeVar)")
+            [void]$fgScript.AppendLine("    , FILEGROWTH = `$($growthVar)")
 
             if ($file.MaxSize -gt 0) {
               [void]$fgScript.AppendLine("    , MAXSIZE = $($file.MaxSize)KB")
@@ -2690,6 +2713,9 @@ function Export-NonParallelizableObjects {
             [void]$fgScript.AppendLine("GO")
             [void]$fgScript.AppendLine("")
           }
+
+          # Add FileGroup metadata to export metadata
+          [void]$script:ExportMetadata.FileGroups.Add($fgMetadata)
         }
 
         # Ensure directory exists
@@ -3008,6 +3034,7 @@ $script:ExportMetadata = @{
   IncludeData            = $false
   ObjectTypes            = @{}
   Objects                = [System.Collections.ArrayList]::new()
+  FileGroups             = [System.Collections.ArrayList]::new()  # Original file size/growth values
 }
 
 # Delta export state (set when -DeltaFrom is used)
@@ -3130,6 +3157,7 @@ function Initialize-ExportMetadata {
   $script:ExportMetadata.DatabaseName = $DatabaseName
   $script:ExportMetadata.IncludeData = $IncludeData
   $script:ExportMetadata.Objects = [System.Collections.ArrayList]::new()
+  $script:ExportMetadata.FileGroups = [System.Collections.ArrayList]::new()
 
   # Determine groupBy setting from config
   $groupBy = 'single'  # Default
@@ -3272,6 +3300,11 @@ function Save-ExportMetadata {
     includeData            = $script:ExportMetadata.IncludeData
     objectCount            = $objects.Count
     objects                = $objects
+  }
+
+  # Add fileGroups metadata if any were exported (contains original size/growth values)
+  if ($script:ExportMetadata.FileGroups -and $script:ExportMetadata.FileGroups.Count -gt 0) {
+    $metadata.fileGroups = $script:ExportMetadata.FileGroups
   }
 
   # Convert to JSON with proper formatting

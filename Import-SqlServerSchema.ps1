@@ -417,6 +417,41 @@ function Get-TargetServerOS {
   }
 }
 
+function Read-ExportMetadata {
+  <#
+    .SYNOPSIS
+        Reads export metadata from _export_metadata.json file.
+    .DESCRIPTION
+        Loads the metadata file from an export directory to retrieve original
+        FileGroup sizes, paths, and other export-time settings.
+    .PARAMETER SourcePath
+        Path to the export directory containing _export_metadata.json.
+    .OUTPUTS
+        Hashtable with metadata, or $null if file doesn't exist.
+  #>
+  param(
+    [Parameter(Mandatory)]
+    [string]$SourcePath
+  )
+
+  $metadataPath = Join-Path $SourcePath '_export_metadata.json'
+  if (-not (Test-Path $metadataPath)) {
+    Write-Verbose "No export metadata file found at: $metadataPath"
+    return $null
+  }
+
+  try {
+    $json = Get-Content -Path $metadataPath -Raw -Encoding UTF8
+    $metadata = $json | ConvertFrom-Json -AsHashtable
+    Write-Verbose "Loaded export metadata: version=$($metadata.version), objects=$($metadata.objectCount)"
+    return $metadata
+  }
+  catch {
+    Write-Warning "[WARNING] Failed to read export metadata: $_"
+    return $null
+  }
+}
+
 function Get-DefaultDataPath {
   <#
     .SYNOPSIS
@@ -783,7 +818,6 @@ function Invoke-SqlScript {
     [switch]$Show,
     [hashtable]$SqlCmdVariables = @{},
     [hashtable]$Config,
-    [hashtable]$FileGroupFileSizeDefaults,  # Override SIZE and FILEGROWTH for FileGroup files
     [Microsoft.SqlServer.Management.Smo.Server]$Connection  # Pre-existing connection for reuse
   )
 
@@ -851,29 +885,8 @@ function Invoke-SqlScript {
       $safeDatabaseName = $DatabaseName -replace '[^A-Za-z0-9_]', '_'
       $sql = $sql -replace "(?<!FILE)NAME\s*=\s*N'([^']+)'", "NAME = N'${safeDatabaseName}_`$1'"
 
-      # Override SIZE and FILEGROWTH for FileGroup data files if defaults specified
-      # This prevents large source database allocations from failing on dev systems
-      if ($FileGroupFileSizeDefaults) {
-        if ($FileGroupFileSizeDefaults.ContainsKey('sizeKB')) {
-          [int]$validatedSizeKB = 0
-          if (-not [int]::TryParse([string]$FileGroupFileSizeDefaults.sizeKB, [ref]$validatedSizeKB) -or $validatedSizeKB -le 0) {
-            throw "Invalid FileGroupFileSizeDefaults.sizeKB value '$($FileGroupFileSizeDefaults.sizeKB)'. Expected a positive integer (KB)."
-          }
-          # Replace SIZE = <number>KB or SIZE = <number>MB or SIZE = <number>GB
-          # Pattern matches: SIZE = 8192KB, SIZE = 64MB, SIZE = 1GB (with optional surrounding whitespace)
-          $sql = $sql -replace 'SIZE\s*=\s*\d+(KB|MB|GB)', "SIZE = ${validatedSizeKB}KB"
-          Write-Verbose "  [INFO] FileGroup file SIZE overridden to ${validatedSizeKB}KB"
-        }
-        if ($FileGroupFileSizeDefaults.ContainsKey('fileGrowthKB')) {
-          [int]$validatedGrowthKB = 0
-          if (-not [int]::TryParse([string]$FileGroupFileSizeDefaults.fileGrowthKB, [ref]$validatedGrowthKB) -or $validatedGrowthKB -le 0) {
-            throw "Invalid FileGroupFileSizeDefaults.fileGrowthKB value '$($FileGroupFileSizeDefaults.fileGrowthKB)'. Expected a positive integer (KB)."
-          }
-          # Replace FILEGROWTH = <number>KB or FILEGROWTH = <number>MB or FILEGROWTH = <number>GB
-          $sql = $sql -replace 'FILEGROWTH\s*=\s*\d+(KB|MB|GB)', "FILEGROWTH = ${validatedGrowthKB}KB"
-          Write-Verbose "  [INFO] FileGroup file FILEGROWTH overridden to ${validatedGrowthKB}KB"
-        }
-      }
+      # NOTE: SIZE and FILEGROWTH are now handled via SQLCMD variables ($(FG_NAME_SIZE), $(FG_NAME_GROWTH))
+      # populated from export metadata or config file fileGroupFileSizeDefaults
     }
 
     if ($Show) {
@@ -1102,8 +1115,7 @@ function Invoke-ScriptsWithDependencyRetries {
           -OperationName "Script: $($scriptFile.Name)" -ScriptBlock {
           Invoke-SqlScript -FilePath $scriptFile.FullName -ServerName $Server `
             -DatabaseName $Database -Cred $Credential -Timeout $Timeout -Show:$ShowSQL `
-            -SqlCmdVariables $SqlCmdVariables -Config $Config -Connection $Connection `
-            -FileGroupFileSizeDefaults $script:FileGroupFileSizeDefaults
+            -SqlCmdVariables $SqlCmdVariables -Config $Config -Connection $Connection
         } -ErrorVariable scriptError
       }
       catch {
@@ -1888,6 +1900,24 @@ try {
 
   # Build SQLCMD variables from config (for FileGroup path mappings, etc.)
   $sqlCmdVars = @{}
+
+  # Read export metadata for original FileGroup values
+  $exportMetadata = Read-ExportMetadata -SourcePath $SourcePath
+
+  # Get FileGroup file size defaults from config (if specified)
+  $fgSizeDefaults = $null
+  if ($config) {
+    if ($config.fileGroupFileSizeDefaults) {
+      $fgSizeDefaults = $config.fileGroupFileSizeDefaults
+    }
+    elseif ($config.import) {
+      $modeConfigForSize = if ($ImportMode -eq 'Prod') { $config.import.productionMode } else { $config.import.developerMode }
+      if ($modeConfigForSize -and $modeConfigForSize.fileGroupFileSizeDefaults) {
+        $fgSizeDefaults = $modeConfigForSize.fileGroupFileSizeDefaults
+      }
+    }
+  }
+
   if ($config) {
     # Support both simplified config (fileGroupPathMapping at root) and full config (nested)
     $modeConfig = $null
@@ -1949,7 +1979,7 @@ try {
         Write-Verbose "SQLCMD Variable: `$($varName) = $basePath"
 
         # Build full file path variables for each file in this filegroup
-        # Include database name in filename to avoid conflicts with other databases
+        # Also build SIZE and GROWTH variables from config or metadata
         if ($fileGroupFiles.ContainsKey($fg)) {
           $fileIdx = 0
           foreach ($fileName in $fileGroupFiles[$fg]) {
@@ -1957,15 +1987,59 @@ try {
             # Use numeric suffix for multiple files per FileGroup (consistent with auto-remap behavior)
             if ($fileIdx -le 1) {
               $fileVarName = "${fg}_PATH_FILE"
+              $sizeVarName = "${fg}_SIZE"
+              $growthVarName = "${fg}_GROWTH"
             }
             else {
               $fileVarName = "{0}_PATH_FILE{1}" -f $fg, $fileIdx
+              $sizeVarName = "{0}_SIZE{1}" -f $fg, $fileIdx
+              $growthVarName = "{0}_GROWTH{1}" -f $fg, $fileIdx
             }
             # Use sanitized database name + original file name for uniqueness
             $uniqueFileName = "${sanitizedDbName}_${fileName}"
             $fullPath = "${basePath}${pathSeparator}${uniqueFileName}.ndf"
             $sqlCmdVars[$fileVarName] = $fullPath
             Write-Verbose "SQLCMD Variable: `$($fileVarName) = $fullPath"
+
+            # Get SIZE and GROWTH values from config or metadata
+            $sizeKB = $null
+            $growthValue = $null
+
+            # First try config overrides
+            if ($fgSizeDefaults) {
+              if ($fgSizeDefaults.sizeKB) { $sizeKB = [int]$fgSizeDefaults.sizeKB }
+              if ($fgSizeDefaults.fileGrowthKB) { $growthValue = "$([int]$fgSizeDefaults.fileGrowthKB)KB" }
+            }
+
+            # Fall back to metadata original values if no config override
+            if (($null -eq $sizeKB -or $null -eq $growthValue) -and $exportMetadata -and $exportMetadata.fileGroups) {
+              $fgMeta = $exportMetadata.fileGroups | Where-Object { $_.name -eq $fg } | Select-Object -First 1
+              if ($fgMeta -and $fgMeta.files) {
+                $fileMeta = $fgMeta.files | Where-Object { $_.name -eq $fileName } | Select-Object -First 1
+                if ($fileMeta) {
+                  if ($null -eq $sizeKB -and $fileMeta.originalSizeKB) {
+                    $sizeKB = [int]$fileMeta.originalSizeKB
+                  }
+                  if ($null -eq $growthValue) {
+                    if ($fileMeta.originalGrowthType -eq 'KB' -and $fileMeta.originalGrowthKB) {
+                      $growthValue = "$([int]$fileMeta.originalGrowthKB)KB"
+                    }
+                    elseif ($fileMeta.originalGrowthPct) {
+                      $growthValue = "$([int]$fileMeta.originalGrowthPct)%"
+                    }
+                  }
+                }
+              }
+            }
+
+            # Use defaults if still not set
+            if ($null -eq $sizeKB) { $sizeKB = 1024 }  # 1 MB default
+            if ($null -eq $growthValue) { $growthValue = '65536KB' }  # 64 MB default
+
+            $sqlCmdVars[$sizeVarName] = "${sizeKB}KB"
+            $sqlCmdVars[$growthVarName] = $growthValue
+            Write-Verbose "SQLCMD Variable: `$($sizeVarName) = ${sizeKB}KB"
+            Write-Verbose "SQLCMD Variable: `$($growthVarName) = $growthValue"
           }
         }
       }
@@ -1989,6 +2063,7 @@ try {
 
         # Parse FileGroup file to extract names
         $currentFG = $null
+        $currentFileName = $null
         $fileIndex = @{}  # Track file count per FileGroup for uniqueness
 
         foreach ($line in (Get-Content $fileGroupScript)) {
@@ -2020,22 +2095,67 @@ try {
             }
 
             $fileIndex[$currentFG]++
+            $currentFileName = $originalFileName
 
             # Build unique filename: DatabaseName_FileGroupName_OriginalName.ndf
             $uniqueFileName = "${sanitizedDbName}_${currentFG}_${originalFileName}"
             $fullPath = "${defaultDataPath}${pathSeparator}${uniqueFileName}.ndf"
 
-            # Set the SQLCMD variable
+            # Set the SQLCMD variables (PATH, SIZE, GROWTH)
             # Preserve original behavior for first file, add numeric suffix for additional files
             $index = $fileIndex[$currentFG]
             if ($index -le 1) {
-              $varName = "${currentFG}_PATH_FILE"
+              $pathVarName = "${currentFG}_PATH_FILE"
+              $sizeVarName = "${currentFG}_SIZE"
+              $growthVarName = "${currentFG}_GROWTH"
             }
             else {
-              $varName = "{0}_PATH_FILE{1}" -f $currentFG, $index
+              $pathVarName = "{0}_PATH_FILE{1}" -f $currentFG, $index
+              $sizeVarName = "{0}_SIZE{1}" -f $currentFG, $index
+              $growthVarName = "{0}_GROWTH{1}" -f $currentFG, $index
             }
-            $sqlCmdVars[$varName] = $fullPath
-            Write-Verbose "  Auto-mapped: `$($varName) = $fullPath"
+            $sqlCmdVars[$pathVarName] = $fullPath
+            Write-Verbose "  Auto-mapped: `$($pathVarName) = $fullPath"
+
+            # Get SIZE and GROWTH values from config or metadata
+            $sizeKB = $null
+            $growthValue = $null
+
+            # First try config overrides
+            if ($fgSizeDefaults) {
+              if ($fgSizeDefaults.sizeKB) { $sizeKB = [int]$fgSizeDefaults.sizeKB }
+              if ($fgSizeDefaults.fileGrowthKB) { $growthValue = "$([int]$fgSizeDefaults.fileGrowthKB)KB" }
+            }
+
+            # Fall back to metadata original values if no config override
+            if (($null -eq $sizeKB -or $null -eq $growthValue) -and $exportMetadata -and $exportMetadata.fileGroups) {
+              $fgMeta = $exportMetadata.fileGroups | Where-Object { $_.name -eq $currentFG } | Select-Object -First 1
+              if ($fgMeta -and $fgMeta.files) {
+                $fileMeta = $fgMeta.files | Where-Object { $_.name -eq $originalFileName } | Select-Object -First 1
+                if ($fileMeta) {
+                  if ($null -eq $sizeKB -and $fileMeta.originalSizeKB) {
+                    $sizeKB = [int]$fileMeta.originalSizeKB
+                  }
+                  if ($null -eq $growthValue) {
+                    if ($fileMeta.originalGrowthType -eq 'KB' -and $fileMeta.originalGrowthKB) {
+                      $growthValue = "$([int]$fileMeta.originalGrowthKB)KB"
+                    }
+                    elseif ($fileMeta.originalGrowthPct) {
+                      $growthValue = "$([int]$fileMeta.originalGrowthPct)%"
+                    }
+                  }
+                }
+              }
+            }
+
+            # Use defaults if still not set
+            if ($null -eq $sizeKB) { $sizeKB = 1024 }  # 1 MB default
+            if ($null -eq $growthValue) { $growthValue = '65536KB' }  # 64 MB default
+
+            $sqlCmdVars[$sizeVarName] = "${sizeKB}KB"
+            $sqlCmdVars[$growthVarName] = $growthValue
+            Write-Verbose "  Auto-mapped: `$($sizeVarName) = ${sizeKB}KB"
+            Write-Verbose "  Auto-mapped: `$($growthVarName) = $growthValue"
           }
         }
       }
@@ -2070,84 +2190,8 @@ try {
     }
   }
 
-  # Extract FileGroup file size defaults from config
-  # This prevents large source database allocations from failing on dev systems
-  $script:FileGroupFileSizeDefaults = $null
-  if ($config) {
-    # Support both simplified config and nested config formats
-    $fgSizeDefaults = $null
-    if ($config.fileGroupFileSizeDefaults) {
-      # Simplified config format (root-level fileGroupFileSizeDefaults)
-      $fgSizeDefaults = $config.fileGroupFileSizeDefaults
-    }
-    elseif ($config.import) {
-      # Full config format (nested under import.productionMode or import.developerMode)
-      $modeConfigForSize = if ($ImportMode -eq 'Prod') { $config.import.productionMode } else { $config.import.developerMode }
-      if ($modeConfigForSize -and $modeConfigForSize.fileGroupFileSizeDefaults) {
-        $fgSizeDefaults = $modeConfigForSize.fileGroupFileSizeDefaults
-      }
-    }
-
-    if ($fgSizeDefaults) {
-      # Validate file group file size defaults to provide clear errors for invalid configuration values.
-      [long]$parsedSizeKB = 0
-      [long]$parsedFileGrowthKB = 0
-      [long]$minFileSizeKB = 64
-      [long]$maxFileSizeKB = 1073741824
-
-      if ($fgSizeDefaults.sizeKB -ne $null) {
-        if (-not [long]::TryParse($fgSizeDefaults.sizeKB.ToString(), [ref]$parsedSizeKB)) {
-          Write-Host "[ERROR] Invalid configuration value for fileGroupFileSizeDefaults.sizeKB: '$($fgSizeDefaults.sizeKB)'. Expected an integer value in kilobytes between $minFileSizeKB and $maxFileSizeKB." -ForegroundColor Red
-          throw "Invalid configuration value for fileGroupFileSizeDefaults.sizeKB."
-        }
-        elseif ($parsedSizeKB -lt $minFileSizeKB -or $parsedSizeKB -gt $maxFileSizeKB) {
-          Write-Host "[ERROR] Configuration value for fileGroupFileSizeDefaults.sizeKB ($parsedSizeKB) is out of range. Allowed range is $minFileSizeKB KB to $maxFileSizeKB KB." -ForegroundColor Red
-          throw "Out-of-range configuration value for fileGroupFileSizeDefaults.sizeKB."
-        }
-      }
-
-      if ($fgSizeDefaults.fileGrowthKB -ne $null) {
-        if (-not [long]::TryParse($fgSizeDefaults.fileGrowthKB.ToString(), [ref]$parsedFileGrowthKB)) {
-          Write-Host "[ERROR] Invalid configuration value for fileGroupFileSizeDefaults.fileGrowthKB: '$($fgSizeDefaults.fileGrowthKB)'. Expected an integer value in kilobytes between $minFileSizeKB and $maxFileSizeKB." -ForegroundColor Red
-          throw "Invalid configuration value for fileGroupFileSizeDefaults.fileGrowthKB."
-        }
-        elseif ($parsedFileGrowthKB -lt $minFileSizeKB -or $parsedFileGrowthKB -gt $maxFileSizeKB) {
-          Write-Host "[ERROR] Configuration value for fileGroupFileSizeDefaults.fileGrowthKB ($parsedFileGrowthKB) is out of range. Allowed range is $minFileSizeKB KB to $maxFileSizeKB KB." -ForegroundColor Red
-          throw "Out-of-range configuration value for fileGroupFileSizeDefaults.fileGrowthKB."
-        }
-      }
-
-      $script:FileGroupFileSizeDefaults = @{}
-      if ($fgSizeDefaults.sizeKB -ne $null) {
-        $script:FileGroupFileSizeDefaults['sizeKB'] = $parsedSizeKB
-      }
-      if ($fgSizeDefaults.fileGrowthKB -ne $null) {
-        $script:FileGroupFileSizeDefaults['fileGrowthKB'] = $parsedFileGrowthKB
-      }
-
-      if ($script:FileGroupFileSizeDefaults.Count -gt 0) {
-        Write-Output "[INFO] FileGroup file size defaults configured:"
-        if ($script:FileGroupFileSizeDefaults.ContainsKey('sizeKB')) {
-          Write-Output "  - SIZE = $($script:FileGroupFileSizeDefaults.sizeKB)KB"
-        }
-        if ($script:FileGroupFileSizeDefaults.ContainsKey('fileGrowthKB')) {
-          Write-Output "  - FILEGROWTH = $($script:FileGroupFileSizeDefaults.fileGrowthKB)KB"
-        }
-      }
-    }
-  }
-
-  # Apply safe defaults in Dev mode if no explicit configuration provided
-  # This prevents large allocations from failing on developer systems with limited disk space
-  if ($ImportMode -eq 'Dev' -and -not $script:FileGroupFileSizeDefaults) {
-    $script:FileGroupFileSizeDefaults = @{
-      sizeKB       = 1024    # 1 MB initial size (safe default for dev)
-      fileGrowthKB = 65536   # 64 MB growth (reasonable default)
-    }
-    Write-Output "[INFO] Using Dev mode safe defaults for FileGroup file sizes:"
-    Write-Output "  - SIZE = $($script:FileGroupFileSizeDefaults.sizeKB)KB (1 MB)"
-    Write-Output "  - FILEGROWTH = $($script:FileGroupFileSizeDefaults.fileGrowthKB)KB (64 MB)"
-  }
+  # NOTE: FileGroup file size defaults are now handled via SQLCMD variables
+  # $(FG_NAME_SIZE) and $(FG_NAME_GROWTH) are populated earlier from config or metadata
 
   # Report skipped folders if any
   if ($skippedFolders.Count -gt 0) {
@@ -2302,8 +2346,7 @@ try {
     $result = Invoke-WithRetry -MaxAttempts $effectiveMaxRetries -InitialDelaySeconds $effectiveRetryDelay -OperationName "Script: $($scriptFile.Name)" -ScriptBlock {
       Invoke-SqlScript -FilePath $scriptFile.FullName -ServerName $Server `
         -DatabaseName $Database -Cred $Credential -Timeout $effectiveCommandTimeout -Show:$ShowSQL `
-        -SqlCmdVariables $sqlCmdVars -Config $config -Connection $script:SharedConnection `
-        -FileGroupFileSizeDefaults $script:FileGroupFileSizeDefaults
+        -SqlCmdVariables $sqlCmdVars -Config $config -Connection $script:SharedConnection
     }
 
     if ($result -eq $true) {
@@ -2356,8 +2399,7 @@ try {
       $result = Invoke-WithRetry -MaxAttempts $effectiveMaxRetries -InitialDelaySeconds $effectiveRetryDelay -OperationName "Script: $($scriptFile.Name)" -ScriptBlock {
         Invoke-SqlScript -FilePath $scriptFile.FullName -ServerName $Server `
           -DatabaseName $Database -Cred $Credential -Timeout $effectiveCommandTimeout -Show:$ShowSQL `
-          -SqlCmdVariables $sqlCmdVars -Config $config -Connection $script:SharedConnection `
-          -FileGroupFileSizeDefaults $script:FileGroupFileSizeDefaults
+          -SqlCmdVariables $sqlCmdVars -Config $config -Connection $script:SharedConnection
       }
 
       if ($result -eq $true) {
@@ -2457,8 +2499,7 @@ try {
       $result = Invoke-WithRetry -MaxAttempts $effectiveMaxRetries -InitialDelaySeconds $effectiveRetryDelay -OperationName "Data Script: $($scriptFile.Name)" -ScriptBlock {
         Invoke-SqlScript -FilePath $scriptFile.FullName -ServerName $Server `
           -DatabaseName $Database -Cred $Credential -Timeout $effectiveCommandTimeout -Show:$ShowSQL `
-          -SqlCmdVariables $sqlCmdVars -Config $config -Connection $script:SharedConnection `
-          -FileGroupFileSizeDefaults $script:FileGroupFileSizeDefaults
+          -SqlCmdVariables $sqlCmdVars -Config $config -Connection $script:SharedConnection
       }
 
       if ($result -eq $true) {
