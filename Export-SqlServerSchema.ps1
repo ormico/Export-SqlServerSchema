@@ -7895,17 +7895,19 @@ function Export-DatabaseObjects {
             $fileName = Join-Path $OutputDir '20_SecurityPolicies' "$($policy.Schema).$($policy.Name).securitypolicy.sql"
             Ensure-DirectoryExists $fileName
 
-            # Create file with header
-            $policyScript = New-Object System.Text.StringBuilder
-            [void]$policyScript.AppendLine("-- Row-Level Security Policy: $($policy.Schema).$($policy.Name)")
-            [void]$policyScript.AppendLine("-- NOTE: Ensure predicate functions are created before applying this policy")
-            [void]$policyScript.AppendLine("")
+            # Create file with header (matching parallel export format)
+            $header = "-- Row-Level Security Policy: $($policy.Schema).$($policy.Name)`r`n-- NOTE: Ensure predicate functions are created before applying this policy`r`n`r`n"
+            [System.IO.File]::WriteAllText($fileName, $header, (New-Object System.Text.UTF8Encoding $false))
 
-            $policyDef = $Scripter.Script($policy)
-            [void]$policyScript.AppendLine($policyDef -join "`n")
-            [void]$policyScript.AppendLine("GO")
+            # Use EnumScript to match parallel export (produces consistent output across platforms)
+            $Scripter.Options.ToFileOnly = $true
+            $Scripter.Options.FileName = $fileName
+            $Scripter.Options.AppendToFile = $true
+            $Scripter.Options.ScriptBatchTerminator = $true
+            $Scripter.EnumScript(@($policy)) | Out-Null
 
-            $policyScript.ToString() | Out-File -FilePath $fileName -Encoding UTF8
+            # Add trailing newline to match parallel export format
+            [System.IO.File]::AppendAllText($fileName, "`r`n", (New-Object System.Text.UTF8Encoding $false))
             Write-ObjectProgress -ObjectName "$($policy.Schema).$($policy.Name)" -Current $currentItem -Total $securityPolicies.Count -Success
             $successCount++
           }
