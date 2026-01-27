@@ -452,6 +452,89 @@ function Read-ExportMetadata {
   }
 }
 
+function Get-FileGroupFileSizeValues {
+  <#
+    .SYNOPSIS
+        Gets SIZE and GROWTH values for a FileGroup file.
+    .DESCRIPTION
+        Resolves file size values with the following priority:
+        1. Config file overrides (fileGroupFileSizeDefaults)
+        2. Original values from export metadata
+        3. Default values (1024KB size, 65536KB growth)
+    .PARAMETER FileGroupName
+        Name of the FileGroup.
+    .PARAMETER FileName
+        Original file name within the FileGroup.
+    .PARAMETER FgSizeDefaults
+        Hashtable with sizeKB and/or fileGrowthKB from config.
+    .PARAMETER ExportMetadata
+        Hashtable from _export_metadata.json containing original values.
+    .OUTPUTS
+        Hashtable with SizeKB (int) and GrowthValue (string like "65536KB" or "10%").
+  #>
+  param(
+    [Parameter(Mandatory)]
+    [string]$FileGroupName,
+
+    [Parameter(Mandatory)]
+    [string]$FileName,
+
+    [Parameter()]
+    [hashtable]$FgSizeDefaults,
+
+    [Parameter()]
+    [hashtable]$ExportMetadata
+  )
+
+  $sizeKB = $null
+  $growthValue = $null
+
+  # Priority 1: Config file overrides
+  if ($FgSizeDefaults) {
+    if ($FgSizeDefaults.sizeKB) { $sizeKB = [int]$FgSizeDefaults.sizeKB }
+    if ($FgSizeDefaults.fileGrowthKB) { $growthValue = "$([int]$FgSizeDefaults.fileGrowthKB)KB" }
+  }
+
+  # Priority 2: Original values from export metadata
+  if (($null -eq $sizeKB -or $null -eq $growthValue) -and $ExportMetadata -and $ExportMetadata.fileGroups) {
+    $fgMeta = $ExportMetadata.fileGroups | Where-Object { $_.name -eq $FileGroupName } | Select-Object -First 1
+    if ($fgMeta -and $fgMeta.files) {
+      $fileMeta = $fgMeta.files | Where-Object { $_.name -eq $FileName } | Select-Object -First 1
+      if ($fileMeta) {
+        if ($null -eq $sizeKB -and $fileMeta.originalSizeKB) {
+          $sizeKB = [int]$fileMeta.originalSizeKB
+        }
+        if ($null -eq $growthValue) {
+          if ($fileMeta.originalGrowthType -eq 'KB' -and $fileMeta.originalGrowthKB) {
+            $growthValue = "$([int]$fileMeta.originalGrowthKB)KB"
+          }
+          elseif ($fileMeta.originalGrowthPct) {
+            $growthValue = "$([int]$fileMeta.originalGrowthPct)%"
+          }
+        }
+      }
+      else {
+        Write-Verbose "  FileGroup '$FileGroupName' file '$FileName' not found in export metadata, using defaults"
+      }
+    }
+    elseif ($fgMeta) {
+      Write-Verbose "  FileGroup '$FileGroupName' has no files in export metadata, using defaults"
+    }
+    else {
+      Write-Verbose "  FileGroup '$FileGroupName' not found in export metadata, using defaults"
+    }
+  }
+
+  # Priority 3: Default values
+  if ($null -eq $sizeKB) { $sizeKB = 1024 }        # 1 MB default
+  if ($null -eq $growthValue) { $growthValue = '65536KB' }  # 64 MB default
+
+  return @{
+    SizeKB      = $sizeKB
+    GrowthValue = $growthValue
+  }
+}
+
 function Get-DefaultDataPath {
   <#
     .SYNOPSIS
@@ -1918,6 +2001,55 @@ try {
     }
   }
 
+  # Validate file group file size defaults early to provide clear errors for invalid configuration values
+  if ($fgSizeDefaults) {
+    [int]$parsedSizeKB = 0
+    [int]$parsedFileGrowthKB = 0
+    [int]$minFileSizeKB = 64
+    [int]$maxFileSizeKB = 1073741824
+
+    if ($fgSizeDefaults.sizeKB -ne $null) {
+      if (-not [int]::TryParse($fgSizeDefaults.sizeKB.ToString(), [ref]$parsedSizeKB)) {
+        Write-Host "[ERROR] Invalid configuration value for fileGroupFileSizeDefaults.sizeKB: '$($fgSizeDefaults.sizeKB)'. Expected an integer value in kilobytes between $minFileSizeKB and $maxFileSizeKB." -ForegroundColor Red
+        throw "Invalid configuration value for fileGroupFileSizeDefaults.sizeKB."
+      }
+      elseif ($parsedSizeKB -lt $minFileSizeKB -or $parsedSizeKB -gt $maxFileSizeKB) {
+        Write-Host "[ERROR] Configuration value for fileGroupFileSizeDefaults.sizeKB ($parsedSizeKB) is out of range. Allowed range is $minFileSizeKB KB to $maxFileSizeKB KB." -ForegroundColor Red
+        throw "Out-of-range configuration value for fileGroupFileSizeDefaults.sizeKB."
+      }
+    }
+
+    if ($fgSizeDefaults.fileGrowthKB -ne $null) {
+      if (-not [long]::TryParse($fgSizeDefaults.fileGrowthKB.ToString(), [ref]$parsedFileGrowthKB)) {
+        Write-Host "[ERROR] Invalid configuration value for fileGroupFileSizeDefaults.fileGrowthKB: '$($fgSizeDefaults.fileGrowthKB)'. Expected an integer value in kilobytes between $minFileSizeKB and $maxFileSizeKB." -ForegroundColor Red
+        throw "Invalid configuration value for fileGroupFileSizeDefaults.fileGrowthKB."
+      }
+      elseif ($parsedFileGrowthKB -lt $minFileSizeKB -or $parsedFileGrowthKB -gt $maxFileSizeKB) {
+        Write-Host "[ERROR] Configuration value for fileGroupFileSizeDefaults.fileGrowthKB ($parsedFileGrowthKB) is out of range. Allowed range is $minFileSizeKB KB to $maxFileSizeKB KB." -ForegroundColor Red
+        throw "Out-of-range configuration value for fileGroupFileSizeDefaults.fileGrowthKB."
+      }
+    }
+
+    Write-Output "[INFO] FileGroup file size defaults configured:"
+    if ($fgSizeDefaults.sizeKB -ne $null) {
+      Write-Output "  - SIZE = $($fgSizeDefaults.sizeKB)KB"
+    }
+    if ($fgSizeDefaults.fileGrowthKB -ne $null) {
+      Write-Output "  - FILEGROWTH = $($fgSizeDefaults.fileGrowthKB)KB"
+    }
+  }
+  elseif ($ImportMode -eq 'Dev') {
+    # Apply safe defaults in Dev mode if no explicit configuration provided
+    # This prevents large allocations from failing on developer systems with limited disk space
+    $fgSizeDefaults = @{
+      sizeKB       = 1024    # 1 MB initial size (safe default for dev)
+      fileGrowthKB = 65536   # 64 MB growth (reasonable default)
+    }
+    Write-Output "[INFO] Using Dev mode safe defaults for FileGroup file sizes:"
+    Write-Output "  - SIZE = $($fgSizeDefaults.sizeKB)KB (1 MB)"
+    Write-Output "  - FILEGROWTH = $($fgSizeDefaults.fileGrowthKB)KB (64 MB)"
+  }
+
   if ($config) {
     # Support both simplified config (fileGroupPathMapping at root) and full config (nested)
     $modeConfig = $null
@@ -2001,45 +2133,17 @@ try {
             $sqlCmdVars[$fileVarName] = $fullPath
             Write-Verbose "SQLCMD Variable: `$($fileVarName) = $fullPath"
 
-            # Get SIZE and GROWTH values from config or metadata
-            $sizeKB = $null
-            $growthValue = $null
+            # Get SIZE and GROWTH values from config or metadata using helper function
+            $fileSizeValues = Get-FileGroupFileSizeValues `
+              -FileGroupName $fg `
+              -FileName $fileName `
+              -FgSizeDefaults $fgSizeDefaults `
+              -ExportMetadata $exportMetadata
 
-            # First try config overrides
-            if ($fgSizeDefaults) {
-              if ($fgSizeDefaults.sizeKB) { $sizeKB = [int]$fgSizeDefaults.sizeKB }
-              if ($fgSizeDefaults.fileGrowthKB) { $growthValue = "$([int]$fgSizeDefaults.fileGrowthKB)KB" }
-            }
-
-            # Fall back to metadata original values if no config override
-            if (($null -eq $sizeKB -or $null -eq $growthValue) -and $exportMetadata -and $exportMetadata.fileGroups) {
-              $fgMeta = $exportMetadata.fileGroups | Where-Object { $_.name -eq $fg } | Select-Object -First 1
-              if ($fgMeta -and $fgMeta.files) {
-                $fileMeta = $fgMeta.files | Where-Object { $_.name -eq $fileName } | Select-Object -First 1
-                if ($fileMeta) {
-                  if ($null -eq $sizeKB -and $fileMeta.originalSizeKB) {
-                    $sizeKB = [int]$fileMeta.originalSizeKB
-                  }
-                  if ($null -eq $growthValue) {
-                    if ($fileMeta.originalGrowthType -eq 'KB' -and $fileMeta.originalGrowthKB) {
-                      $growthValue = "$([int]$fileMeta.originalGrowthKB)KB"
-                    }
-                    elseif ($fileMeta.originalGrowthPct) {
-                      $growthValue = "$([int]$fileMeta.originalGrowthPct)%"
-                    }
-                  }
-                }
-              }
-            }
-
-            # Use defaults if still not set
-            if ($null -eq $sizeKB) { $sizeKB = 1024 }  # 1 MB default
-            if ($null -eq $growthValue) { $growthValue = '65536KB' }  # 64 MB default
-
-            $sqlCmdVars[$sizeVarName] = "${sizeKB}KB"
-            $sqlCmdVars[$growthVarName] = $growthValue
-            Write-Verbose "SQLCMD Variable: `$($sizeVarName) = ${sizeKB}KB"
-            Write-Verbose "SQLCMD Variable: `$($growthVarName) = $growthValue"
+            $sqlCmdVars[$sizeVarName] = "$($fileSizeValues.SizeKB)KB"
+            $sqlCmdVars[$growthVarName] = $fileSizeValues.GrowthValue
+            Write-Verbose "SQLCMD Variable: `$($sizeVarName) = $($fileSizeValues.SizeKB)KB"
+            Write-Verbose "SQLCMD Variable: `$($growthVarName) = $($fileSizeValues.GrowthValue)"
           }
         }
       }
@@ -2117,45 +2221,17 @@ try {
             $sqlCmdVars[$pathVarName] = $fullPath
             Write-Verbose "  Auto-mapped: `$($pathVarName) = $fullPath"
 
-            # Get SIZE and GROWTH values from config or metadata
-            $sizeKB = $null
-            $growthValue = $null
+            # Get SIZE and GROWTH values from config or metadata using helper function
+            $fileSizeValues = Get-FileGroupFileSizeValues `
+              -FileGroupName $currentFG `
+              -FileName $originalFileName `
+              -FgSizeDefaults $fgSizeDefaults `
+              -ExportMetadata $exportMetadata
 
-            # First try config overrides
-            if ($fgSizeDefaults) {
-              if ($fgSizeDefaults.sizeKB) { $sizeKB = [int]$fgSizeDefaults.sizeKB }
-              if ($fgSizeDefaults.fileGrowthKB) { $growthValue = "$([int]$fgSizeDefaults.fileGrowthKB)KB" }
-            }
-
-            # Fall back to metadata original values if no config override
-            if (($null -eq $sizeKB -or $null -eq $growthValue) -and $exportMetadata -and $exportMetadata.fileGroups) {
-              $fgMeta = $exportMetadata.fileGroups | Where-Object { $_.name -eq $currentFG } | Select-Object -First 1
-              if ($fgMeta -and $fgMeta.files) {
-                $fileMeta = $fgMeta.files | Where-Object { $_.name -eq $originalFileName } | Select-Object -First 1
-                if ($fileMeta) {
-                  if ($null -eq $sizeKB -and $fileMeta.originalSizeKB) {
-                    $sizeKB = [int]$fileMeta.originalSizeKB
-                  }
-                  if ($null -eq $growthValue) {
-                    if ($fileMeta.originalGrowthType -eq 'KB' -and $fileMeta.originalGrowthKB) {
-                      $growthValue = "$([int]$fileMeta.originalGrowthKB)KB"
-                    }
-                    elseif ($fileMeta.originalGrowthPct) {
-                      $growthValue = "$([int]$fileMeta.originalGrowthPct)%"
-                    }
-                  }
-                }
-              }
-            }
-
-            # Use defaults if still not set
-            if ($null -eq $sizeKB) { $sizeKB = 1024 }  # 1 MB default
-            if ($null -eq $growthValue) { $growthValue = '65536KB' }  # 64 MB default
-
-            $sqlCmdVars[$sizeVarName] = "${sizeKB}KB"
-            $sqlCmdVars[$growthVarName] = $growthValue
-            Write-Verbose "  Auto-mapped: `$($sizeVarName) = ${sizeKB}KB"
-            Write-Verbose "  Auto-mapped: `$($growthVarName) = $growthValue"
+            $sqlCmdVars[$sizeVarName] = "$($fileSizeValues.SizeKB)KB"
+            $sqlCmdVars[$growthVarName] = $fileSizeValues.GrowthValue
+            Write-Verbose "  Auto-mapped: `$($sizeVarName) = $($fileSizeValues.SizeKB)KB"
+            Write-Verbose "  Auto-mapped: `$($growthVarName) = $($fileSizeValues.GrowthValue)"
           }
         }
       }
@@ -2188,69 +2264,6 @@ try {
       $sqlCmdVars['__RemapFileGroupsToPrimary__'] = $true
       Write-Output "[INFO] FileGroup strategy: removeToPrimary - all FileGroup references will map to PRIMARY"
     }
-  }
-
-  # NOTE: FileGroup file size defaults are now handled via SQLCMD variables
-  # $(FG_NAME_SIZE) and $(FG_NAME_GROWTH) are populated earlier from config or metadata
-
-  if ($fgSizeDefaults) {
-    # Validate file group file size defaults to provide clear errors for invalid configuration values.
-    [int]$parsedSizeKB = 0
-    [int]$parsedFileGrowthKB = 0
-    [int]$minFileSizeKB = 64
-    [int]$maxFileSizeKB = 1073741824
-
-    if ($fgSizeDefaults.sizeKB -ne $null) {
-      if (-not [int]::TryParse($fgSizeDefaults.sizeKB.ToString(), [ref]$parsedSizeKB)) {
-        Write-Host "[ERROR] Invalid configuration value for fileGroupFileSizeDefaults.sizeKB: '$($fgSizeDefaults.sizeKB)'. Expected an integer value in kilobytes between $minFileSizeKB and $maxFileSizeKB." -ForegroundColor Red
-        throw "Invalid configuration value for fileGroupFileSizeDefaults.sizeKB."
-      }
-      elseif ($parsedSizeKB -lt $minFileSizeKB -or $parsedSizeKB -gt $maxFileSizeKB) {
-        Write-Host "[ERROR] Configuration value for fileGroupFileSizeDefaults.sizeKB ($parsedSizeKB) is out of range. Allowed range is $minFileSizeKB KB to $maxFileSizeKB KB." -ForegroundColor Red
-        throw "Out-of-range configuration value for fileGroupFileSizeDefaults.sizeKB."
-      }
-    }
-
-    if ($fgSizeDefaults.fileGrowthKB -ne $null) {
-      if (-not [long]::TryParse($fgSizeDefaults.fileGrowthKB.ToString(), [ref]$parsedFileGrowthKB)) {
-        Write-Host "[ERROR] Invalid configuration value for fileGroupFileSizeDefaults.fileGrowthKB: '$($fgSizeDefaults.fileGrowthKB)'. Expected an integer value in kilobytes between $minFileSizeKB and $maxFileSizeKB." -ForegroundColor Red
-        throw "Invalid configuration value for fileGroupFileSizeDefaults.fileGrowthKB."
-      }
-      elseif ($parsedFileGrowthKB -lt $minFileSizeKB -or $parsedFileGrowthKB -gt $maxFileSizeKB) {
-        Write-Host "[ERROR] Configuration value for fileGroupFileSizeDefaults.fileGrowthKB ($parsedFileGrowthKB) is out of range. Allowed range is $minFileSizeKB KB to $maxFileSizeKB KB." -ForegroundColor Red
-        throw "Out-of-range configuration value for fileGroupFileSizeDefaults.fileGrowthKB."
-      }
-    }
-
-    $script:FileGroupFileSizeDefaults = @{}
-    if ($fgSizeDefaults.sizeKB -ne $null) {
-      $script:FileGroupFileSizeDefaults['sizeKB'] = $parsedSizeKB
-    }
-    if ($fgSizeDefaults.fileGrowthKB -ne $null) {
-      $script:FileGroupFileSizeDefaults['fileGrowthKB'] = $parsedFileGrowthKB
-    }
-
-    if ($script:FileGroupFileSizeDefaults.Count -gt 0) {
-      Write-Output "[INFO] FileGroup file size defaults configured:"
-      if ($script:FileGroupFileSizeDefaults.ContainsKey('sizeKB')) {
-        Write-Output "  - SIZE = $($script:FileGroupFileSizeDefaults.sizeKB)KB"
-      }
-      if ($script:FileGroupFileSizeDefaults.ContainsKey('fileGrowthKB')) {
-        Write-Output "  - FILEGROWTH = $($script:FileGroupFileSizeDefaults.fileGrowthKB)KB"
-      }
-    }
-  }
-
-  # Apply safe defaults in Dev mode if no explicit configuration provided
-  # This prevents large allocations from failing on developer systems with limited disk space
-  if ($ImportMode -eq 'Dev' -and -not $script:FileGroupFileSizeDefaults) {
-    $script:FileGroupFileSizeDefaults = @{
-      sizeKB       = 1024    # 1 MB initial size (safe default for dev)
-      fileGrowthKB = 65536   # 64 MB growth (reasonable default)
-    }
-    Write-Output "[INFO] Using Dev mode safe defaults for FileGroup file sizes:"
-    Write-Output "  - SIZE = $($script:FileGroupFileSizeDefaults.sizeKB)KB (1 MB)"
-    Write-Output "  - FILEGROWTH = $($script:FileGroupFileSizeDefaults.fileGrowthKB)KB (64 MB)"
   }
 
   # Report skipped folders if any

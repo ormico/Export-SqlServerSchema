@@ -114,32 +114,161 @@ Designed for full-fidelity deployment. It:
 ./Import-SqlServerSchema.ps1 -Server "prod-sql" -Database "MyDb_Prod" -SourcePath "./DbScripts/..." -ImportMode Prod -ConfigFile "prod-config.yml"
 ```
 
-## 3. Configuration via YAML
+## 3. Configuration Reference
 
-Instead of long command-line arguments, you can use a YAML configuration file.
+This section provides complete documentation of all configuration options. Settings can be specified via:
+1. **Command-line parameters** (highest priority)
+2. **YAML configuration file** (middle priority)
+3. **Default values** (lowest priority)
 
-**config.yml**:
+### 3.1 Command-Line Parameters
+
+#### Export-SqlServerSchema.ps1
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `-Server` | string | *required* | SQL Server instance (e.g., 'localhost', 'server\\SQLEXPRESS') |
+| `-Database` | string | *required* | Database name to export |
+| `-OutputPath` | string | ./DbScripts | Output directory for exported scripts |
+| `-TargetSqlVersion` | string | Sql2022 | Target SQL version: Sql2012, Sql2014, Sql2016, Sql2017, Sql2019, Sql2022 |
+| `-IncludeData` | switch | false | Export table data as INSERT statements |
+| `-Credential` | PSCredential | Windows Auth | SQL authentication credentials |
+| `-ConfigFile` | string | none | Path to YAML configuration file |
+| `-Parallel` | switch | false | Enable parallel export using multiple threads |
+| `-MaxWorkers` | int | 5 | Max parallel workers (1-20) |
+| `-DeltaFrom` | string | none | Path to previous export for incremental/delta export |
+| `-IncludeObjectTypes` | string[] | all | Whitelist: only export specified types |
+| `-ExcludeObjectTypes` | string[] | none | Blacklist: exclude specified types |
+| `-ConnectionTimeout` | int | 30 | Connection timeout in seconds |
+| `-CommandTimeout` | int | 300 | Command timeout in seconds |
+| `-MaxRetries` | int | 3 | Max retry attempts for transient failures |
+| `-RetryDelaySeconds` | int | 2 | Initial retry delay (uses exponential backoff) |
+| `-CollectMetrics` | switch | false | Collect performance metrics for analysis |
+
+#### Import-SqlServerSchema.ps1
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `-Server` | string | *required* | Target SQL Server instance |
+| `-Database` | string | *required* | Target database name |
+| `-SourcePath` | string | *required* | Path to exported schema folder |
+| `-ImportMode` | string | Dev | Import mode: Dev or Prod |
+| `-Credential` | PSCredential | Windows Auth | SQL authentication credentials |
+| `-ConfigFile` | string | none | Path to YAML configuration file |
+| `-CreateDatabase` | switch | false | Create database if it doesn't exist |
+| `-IncludeData` | switch | false | Import data from 21_Data folder |
+| `-IncludeObjectTypes` | string[] | all | Whitelist: only import specified types |
+| `-Force` | switch | false | Skip existing schema check |
+| `-ContinueOnError` | switch | false | Continue on script errors |
+| `-ShowSQL` | switch | false | Display SQL scripts during execution |
+| `-ConnectionTimeout` | int | 30 | Connection timeout in seconds |
+| `-CommandTimeout` | int | 300 | Command timeout in seconds |
+| `-MaxRetries` | int | 3 | Max retry attempts for transient failures |
+| `-RetryDelaySeconds` | int | 2 | Initial retry delay (uses exponential backoff) |
+| `-CollectMetrics` | switch | false | Collect performance metrics for analysis |
+
+### 3.2 YAML Configuration File Options
+
+#### Root-Level Settings
+
+| Property | Type | Default | Description |
+|----------|------|---------|-------------|
+| `connectionTimeout` | int | 30 | Connection timeout in seconds (1-300) |
+| `commandTimeout` | int | 300 | Command timeout in seconds (1-3600) |
+| `maxRetries` | int | 3 | Max retry attempts for transient failures (1-10) |
+| `retryDelaySeconds` | int | 2 | Initial retry delay in seconds (1-60) |
+| `trustServerCertificate` | bool | false | Trust self-signed certificates (for dev/Docker) |
+
+#### Export Settings (`export:`)
+
+| Property | Type | Default | Description |
+|----------|------|---------|-------------|
+| `includeData` | bool | false | Export table data as INSERT statements |
+| `excludeObjectTypes` | string[] | [] | Object types to exclude from export |
+| `excludeObjects` | string[] | [] | Specific objects to exclude (supports wildcards: `staging.*`) |
+| `excludeSchemas` | string[] | [] | Schemas to exclude entirely |
+| `groupByObjectTypes` | object | {} | File grouping strategy per object type |
+| `parallel.enabled` | bool | false | Enable parallel export processing |
+| `parallel.maxWorkers` | int | 5 | Number of parallel workers (1-20) |
+| `parallel.progressInterval` | int | 50 | Report progress every N items |
+| `deltaFrom` | string | none | Path to previous export for delta/incremental export |
+
+**groupByObjectTypes values**: `single` (one file per object), `schema` (group by schema), `all` (all in one file)
+
+#### Import Settings (`import:`)
+
+| Property | Type | Default | Description |
+|----------|------|---------|-------------|
+| `defaultMode` | string | Dev | Default import mode: Dev or Prod |
+| `dependencyRetries.enabled` | bool | true | Enable dependency retry logic |
+| `dependencyRetries.maxRetries` | int | 10 | Max retry attempts for dependencies (1-10) |
+| `dependencyRetries.objectTypes` | string[] | [Functions, StoredProcedures, Views] | Types to retry together |
+
+#### Import Mode Settings (`import.developerMode:` / `import.productionMode:`)
+
+| Property | Type | Default | Description |
+|----------|------|---------|-------------|
+| `fileGroupStrategy` | string | autoRemap | FileGroup handling: `autoRemap` or `removeToPrimary` |
+| `includeFileGroups` | bool | false | Import FileGroup definitions (legacy) |
+| `includeConfigurations` | bool | false | Import database scoped configurations |
+| `includeExternalData` | bool | false | Import external data sources |
+| `enableSecurityPolicies` | bool | false | Enable Row-Level Security (STATE ON) |
+| `includeData` | bool | false | Import table data |
+| `excludeObjectTypes` | string[] | [] | Object types to exclude in this mode |
+| `fileGroupPathMapping` | object | {} | Map FileGroup names to physical paths |
+| `fileGroupFileSizeDefaults.sizeKB` | int | 1024 | Initial file size in KB |
+| `fileGroupFileSizeDefaults.fileGrowthKB` | int | 65536 | File growth increment in KB |
+| `externalConnectionStrings` | object | {} | Map external data source names to URLs |
+
+### 3.3 Example Configuration Files
+
+**Minimal Dev Configuration:**
 ```yaml
 importMode: Dev
-includeData: true
-
-export:
-  groupByObjectTypes:
-    Tables: schema
-    Views: schema
-    StoredProcedures: schema
-  parallel:
-    enabled: true
-    maxWorkers: 5
-
-# Retry settings for flaky connections
-maxRetries: 5
-retryDelaySeconds: 10
 ```
 
-Usage:
-```powershell
-./Export-SqlServerSchema.ps1 -ConfigFile "config.yml"
+**Full Export with Parallel Processing:**
+```yaml
+export:
+  parallel:
+    enabled: true
+    maxWorkers: 8
+  groupByObjectTypes:
+    Tables: single
+    Views: single
+    StoredProcedures: single
+  excludeSchemas:
+    - staging
+    - temp
+```
+
+**Production Import Configuration:**
+```yaml
+import:
+  defaultMode: Prod
+  productionMode:
+    fileGroupStrategy: autoRemap
+    includeFileGroups: true
+    includeConfigurations: true
+    enableSecurityPolicies: true
+    fileGroupPathMapping:
+      FG_DATA: "E:\\SQLData\\"
+      FG_INDEX: "E:\\SQLIndexes\\"
+    fileGroupFileSizeDefaults:
+      sizeKB: 1048576      # 1 GB
+      fileGrowthKB: 262144  # 256 MB
+
+connectionTimeout: 60
+commandTimeout: 600
+maxRetries: 5
+```
+
+**Delta Export Configuration:**
+```yaml
+export:
+  deltaFrom: "./exports/localhost_MyDb_20260125_100000"
+  parallel:
+    enabled: true
 ```
 
 ## 4. Advanced Features

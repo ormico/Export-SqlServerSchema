@@ -2816,13 +2816,14 @@ function Export-NonParallelizableObjects {
         [void]$credScript.AppendLine("")
 
         foreach ($cred in $dbScopedCreds) {
+          $safeIdentity = $cred.Identity -replace "'", "''"
           [void]$credScript.AppendLine("-- Credential: $($cred.Name)")
           [void]$credScript.AppendLine("-- Identity: $($cred.Identity)")
           [void]$credScript.AppendLine("-- MANUAL ACTION REQUIRED: Create this credential with appropriate secret")
           [void]$credScript.AppendLine("-- Example:")
           [void]$credScript.AppendLine("/*")
           [void]$credScript.AppendLine("CREATE DATABASE SCOPED CREDENTIAL [$($cred.Name)]")
-          [void]$credScript.AppendLine("WITH IDENTITY = '$($cred.Identity)',")
+          [void]$credScript.AppendLine("WITH IDENTITY = '$safeIdentity',")
           [void]$credScript.AppendLine("SECRET = '<PROVIDE_SECRET_HERE>';")
           [void]$credScript.AppendLine("GO")
           [void]$credScript.AppendLine("*/")
@@ -3263,20 +3264,19 @@ function Save-ExportMetadata {
     '06_PartitionSchemes'      = 'PartitionScheme'
     '07_Types'                 = 'UserDefinedType'
     '08_XmlSchemaCollections'  = 'XmlSchemaCollection'
-    '09_Tables_Create'         = 'Table'
+    '09_Tables_PrimaryKey'     = 'Table'
     '10_Tables_ForeignKeys'    = 'ForeignKey'
     '11_Indexes'               = 'Index'
     '12_Defaults'              = 'Default'
     '13_Rules'                 = 'Rule'
-    '14_Functions'             = 'UserDefinedFunction'
-    '15_StoredProcedures'      = 'StoredProcedure'
-    '16_Views'                 = 'View'
-    '17_Triggers'              = 'Trigger'
-    '18_Synonyms'              = 'Synonym'
-    '19_FullTextCatalogs'      = 'FullTextCatalog'
-    '20_ExternalData'          = 'ExternalData'
-    '21_SecurityPolicies'      = 'SecurityPolicy'
-    '22_Data'                  = 'Data'
+    '14_Programmability'       = 'Programmability'
+    '15_Synonyms'              = 'Synonym'
+    '16_FullTextSearch'        = 'FullTextCatalog'
+    '17_ExternalData'          = 'ExternalData'
+    '18_SearchPropertyLists'   = 'SearchPropertyList'
+    '19_PlanGuides'            = 'PlanGuide'
+    '20_SecurityPolicies'      = 'SecurityPolicy'
+    '21_Data'                  = 'Data'
   }
 
   # Scan each numbered folder
@@ -3957,12 +3957,18 @@ function Get-DeltaFilteredCollection {
   #>
   param(
     [Parameter(Mandatory)]
+    [AllowEmptyCollection()]
     [array]$Collection,
     [Parameter(Mandatory)]
     [string]$ObjectType,
     [string]$SchemaProperty = 'Schema',
     [string]$NameProperty = 'Name'
   )
+
+  # Handle empty collection gracefully
+  if ($null -eq $Collection -or $Collection.Count -eq 0) {
+    return @()
+  }
 
   # If delta export is not enabled, return full collection
   if (-not $script:DeltaExportEnabled) {
@@ -5375,7 +5381,10 @@ function Export-DatabaseObjects {
     # Apply delta filtering (Sequences have modify_date)
     $sequences = @(Get-DeltaFilteredCollection -Collection $allSequences -ObjectType 'Sequence')
     $skippedForDelta = $allSequences.Count - $sequences.Count
-    if ($sequences.Count -gt 0 -or $skippedForDelta -gt 0) {
+    if ($skippedForDelta -gt 0) {
+      Write-Output "  [DELTA] Skipped $skippedForDelta unchanged sequence(s)"
+    }
+    if ($sequences.Count -gt 0) {
       $groupingMode = Get-ObjectGroupingMode -ObjectType 'Sequences'
       $deltaInfo = if ($skippedForDelta -gt 0) { ", $skippedForDelta unchanged" } else { '' }
       Write-Output "  Found $($sequences.Count) sequence(s) to export$deltaInfo (grouping: $groupingMode)"
@@ -5835,10 +5844,12 @@ function Export-DatabaseObjects {
     # Note: We keep $tables unfiltered for FK/Index iteration (those are always-export types)
     $tablesToExport = @(Get-DeltaFilteredCollection -Collection $tables -ObjectType 'Table')
     $skippedForDelta = $tables.Count - $tablesToExport.Count
-    if ($tablesToExport.Count -gt 0 -or $skippedForDelta -gt 0) {
+    if ($skippedForDelta -gt 0) {
+      Write-Output "  [DELTA] Skipped $skippedForDelta unchanged table(s)"
+    }
+    if ($tablesToExport.Count -gt 0) {
       $groupingMode = Get-ObjectGroupingMode -ObjectType 'Tables'
-      $deltaInfo = if ($skippedForDelta -gt 0) { ", $skippedForDelta unchanged" } else { '' }
-      Write-Output "  Found $($tablesToExport.Count) table(s) to export$deltaInfo (grouping: $groupingMode)"
+      Write-Output "  Found $($tablesToExport.Count) table(s) to export (grouping: $groupingMode)"
       $successCount = 0
       $failCount = 0
       $opts = New-ScriptingOptions -TargetVersion $TargetVersion -Overrides @{
@@ -6454,10 +6465,12 @@ function Export-DatabaseObjects {
     # Apply delta filtering (UserDefinedFunctions have modify_date)
     $functions = @(Get-DeltaFilteredCollection -Collection $allFunctions -ObjectType 'UserDefinedFunction')
     $skippedForDelta = $allFunctions.Count - $functions.Count
-    if ($functions.Count -gt 0 -or $skippedForDelta -gt 0) {
+    if ($skippedForDelta -gt 0) {
+      Write-Output "  [DELTA] Skipped $skippedForDelta unchanged function(s)"
+    }
+    if ($functions.Count -gt 0) {
       $groupingMode = Get-ObjectGroupingMode -ObjectType 'Functions'
-      $deltaInfo = if ($skippedForDelta -gt 0) { ", $skippedForDelta unchanged" } else { '' }
-      Write-Output "  Found $($functions.Count) function(s) to export$deltaInfo (grouping: $groupingMode)"
+      Write-Output "  Found $($functions.Count) function(s) to export (grouping: $groupingMode)"
       $successCount = 0
       $failCount = 0
       $opts = New-ScriptingOptions -TargetVersion $TargetVersion -Overrides @{
@@ -6900,10 +6913,12 @@ function Export-DatabaseObjects {
     else {
       $tableTriggers = $allTableTriggers
     }
-    if ($tableTriggers.Count -gt 0 -or $skippedForDelta -gt 0) {
+    if ($skippedForDelta -gt 0) {
+      Write-Output "  [DELTA] Skipped $skippedForDelta unchanged table trigger(s)"
+    }
+    if ($tableTriggers.Count -gt 0) {
       $groupingMode = Get-ObjectGroupingMode -ObjectType 'TableTriggers'
-      $deltaInfo = if ($skippedForDelta -gt 0) { ", $skippedForDelta unchanged" } else { '' }
-      Write-Output "  Found $($tableTriggers.Count) table trigger(s) to export$deltaInfo (grouping: $groupingMode)"
+      Write-Output "  Found $($tableTriggers.Count) table trigger(s) to export (grouping: $groupingMode)"
       $successCount = 0
       $failCount = 0
       $opts = New-ScriptingOptions -TargetVersion $TargetVersion -Overrides @{
@@ -7006,10 +7021,12 @@ function Export-DatabaseObjects {
     # Apply delta filtering (Views have modify_date)
     $views = @(Get-DeltaFilteredCollection -Collection $allViews -ObjectType 'View')
     $skippedForDelta = $allViews.Count - $views.Count
-    if ($views.Count -gt 0 -or $skippedForDelta -gt 0) {
+    if ($skippedForDelta -gt 0) {
+      Write-Output "  [DELTA] Skipped $skippedForDelta unchanged view(s)"
+    }
+    if ($views.Count -gt 0) {
       $groupingMode = Get-ObjectGroupingMode -ObjectType 'Views'
-      $deltaInfo = if ($skippedForDelta -gt 0) { ", $skippedForDelta unchanged" } else { '' }
-      Write-Output "  Found $($views.Count) view(s) to export$deltaInfo (grouping: $groupingMode)"
+      Write-Output "  Found $($views.Count) view(s) to export (grouping: $groupingMode)"
       $successCount = 0
       $failCount = 0
       $opts = New-ScriptingOptions -TargetVersion $TargetVersion
@@ -7105,10 +7122,12 @@ function Export-DatabaseObjects {
     # Apply delta filtering (Synonyms have modify_date)
     $synonyms = @(Get-DeltaFilteredCollection -Collection $allSynonyms -ObjectType 'Synonym')
     $skippedForDelta = $allSynonyms.Count - $synonyms.Count
-    if ($synonyms.Count -gt 0 -or $skippedForDelta -gt 0) {
+    if ($skippedForDelta -gt 0) {
+      Write-Output "  [DELTA] Skipped $skippedForDelta unchanged synonym(s)"
+    }
+    if ($synonyms.Count -gt 0) {
       $groupingMode = Get-ObjectGroupingMode -ObjectType 'Synonyms'
-      $deltaInfo = if ($skippedForDelta -gt 0) { ", $skippedForDelta unchanged" } else { '' }
-      Write-Output "  Found $($synonyms.Count) synonym(s) to export$deltaInfo (grouping: $groupingMode)"
+      Write-Output "  Found $($synonyms.Count) synonym(s) to export (grouping: $groupingMode)"
       $successCount = 0
       $failCount = 0
       $currentItem = 0

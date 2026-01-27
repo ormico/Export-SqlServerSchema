@@ -595,73 +595,41 @@ ALL TO ([PRIMARY]);  -- ← Changed from TO ([FG_ARCHIVE], [FG_CURRENT], [PRIMAR
 
 ## YAML Configuration Files
 
-Two formats supported:
+Use a YAML configuration file instead of long command-line arguments:
 
-**Simplified Format** (recommended for most scenarios):
 ```yaml
 importMode: Dev  # or Prod
 includeData: true
 
-# Export settings (optional):
 export:
   parallel:
-    enabled: true                    # Enable parallel export
-    maxWorkers: 4                    # Worker thread count (1-20, default: 5)
-  groupByObjectTypes:                # Grouping mode per object type
-    Tables: single                   # single, schema, or all
-    Views: single
-    StoredProcedures: single
+    enabled: true
+    maxWorkers: 4
+  groupByObjectTypes:
+    Tables: single
+    Views: schema
+  # deltaFrom: "./exports/previous_export_folder"
 
-# Reliability settings (optional, defaults shown):
-connectionTimeout: 30      # Connection timeout in seconds
-commandTimeout: 300        # Command execution timeout in seconds
-maxRetries: 3              # Retry attempts for transient failures
-retryDelaySeconds: 2       # Initial delay, uses exponential backoff
-
-# Dependency retry settings (optional, defaults shown):
 import:
   dependencyRetries:
-    enabled: true          # Enable automatic dependency retry
-    maxRetries: 10         # Max retry attempts for dependency resolution (1-10)
-    objectTypes:           # Object types to retry together
-      - Functions
-      - StoredProcedures
-      - Views
+    enabled: true
+    maxRetries: 10
 
-# Only needed for Prod mode with FileGroups:
-fileGroupPathMapping:
-  FG_CURRENT: "E:\\SQLData\\Current"
-  FG_ARCHIVE: "F:\\SQLArchive\\Archive"
+connectionTimeout: 30
+commandTimeout: 300
+maxRetries: 3
 ```
 
-**Full Format** (advanced scenarios):
-```yaml
-import:
-  defaultMode: Dev
-  productionMode:
-    includeFileGroups: true
-    includeDatabaseScopedConfigurations: true
-    includeExternalDataSources: true
-    enableSecurityPolicies: true
-    fileGroupPathMapping:
-      FG_CURRENT: "E:\\SQLData\\Current"
-      FG_ARCHIVE: "F:\\SQLArchive\\Archive"
-  developerMode:
-    # FileGroup handling strategy (Dev mode only):
-    fileGroupStrategy: autoRemap     # 'autoRemap' (default) or 'removeToPrimary'
-    includeDatabaseScopedConfigurations: false
+Usage:
+```powershell
+./Export-SqlServerSchema.ps1 -Server localhost -Database MyDb -ConfigFile config.yml
 ```
 
 **FileGroup Strategies** (Developer Mode):
 - **`autoRemap`** (default): Imports FileGroups with auto-detected paths
-  - Detects SQL Server's default data directory automatically
-  - No configuration required
-  - Preserves FileGroup structure for accurate testing
-- **`removeToPrimary`**: Skips FileGroups entirely
-  - All tables/indexes/partitions moved to PRIMARY
-  - Simplest setup, but loses FileGroup structure
+- **`removeToPrimary`**: Skips FileGroups, remaps everything to PRIMARY
 
-See `tests/test-dev-config.yml` and `tests/test-prod-config.yml` for examples.
+For complete configuration reference including all options, see the [User Guide](docs/USER_GUIDE.md#3-configuration-reference).
 
 ## Foreign Key Constraint Management
 

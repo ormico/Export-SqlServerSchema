@@ -27,12 +27,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Work queue system distributes export tasks across isolated workers
 - **2x faster exports** on large databases with data (84s vs 173s parallel vs sequential)
 
-**Delta Export Feature (Incremental Export)**
-- New `-DeltaFrom` parameter for incremental exports (changed/new objects only)
-- Change detection via `sys.objects.modify_date` timestamps
-- Auto-generates `_export_metadata.json` for delta support
-- Requires `groupBy: single` mode; see [docs/DELTA_EXPORT_DESIGN.md](docs/DELTA_EXPORT_DESIGN.md)
-
 **FileGroup File Size Defaults**
 - New `fileGroupFileSizeDefaults` config to override imported file sizes
 - Dev mode uses safe defaults (1 MB initial, 64 MB growth) to prevent disk space issues

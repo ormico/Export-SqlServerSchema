@@ -168,6 +168,10 @@
             }
           },
           "additionalProperties": false
+        },
+        "deltaFrom": {
+          "type": "string",
+          "description": "Path to previous export for delta/incremental export. Only changed objects will be re-exported."
         }
       },
       "additionalProperties": false
