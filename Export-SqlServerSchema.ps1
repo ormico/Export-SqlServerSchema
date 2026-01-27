@@ -1726,7 +1726,7 @@ function Build-WorkItems-TableTriggers {
       foreach ($trigger in $triggerList) {
         $fileName = "$(Get-SafeFileName $($trigger.TableSchema)).$(Get-SafeFileName $($trigger.TableName)).$(Get-SafeFileName $($trigger.TriggerName)).sql"
         $workItems += New-ExportWorkItem `
-          -ObjectType 'TableTriggers' `
+          -ObjectType 'TableTrigger' `
           -GroupingMode 'single' `
           -Objects @(@{ Schema = $trigger.TableSchema; Name = $trigger.TableName; TriggerName = $trigger.TriggerName }) `
           -OutputPath (Join-Path $baseDir '04_Triggers' $fileName) `
@@ -1743,7 +1743,7 @@ function Build-WorkItems-TableTriggers {
         $tableNames = $group.Group | Select-Object -Property TableSchema, TableName -Unique
         $objects = @($tableNames | ForEach-Object { @{ Schema = $_.TableSchema; Name = $_.TableName } })
         $workItems += New-ExportWorkItem `
-          -ObjectType 'TableTriggers' `
+          -ObjectType 'TableTrigger' `
           -GroupingMode 'schema' `
           -Objects $objects `
           -OutputPath (Join-Path $baseDir $fileName) `
@@ -1756,7 +1756,7 @@ function Build-WorkItems-TableTriggers {
       $tableNames = $triggerList | Select-Object -Property TableSchema, TableName -Unique
       $objects = @($tableNames | ForEach-Object { @{ Schema = $_.TableSchema; Name = $_.TableName } })
       $workItems += New-ExportWorkItem `
-        -ObjectType 'TableTriggers' `
+        -ObjectType 'TableTrigger' `
         -GroupingMode 'all' `
         -Objects $objects `
         -OutputPath (Join-Path $baseDir '001_TableTriggers.sql') `
@@ -5351,10 +5351,6 @@ function Export-DatabaseObjects {
     FailCount       = 0
     CategoryTimings = [ordered]@{}
   }
-
-  # OPTIMIZATION: Cache tables collection to avoid duplicate database calls
-  # This collection is used by multiple sections: Tables, ForeignKeys, Indexes, TableTriggers, Data
-  $tables = @($Database.Tables | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) })
 
   Write-Output ''
   Write-Output '═══════════════════════════════════════════════'

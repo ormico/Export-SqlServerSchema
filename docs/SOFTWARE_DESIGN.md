@@ -715,7 +715,7 @@ Each parallel worker maintains complete connection isolation:
 
 Both sequential and parallel modes share the same work item generation and processing logic:
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                        UNIFIED EXPORT ARCHITECTURE                           │
 ├─────────────────────────────────────────────────────────────────────────────┤
