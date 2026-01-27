@@ -1,3 +1,5 @@
+#Requires -Version 7.0
+
 <#
 .SYNOPSIS
     Tests SMO PrefetchObjects behavior specifically for Synonyms.
