@@ -2090,13 +2090,13 @@ try {
 
     if ($fgSizeDefaults) {
       # Validate file group file size defaults to provide clear errors for invalid configuration values.
-      [long]$parsedSizeKB = 0
-      [long]$parsedFileGrowthKB = 0
-      [long]$minFileSizeKB = 64
-      [long]$maxFileSizeKB = 1073741824
+      [int]$parsedSizeKB = 0
+      [int]$parsedFileGrowthKB = 0
+      [int]$minFileSizeKB = 64
+      [int]$maxFileSizeKB = 1073741824
 
       if ($fgSizeDefaults.sizeKB -ne $null) {
-        if (-not [long]::TryParse($fgSizeDefaults.sizeKB.ToString(), [ref]$parsedSizeKB)) {
+        if (-not [int]::TryParse($fgSizeDefaults.sizeKB.ToString(), [ref]$parsedSizeKB)) {
           Write-Host "[ERROR] Invalid configuration value for fileGroupFileSizeDefaults.sizeKB: '$($fgSizeDefaults.sizeKB)'. Expected an integer value in kilobytes between $minFileSizeKB and $maxFileSizeKB." -ForegroundColor Red
           throw "Invalid configuration value for fileGroupFileSizeDefaults.sizeKB."
         }
