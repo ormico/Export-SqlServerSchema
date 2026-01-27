@@ -2,6 +2,12 @@
 
 PowerShell toolkit for exporting and importing SQL Server database schemas with proper dependency ordering, two-mode deployment system, comprehensive object type support, and enterprise-grade reliability features.
 
+# Origin
+
+I originally started this project in 2012 as a script named `DB2SCRIPT.PS1` along with a number of other database management tools and scripts. Although there are a number of database tools and products that do similar things, this one keeps working for me. 
+
+This latest iteration makes a number of major improvements and brings the code up to Powershell 7 and adds a testing framework to help ensure everything is working as expected.
+
 ## Installation
 
 ### Option 1: Download Latest Release
