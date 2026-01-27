@@ -31,8 +31,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - New `fileGroupFileSizeDefaults` config to override imported file sizes
 - Dev mode uses safe defaults (1 MB initial, 64 MB growth) to prevent disk space issues
 
+### Changed
+
+**Hybrid Architecture Refactoring** (Sequential/Parallel Code Unification)
+- Sequential export mode now uses `Build-ParallelWorkQueue` and `Process-ExportWorkItem` (same as parallel mode)
+- Eliminated ~2,500 lines of duplicate sequential export code (28% reduction: 8,852 → 6,385 lines)
+- Both modes produce identical output, verified with comprehensive integration tests
+- Bug fixes now automatically apply to both sequential and parallel modes
+
 ### Fixed
 
+- **Sequential TableData Processing**: Fixed "No SMO objects found for work item" errors by filtering `TableData` items from sequential work item processing (handled separately by `Export-TableData`)
+- **Export Failure Exit Code**: Export script now exits with code 1 when any schema or data export fails, enabling CI/CD pipelines to detect failures
 - **Parallel Index Export**: Fixed duplicate CREATE TABLE statements in index files; now exports individual indexes correctly
 - **Path Traversal Prevention**: All Build-WorkItems-* functions sanitize schema/object names with `Get-SafeFileName`
 - **Parallel Worker Race Condition**: Directory creation now handles concurrent worker conflicts gracefully
