@@ -295,37 +295,37 @@ $script:ParallelWorkerScriptBlock = {
         else {
           # Standard object lookup
           switch ($workItem.ObjectType) {
-            'Table'                    { $smoObj = $db.Tables[$objId.Name, $objId.Schema] }
-            'View'                     { $smoObj = $db.Views[$objId.Name, $objId.Schema] }
-            'StoredProcedure'          { $smoObj = $db.StoredProcedures[$objId.Name, $objId.Schema] }
-            'UserDefinedFunction'      { $smoObj = $db.UserDefinedFunctions[$objId.Name, $objId.Schema] }
-            'Schema'                   { $smoObj = $db.Schemas[$objId.Name] }
-            'Sequence'                 { $smoObj = $db.Sequences[$objId.Name, $objId.Schema] }
-            'Synonym'                  { $smoObj = $db.Synonyms[$objId.Name, $objId.Schema] }
-            'UserDefinedType'          { $smoObj = $db.UserDefinedTypes[$objId.Name, $objId.Schema] }
-            'UserDefinedDataType'      { $smoObj = $db.UserDefinedDataTypes[$objId.Name, $objId.Schema] }
-            'UserDefinedTableType'     { $smoObj = $db.UserDefinedTableTypes[$objId.Name, $objId.Schema] }
-            'XmlSchemaCollection'      { $smoObj = $db.XmlSchemaCollections[$objId.Name, $objId.Schema] }
-            'PartitionFunction'        { $smoObj = $db.PartitionFunctions[$objId.Name] }
-            'PartitionScheme'          { $smoObj = $db.PartitionSchemes[$objId.Name] }
-            'Default'                  { $smoObj = $db.Defaults[$objId.Name, $objId.Schema] }
-            'Rule'                     { $smoObj = $db.Rules[$objId.Name, $objId.Schema] }
-            'DatabaseTrigger'          { $smoObj = $db.Triggers[$objId.Name] }
-            'FullTextCatalog'          { $smoObj = $db.FullTextCatalogs[$objId.Name] }
-            'FullTextStopList'         { $smoObj = $db.FullTextStopLists[$objId.Name] }
-            'SearchPropertyList'       { $smoObj = $db.SearchPropertyLists[$objId.Name] }
-            'SecurityPolicy'           { $smoObj = $db.SecurityPolicies[$objId.Name, $objId.Schema] }
-            'AsymmetricKey'            { $smoObj = $db.AsymmetricKeys[$objId.Name] }
-            'Certificate'              { $smoObj = $db.Certificates[$objId.Name] }
-            'SymmetricKey'             { $smoObj = $db.SymmetricKeys[$objId.Name] }
-            'ApplicationRole'          { $smoObj = $db.ApplicationRoles[$objId.Name] }
-            'DatabaseRole'             { $smoObj = $db.Roles[$objId.Name] }
-            'User'                     { $smoObj = $db.Users[$objId.Name] }
-            'PlanGuide'                { $smoObj = $db.PlanGuides[$objId.Name] }
-            'ExternalDataSource'       { $smoObj = $db.ExternalDataSources[$objId.Name] }
-            'ExternalFileFormat'       { $smoObj = $db.ExternalFileFormats[$objId.Name] }
-            'UserDefinedAggregate'     { $smoObj = $db.UserDefinedAggregates[$objId.Name, $objId.Schema] }
-            'SqlAssembly'              { $smoObj = $db.Assemblies[$objId.Name] }
+            'Table' { $smoObj = $db.Tables[$objId.Name, $objId.Schema] }
+            'View' { $smoObj = $db.Views[$objId.Name, $objId.Schema] }
+            'StoredProcedure' { $smoObj = $db.StoredProcedures[$objId.Name, $objId.Schema] }
+            'UserDefinedFunction' { $smoObj = $db.UserDefinedFunctions[$objId.Name, $objId.Schema] }
+            'Schema' { $smoObj = $db.Schemas[$objId.Name] }
+            'Sequence' { $smoObj = $db.Sequences[$objId.Name, $objId.Schema] }
+            'Synonym' { $smoObj = $db.Synonyms[$objId.Name, $objId.Schema] }
+            'UserDefinedType' { $smoObj = $db.UserDefinedTypes[$objId.Name, $objId.Schema] }
+            'UserDefinedDataType' { $smoObj = $db.UserDefinedDataTypes[$objId.Name, $objId.Schema] }
+            'UserDefinedTableType' { $smoObj = $db.UserDefinedTableTypes[$objId.Name, $objId.Schema] }
+            'XmlSchemaCollection' { $smoObj = $db.XmlSchemaCollections[$objId.Name, $objId.Schema] }
+            'PartitionFunction' { $smoObj = $db.PartitionFunctions[$objId.Name] }
+            'PartitionScheme' { $smoObj = $db.PartitionSchemes[$objId.Name] }
+            'Default' { $smoObj = $db.Defaults[$objId.Name, $objId.Schema] }
+            'Rule' { $smoObj = $db.Rules[$objId.Name, $objId.Schema] }
+            'DatabaseTrigger' { $smoObj = $db.Triggers[$objId.Name] }
+            'FullTextCatalog' { $smoObj = $db.FullTextCatalogs[$objId.Name] }
+            'FullTextStopList' { $smoObj = $db.FullTextStopLists[$objId.Name] }
+            'SearchPropertyList' { $smoObj = $db.SearchPropertyLists[$objId.Name] }
+            'SecurityPolicy' { $smoObj = $db.SecurityPolicies[$objId.Name, $objId.Schema] }
+            'AsymmetricKey' { $smoObj = $db.AsymmetricKeys[$objId.Name] }
+            'Certificate' { $smoObj = $db.Certificates[$objId.Name] }
+            'SymmetricKey' { $smoObj = $db.SymmetricKeys[$objId.Name] }
+            'ApplicationRole' { $smoObj = $db.ApplicationRoles[$objId.Name] }
+            'DatabaseRole' { $smoObj = $db.Roles[$objId.Name] }
+            'User' { $smoObj = $db.Users[$objId.Name] }
+            'PlanGuide' { $smoObj = $db.PlanGuides[$objId.Name] }
+            'ExternalDataSource' { $smoObj = $db.ExternalDataSources[$objId.Name] }
+            'ExternalFileFormat' { $smoObj = $db.ExternalFileFormats[$objId.Name] }
+            'UserDefinedAggregate' { $smoObj = $db.UserDefinedAggregates[$objId.Name, $objId.Schema] }
+            'SqlAssembly' { $smoObj = $db.Assemblies[$objId.Name] }
           }
         }
 
@@ -365,7 +365,8 @@ $script:ParallelWorkerScriptBlock = {
         # Build the full name from the Objects array
         $policyName = if ($workItem.Objects.Count -gt 0) {
           "$($workItem.Objects[0].Schema).$($workItem.Objects[0].Name)"
-        } else { "Unknown" }
+        }
+        else { "Unknown" }
         $header = "-- Row-Level Security Policy: $policyName`r`n-- NOTE: Ensure predicate functions are created before applying this policy`r`n`r`n"
         [System.IO.File]::WriteAllText($workItem.OutputPath, $header, (New-Object System.Text.UTF8Encoding $false))
         $scripter.Options.AppendToFile = $true
@@ -1043,12 +1044,12 @@ function Build-WorkItems-ForeignKeys {
 
   # For FKs, we script tables with FK-only options
   $scriptOpts = @{
-    DriPrimaryKey                    = $false
-    DriForeignKeys                   = $true
-    DriUniqueKeys                    = $false
-    DriChecks                        = $false
-    DriDefaults                      = $false
-    Indexes                          = $false
+    DriPrimaryKey                      = $false
+    DriForeignKeys                     = $true
+    DriUniqueKeys                      = $false
+    DriChecks                          = $false
+    DriDefaults                        = $false
+    Indexes                            = $false
     SchemaQualifyForeignKeysReferences = $true
   }
 
@@ -1121,8 +1122,8 @@ function Build-WorkItems-Indexes {
       foreach ($idx in $table.Indexes) {
         # Skip system indexes, primary key indexes, and unique key indexes (same as sequential)
         if (-not $idx.IsSystemObject -and
-            -not ($idx.IndexKeyType -eq [Microsoft.SqlServer.Management.Smo.IndexKeyType]::DriPrimaryKey) -and
-            -not ($idx.IndexKeyType -eq [Microsoft.SqlServer.Management.Smo.IndexKeyType]::DriUniqueKey)) {
+          -not ($idx.IndexKeyType -eq [Microsoft.SqlServer.Management.Smo.IndexKeyType]::DriPrimaryKey) -and
+          -not ($idx.IndexKeyType -eq [Microsoft.SqlServer.Management.Smo.IndexKeyType]::DriUniqueKey)) {
           $indexList += @{
             TableSchema = $table.Schema
             TableName   = $table.Name
@@ -1658,9 +1659,9 @@ function Build-WorkItems-TableTriggers {
         # Apply delta filtering (Triggers have modify_date)
         if (Test-ShouldExportInDelta -ObjectType 'Trigger' -Schema $table.Schema -Name $trigger.Name) {
           $triggerList += @{
-            TableSchema  = $table.Schema
-            TableName    = $table.Name
-            TriggerName  = $trigger.Name
+            TableSchema = $table.Schema
+            TableName   = $table.Name
+            TriggerName = $trigger.Name
           }
         }
       }
@@ -2442,9 +2443,9 @@ function Build-WorkItems-Data {
   if (Test-ObjectTypeExcluded -ObjectType 'Data') { return @() }
 
   $tables = @($Database.Tables | Where-Object {
-    -not $_.IsSystemObject -and
-    -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name)
-  })
+      -not $_.IsSystemObject -and
+      -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name)
+    })
 
   if ($tables.Count -eq 0) { return @() }
 
@@ -2472,9 +2473,9 @@ HAVING SUM(p.rows) > 0
 
   # Filter to only tables with data
   $tables = @($tables | Where-Object {
-    $key = "$($_.Schema).$($_.Name)"
-    $tablesWithData.ContainsKey($key)
-  })
+      $key = "$($_.Schema).$($_.Name)"
+      $tablesWithData.ContainsKey($key)
+    })
 
   if ($tables.Count -eq 0) { return @() }
 
@@ -2641,9 +2642,9 @@ function Export-NonParallelizableObjects {
   )
 
   $results = @{
-    FileGroups = 0
+    FileGroups                   = 0
     DatabaseScopedConfigurations = 0
-    DatabaseScopedCredentials = 0
+    DatabaseScopedCredentials    = 0
   }
 
   # FileGroups (folder 00_FileGroups) - uses StringBuilder for SQLCMD variable support
@@ -2662,10 +2663,10 @@ function Export-NonParallelizableObjects {
         foreach ($fg in $fileGroups) {
           # Build metadata entry for this FileGroup
           $fgMetadata = [ordered]@{
-            name     = $fg.Name
-            type     = $fg.FileGroupType.ToString()
+            name       = $fg.Name
+            type       = $fg.FileGroupType.ToString()
             isReadOnly = $fg.IsReadOnly
-            files    = [System.Collections.ArrayList]::new()
+            files      = [System.Collections.ArrayList]::new()
           }
 
           [void]$fgScript.AppendLine("-- FileGroup: $($fg.Name)")
@@ -2700,17 +2701,17 @@ function Export-NonParallelizableObjects {
 
             # Store original values in metadata
             $fileMetadata = [ordered]@{
-              name              = $file.Name
-              originalPath      = $file.FileName
-              originalFileName  = $fileName
-              originalSizeKB    = $file.Size
-              originalGrowthKB  = if ($file.GrowthType -eq 'KB') { $file.Growth } else { $null }
-              originalGrowthPct = if ($file.GrowthType -ne 'KB') { $file.Growth } else { $null }
+              name               = $file.Name
+              originalPath       = $file.FileName
+              originalFileName   = $fileName
+              originalSizeKB     = $file.Size
+              originalGrowthKB   = if ($file.GrowthType -eq 'KB') { $file.Growth } else { $null }
+              originalGrowthPct  = if ($file.GrowthType -ne 'KB') { $file.Growth } else { $null }
               originalGrowthType = $file.GrowthType.ToString()
-              originalMaxSizeKB = $file.MaxSize
-              pathVariable      = $pathVar
-              sizeVariable      = $sizeVar
-              growthVariable    = $growthVar
+              originalMaxSizeKB  = $file.MaxSize
+              pathVariable       = $pathVar
+              sizeVariable       = $sizeVar
+              growthVariable     = $growthVar
             }
             [void]$fgMetadata.files.Add($fileMetadata)
 
@@ -2915,11 +2916,11 @@ function Invoke-ParallelExport {
   if ($workQueue.Count -eq 0) {
     Write-Host "[WARNING] No work items generated for parallel processing" -ForegroundColor Yellow
     return @{
-      TotalItems = 0
+      TotalItems   = 0
       SuccessCount = 0
-      ErrorCount = 0
-      Errors = @()
-      Duration = (Get-Date) - $exportStartTime
+      ErrorCount   = 0
+      Errors       = @()
+      Duration     = (Get-Date) - $exportStartTime
     }
   }
   #endregion
@@ -2938,7 +2939,8 @@ function Invoke-ParallelExport {
     $item = $workQueue[$i]
     if ($item -is [hashtable]) {
       $concurrentQueue.Enqueue($item)
-    } else {
+    }
+    else {
       Write-Host "[WARNING] Skipping work item $i of unexpected type: $($item.GetType().FullName)" -ForegroundColor Yellow
     }
   }
@@ -3008,11 +3010,11 @@ function Invoke-ParallelExport {
   }
 
   $summary = @{
-    TotalItems = $workQueue.Count
+    TotalItems   = $workQueue.Count
     SuccessCount = $successCount
-    ErrorCount = $errorItems.Count
-    Errors = @($errorItems | ForEach-Object { $_ })
-    Duration = $duration
+    ErrorCount   = $errorItems.Count
+    Errors       = @($errorItems | ForEach-Object { $_ })
+    Duration     = $duration
   }
 
   Write-Host "`n[SUCCESS] Parallel export completed in $($duration.TotalSeconds.ToString('F2')) seconds" -ForegroundColor Green
@@ -3048,16 +3050,16 @@ $script:Config = @{}  # Will be set after config file is loaded
 # Export metadata tracking for delta export feature
 # This tracks all objects exported for use in incremental/delta exports
 $script:ExportMetadata = @{
-  Version                = '1.0'
-  ExportStartTimeUtc     = $null
-  ExportStartTimeServer  = $null
-  ServerName             = $null
-  DatabaseName           = $null
-  GroupBy                = 'single'
-  IncludeData            = $false
-  ObjectTypes            = @{}
-  Objects                = [System.Collections.ArrayList]::new()
-  FileGroups             = [System.Collections.ArrayList]::new()  # Original file size/growth values
+  Version               = '1.0'
+  ExportStartTimeUtc    = $null
+  ExportStartTimeServer = $null
+  ServerName            = $null
+  DatabaseName          = $null
+  GroupBy               = 'single'
+  IncludeData           = $false
+  ObjectTypes           = @{}
+  Objects               = [System.Collections.ArrayList]::new()
+  FileGroups            = [System.Collections.ArrayList]::new()  # Original file size/growth values
 }
 
 # Delta export state (set when -DeltaFrom is used)
@@ -3252,29 +3254,29 @@ function Save-ExportMetadata {
 
   # Map folder names to object types
   $folderTypeMap = @{
-    '00_FileGroups'             = 'FileGroup'
-    '01_Security'               = 'Security'
-    '02_DatabaseConfiguration'  = 'DatabaseConfiguration'
-    '03_Schemas'                = 'Schema'
-    '04_Sequences'              = 'Sequence'
-    '05_PartitionFunctions'     = 'PartitionFunction'
-    '06_PartitionSchemes'       = 'PartitionScheme'
-    '07_Types'                  = 'UserDefinedType'
-    '08_XmlSchemaCollections'   = 'XmlSchemaCollection'
-    '09_Tables_Create'          = 'Table'
-    '10_Tables_ForeignKeys'     = 'ForeignKey'
-    '11_Indexes'                = 'Index'
-    '12_Defaults'               = 'Default'
-    '13_Rules'                  = 'Rule'
-    '14_Functions'              = 'UserDefinedFunction'
-    '15_StoredProcedures'       = 'StoredProcedure'
-    '16_Views'                  = 'View'
-    '17_Triggers'               = 'Trigger'
-    '18_Synonyms'               = 'Synonym'
-    '19_FullTextCatalogs'       = 'FullTextCatalog'
-    '20_ExternalData'           = 'ExternalData'
-    '21_SecurityPolicies'       = 'SecurityPolicy'
-    '22_Data'                   = 'Data'
+    '00_FileGroups'            = 'FileGroup'
+    '01_Security'              = 'Security'
+    '02_DatabaseConfiguration' = 'DatabaseConfiguration'
+    '03_Schemas'               = 'Schema'
+    '04_Sequences'             = 'Sequence'
+    '05_PartitionFunctions'    = 'PartitionFunction'
+    '06_PartitionSchemes'      = 'PartitionScheme'
+    '07_Types'                 = 'UserDefinedType'
+    '08_XmlSchemaCollections'  = 'XmlSchemaCollection'
+    '09_Tables_Create'         = 'Table'
+    '10_Tables_ForeignKeys'    = 'ForeignKey'
+    '11_Indexes'               = 'Index'
+    '12_Defaults'              = 'Default'
+    '13_Rules'                 = 'Rule'
+    '14_Functions'             = 'UserDefinedFunction'
+    '15_StoredProcedures'      = 'StoredProcedure'
+    '16_Views'                 = 'View'
+    '17_Triggers'              = 'Trigger'
+    '18_Synonyms'              = 'Synonym'
+    '19_FullTextCatalogs'      = 'FullTextCatalog'
+    '20_ExternalData'          = 'ExternalData'
+    '21_SecurityPolicies'      = 'SecurityPolicy'
+    '22_Data'                  = 'Data'
   }
 
   # Scan each numbered folder
@@ -3314,15 +3316,15 @@ function Save-ExportMetadata {
 
   # Build the final metadata object
   $metadata = [ordered]@{
-    version                = $script:ExportMetadata.Version
-    exportStartTimeUtc     = $script:ExportMetadata.ExportStartTimeUtc
-    exportStartTimeServer  = $script:ExportMetadata.ExportStartTimeServer
-    serverName             = $script:ExportMetadata.ServerName
-    databaseName           = $script:ExportMetadata.DatabaseName
-    groupBy                = $script:ExportMetadata.GroupBy
-    includeData            = $script:ExportMetadata.IncludeData
-    objectCount            = $objects.Count
-    objects                = $objects
+    version               = $script:ExportMetadata.Version
+    exportStartTimeUtc    = $script:ExportMetadata.ExportStartTimeUtc
+    exportStartTimeServer = $script:ExportMetadata.ExportStartTimeServer
+    serverName            = $script:ExportMetadata.ServerName
+    databaseName          = $script:ExportMetadata.DatabaseName
+    groupBy               = $script:ExportMetadata.GroupBy
+    includeData           = $script:ExportMetadata.IncludeData
+    objectCount           = $objects.Count
+    objects               = $objects
   }
 
   # Add fileGroups metadata if any were exported (contains original size/growth values)
@@ -3503,9 +3505,9 @@ ORDER BY o.type_desc, s.name, o.name
         # Map SQL Server type codes to our type names
         $typeCode = $row['TypeCode'].ToString().Trim()
         $typeName = switch ($typeCode) {
-          'U'  { 'Table' }
-          'V'  { 'View' }
-          'P'  { 'StoredProcedure' }
+          'U' { 'Table' }
+          'V' { 'View' }
+          'P' { 'StoredProcedure' }
           'FN' { 'UserDefinedFunction' }
           'IF' { 'UserDefinedFunction' }
           'TF' { 'UserDefinedFunction' }
@@ -3625,11 +3627,11 @@ function Compare-ExportObjects {
     if (-not $CurrentObjects.ContainsKey($key)) {
       $previous = $previousObjects[$key]
       [void]$result.Deleted.Add(@{
-        Type     = $previous['type']
-        Schema   = $previous['schema']
-        Name     = $previous['name']
-        FilePath = $previous['filePath']
-      })
+          Type     = $previous['type']
+          Schema   = $previous['schema']
+          Name     = $previous['name']
+          FilePath = $previous['filePath']
+        })
     }
   }
 
@@ -3728,11 +3730,11 @@ function Get-DeltaChangeDetection {
       $type = $obj['type']
       if ($alwaysExportTypes -contains $type) {
         [void]$alwaysExportObjects.Add(@{
-          Type     = $type
-          Schema   = $obj['schema']
-          Name     = $obj['name']
-          FilePath = $obj['filePath']
-        })
+            Type     = $type
+            Schema   = $obj['schema']
+            Name     = $obj['name']
+            FilePath = $obj['filePath']
+          })
       }
     }
   }
@@ -3740,16 +3742,16 @@ function Get-DeltaChangeDetection {
   # Build final result
   $result = @{
     # Objects to export (modified + new + always-export types)
-    ToExport      = [System.Collections.ArrayList]::new()
+    ToExport          = [System.Collections.ArrayList]::new()
     # Objects to copy from previous export (unchanged, except always-export types)
-    ToCopy        = [System.Collections.ArrayList]::new()
+    ToCopy            = [System.Collections.ArrayList]::new()
     # Deleted objects (informational)
-    Deleted       = $comparison.Deleted
+    Deleted           = $comparison.Deleted
     # Statistics
-    ModifiedCount = $comparison.Modified.Count
-    NewCount      = $comparison.New.Count
-    DeletedCount  = $comparison.Deleted.Count
-    UnchangedCount = $comparison.Unchanged.Count
+    ModifiedCount     = $comparison.Modified.Count
+    NewCount          = $comparison.New.Count
+    DeletedCount      = $comparison.Deleted.Count
+    UnchangedCount    = $comparison.Unchanged.Count
     AlwaysExportCount = $alwaysExportObjects.Count
   }
 
@@ -3974,14 +3976,16 @@ function Get-DeltaFilteredCollection {
   foreach ($obj in $Collection) {
     $schema = if ($SchemaProperty -and $obj.PSObject.Properties[$SchemaProperty]) {
       $obj.$SchemaProperty
-    } else {
+    }
+    else {
       ''
     }
     $name = $obj.$NameProperty
 
     if (Test-ShouldExportInDelta -ObjectType $ObjectType -Schema $schema -Name $name) {
       $filtered += $obj
-    } else {
+    }
+    else {
       $skippedCount++
     }
   }
@@ -5001,37 +5005,37 @@ function Get-SmoObjectByIdentifier {
 
   try {
     switch ($ObjectType) {
-      'Table'                    { return $Database.Tables[$Name, $Schema] }
-      'View'                     { return $Database.Views[$Name, $Schema] }
-      'StoredProcedure'          { return $Database.StoredProcedures[$Name, $Schema] }
-      'UserDefinedFunction'      { return $Database.UserDefinedFunctions[$Name, $Schema] }
-      'Schema'                   { return $Database.Schemas[$Name] }
-      'Sequence'                 { return $Database.Sequences[$Name, $Schema] }
-      'Synonym'                  { return $Database.Synonyms[$Name, $Schema] }
-      'UserDefinedType'          { return $Database.UserDefinedTypes[$Name, $Schema] }
-      'UserDefinedDataType'      { return $Database.UserDefinedDataTypes[$Name, $Schema] }
-      'UserDefinedTableType'     { return $Database.UserDefinedTableTypes[$Name, $Schema] }
-      'XmlSchemaCollection'      { return $Database.XmlSchemaCollections[$Name, $Schema] }
-      'PartitionFunction'        { return $Database.PartitionFunctions[$Name] }
-      'PartitionScheme'          { return $Database.PartitionSchemes[$Name] }
-      'Default'                  { return $Database.Defaults[$Name, $Schema] }
-      'Rule'                     { return $Database.Rules[$Name, $Schema] }
-      'DatabaseTrigger'          { return $Database.Triggers[$Name] }
-      'FullTextCatalog'          { return $Database.FullTextCatalogs[$Name] }
-      'FullTextStopList'         { return $Database.FullTextStopLists[$Name] }
-      'SearchPropertyList'       { return $Database.SearchPropertyLists[$Name] }
-      'SecurityPolicy'           { return $Database.SecurityPolicies[$Name, $Schema] }
-      'AsymmetricKey'            { return $Database.AsymmetricKeys[$Name] }
-      'Certificate'              { return $Database.Certificates[$Name] }
-      'SymmetricKey'             { return $Database.SymmetricKeys[$Name] }
-      'ApplicationRole'          { return $Database.ApplicationRoles[$Name] }
-      'DatabaseRole'             { return $Database.Roles[$Name] }
-      'User'                     { return $Database.Users[$Name] }
-      'PlanGuide'                { return $Database.PlanGuides[$Name] }
-      'ExternalDataSource'       { return $Database.ExternalDataSources[$Name] }
-      'ExternalFileFormat'       { return $Database.ExternalFileFormats[$Name] }
-      'UserDefinedAggregate'     { return $Database.UserDefinedAggregates[$Name, $Schema] }
-      'SqlAssembly'              { return $Database.Assemblies[$Name] }
+      'Table' { return $Database.Tables[$Name, $Schema] }
+      'View' { return $Database.Views[$Name, $Schema] }
+      'StoredProcedure' { return $Database.StoredProcedures[$Name, $Schema] }
+      'UserDefinedFunction' { return $Database.UserDefinedFunctions[$Name, $Schema] }
+      'Schema' { return $Database.Schemas[$Name] }
+      'Sequence' { return $Database.Sequences[$Name, $Schema] }
+      'Synonym' { return $Database.Synonyms[$Name, $Schema] }
+      'UserDefinedType' { return $Database.UserDefinedTypes[$Name, $Schema] }
+      'UserDefinedDataType' { return $Database.UserDefinedDataTypes[$Name, $Schema] }
+      'UserDefinedTableType' { return $Database.UserDefinedTableTypes[$Name, $Schema] }
+      'XmlSchemaCollection' { return $Database.XmlSchemaCollections[$Name, $Schema] }
+      'PartitionFunction' { return $Database.PartitionFunctions[$Name] }
+      'PartitionScheme' { return $Database.PartitionSchemes[$Name] }
+      'Default' { return $Database.Defaults[$Name, $Schema] }
+      'Rule' { return $Database.Rules[$Name, $Schema] }
+      'DatabaseTrigger' { return $Database.Triggers[$Name] }
+      'FullTextCatalog' { return $Database.FullTextCatalogs[$Name] }
+      'FullTextStopList' { return $Database.FullTextStopLists[$Name] }
+      'SearchPropertyList' { return $Database.SearchPropertyLists[$Name] }
+      'SecurityPolicy' { return $Database.SecurityPolicies[$Name, $Schema] }
+      'AsymmetricKey' { return $Database.AsymmetricKeys[$Name] }
+      'Certificate' { return $Database.Certificates[$Name] }
+      'SymmetricKey' { return $Database.SymmetricKeys[$Name] }
+      'ApplicationRole' { return $Database.ApplicationRoles[$Name] }
+      'DatabaseRole' { return $Database.Roles[$Name] }
+      'User' { return $Database.Users[$Name] }
+      'PlanGuide' { return $Database.PlanGuides[$Name] }
+      'ExternalDataSource' { return $Database.ExternalDataSources[$Name] }
+      'ExternalFileFormat' { return $Database.ExternalFileFormats[$Name] }
+      'UserDefinedAggregate' { return $Database.UserDefinedAggregates[$Name, $Schema] }
+      'SqlAssembly' { return $Database.Assemblies[$Name] }
       'DatabaseAuditSpecification' { return $Database.DatabaseAuditSpecifications[$Name] }
       default {
         Write-Warning "Unknown object type in Get-SmoObjectByIdentifier: $ObjectType"
@@ -6887,11 +6891,13 @@ function Export-DatabaseObjects {
       foreach ($trigger in $allTableTriggers) {
         if (Test-ShouldExportInDelta -ObjectType 'Trigger' -Schema $trigger.Parent.Schema -Name $trigger.Name) {
           $tableTriggers += $trigger
-        } else {
+        }
+        else {
           $skippedForDelta++
         }
       }
-    } else {
+    }
+    else {
       $tableTriggers = $allTableTriggers
     }
     if ($tableTriggers.Count -gt 0 -or $skippedForDelta -gt 0) {
@@ -8494,13 +8500,13 @@ For more details, see: https://go.microsoft.com/fwlink/?linkid=2226722
 
   # Store connection info for parallel workers
   $script:ConnectionInfo = @{
-    ServerName              = $Server
-    DatabaseName            = $Database
-    UseIntegratedSecurity   = ($null -eq $Credential)
-    Username                = if ($Credential) { $Credential.UserName } else { $null }
-    SecurePassword          = if ($Credential) { $Credential.Password } else { $null }
-    TrustServerCertificate  = if ($config -and $config.ContainsKey('trustServerCertificate')) { $config.trustServerCertificate } else { $false }
-    ConnectTimeout          = $effectiveConnectionTimeout
+    ServerName             = $Server
+    DatabaseName           = $Database
+    UseIntegratedSecurity  = ($null -eq $Credential)
+    Username               = if ($Credential) { $Credential.UserName } else { $null }
+    SecurePassword         = if ($Credential) { $Credential.Password } else { $null }
+    TrustServerCertificate = if ($config -and $config.ContainsKey('trustServerCertificate')) { $config.trustServerCertificate } else { $false }
+    ConnectTimeout         = $effectiveConnectionTimeout
   }
 
   Write-Output "[SUCCESS] Connected to $Server\$Database"
