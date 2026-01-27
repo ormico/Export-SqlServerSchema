@@ -89,6 +89,14 @@
         "/^pwsh -NoProfile -File run-perf-test\\.ps1 2>&1 \\| Tee-Object -FilePath perf-test-output\\.log$/": {
             "approve": true,
             "matchCommandLine": true
+        },
+        "/^pwsh -File \\.\\\\run-perf-test\\.ps1$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^pwsh -File \\.\\\\test-exclude-feature\\.ps1$/": {
+            "approve": true,
+            "matchCommandLine": true
         }
     }
 }

@@ -2231,6 +2231,9 @@ function Build-WorkItems-Security {
   #>
   param($Database, $OutputDir)
 
+  # Check for umbrella 'Security' exclusion (excludes all security objects)
+  if (Test-ObjectTypeExcluded -ObjectType 'Security') { return @() }
+
   # Security objects are grouped together: Certificates, Keys, Roles, Users
   $workItems = @()
   $baseDir = Join-Path $OutputDir '01_Security'
