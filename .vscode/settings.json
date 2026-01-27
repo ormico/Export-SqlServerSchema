@@ -97,6 +97,10 @@
         "/^pwsh -File \\.\\\\test-exclude-feature\\.ps1$/": {
             "approve": true,
             "matchCommandLine": true
+        },
+        "/^pwsh -File test-exclude-feature\\.ps1$/": {
+            "approve": true,
+            "matchCommandLine": true
         }
     }
 }

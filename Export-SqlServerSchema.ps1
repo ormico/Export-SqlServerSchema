@@ -113,8 +113,8 @@ param(
     'ForeignKeys', 'Indexes', 'Defaults', 'Rules', 'Assemblies', 'DatabaseTriggers', 'TableTriggers',
     'Functions', 'UserDefinedAggregates', 'StoredProcedures', 'Views', 'Synonyms', 'FullTextCatalogs',
     'FullTextStopLists', 'SearchPropertyLists', 'ExternalDataSources', 'ExternalFileFormats',
-    'DatabaseRoles', 'DatabaseUsers', 'Certificates', 'AsymmetricKeys', 'SymmetricKeys',
-    'SecurityPolicies', 'PlanGuides', 'Data')]
+    'DatabaseRoles', 'DatabaseUsers', 'WindowsUsers', 'SqlUsers', 'ExternalUsers', 'CertificateMappedUsers',
+    'Certificates', 'AsymmetricKeys', 'SymmetricKeys', 'SecurityPolicies', 'PlanGuides', 'Data')]
   [string[]]$IncludeObjectTypes,
 
   [Parameter(HelpMessage = 'Exclude specific object types (overrides config file). Example: Data,SecurityPolicies')]
@@ -123,8 +123,8 @@ param(
     'ForeignKeys', 'Indexes', 'Defaults', 'Rules', 'Assemblies', 'DatabaseTriggers', 'TableTriggers',
     'Functions', 'UserDefinedAggregates', 'StoredProcedures', 'Views', 'Synonyms', 'FullTextCatalogs',
     'FullTextStopLists', 'SearchPropertyLists', 'ExternalDataSources', 'ExternalFileFormats',
-    'DatabaseRoles', 'DatabaseUsers', 'Certificates', 'AsymmetricKeys', 'SymmetricKeys',
-    'SecurityPolicies', 'PlanGuides', 'Data')]
+    'DatabaseRoles', 'DatabaseUsers', 'WindowsUsers', 'SqlUsers', 'ExternalUsers', 'CertificateMappedUsers',
+    'Certificates', 'AsymmetricKeys', 'SymmetricKeys', 'SecurityPolicies', 'PlanGuides', 'Data')]
   [string[]]$ExcludeObjectTypes,
 
   [Parameter(HelpMessage = 'Enable parallel export processing for improved performance')]
@@ -2357,10 +2357,17 @@ function Build-WorkItems-Security {
   }
 
   # Database Users - respect grouping mode (default: single to match sequential export)
+  # Supports granular exclusions: WindowsUsers, SqlUsers, ExternalUsers, CertificateMappedUsers
   if (-not (Test-ObjectTypeExcluded -ObjectType 'DatabaseUsers')) {
     $groupBy = Get-ObjectGroupingMode -ObjectType 'DatabaseUsers'
     try {
-      $users = @($Database.Users | Where-Object { -not $_.IsSystemObject -and $_.Name -ne 'dbo' -and -not (Test-ObjectExcluded -Schema $null -Name $_.Name) })
+      # Filter users: exclude system, dbo, explicitly excluded, and those excluded by LoginType
+      $users = @($Database.Users | Where-Object {
+        -not $_.IsSystemObject -and
+        $_.Name -ne 'dbo' -and
+        -not (Test-ObjectExcluded -Schema $null -Name $_.Name) -and
+        -not (Test-UserExcludedByLoginType -User $_)
+      })
       if ($users.Count -gt 0) {
         switch ($groupBy) {
           'single' {
@@ -2739,11 +2746,20 @@ function Export-NonParallelizableObjects {
           [void]$fgScript.AppendLine("-- FileGroup: $($fg.Name)")
           [void]$fgScript.AppendLine("-- Type: $($fg.FileGroupType)")
 
-          if ($fg.FileGroupType -eq 'RowsFileGroup') {
-            [void]$fgScript.AppendLine("ALTER DATABASE CURRENT ADD FILEGROUP [$($fg.Name)];")
-          }
-          else {
-            [void]$fgScript.AppendLine("ALTER DATABASE CURRENT ADD FILEGROUP [$($fg.Name)] CONTAINS FILESTREAM;")
+          switch ($fg.FileGroupType) {
+            'RowsFileGroup' {
+              [void]$fgScript.AppendLine("ALTER DATABASE CURRENT ADD FILEGROUP [$($fg.Name)];")
+            }
+            'MemoryOptimizedDataFileGroup' {
+              [void]$fgScript.AppendLine("ALTER DATABASE CURRENT ADD FILEGROUP [$($fg.Name)] CONTAINS MEMORY_OPTIMIZED_DATA;")
+            }
+            'FileStreamDataFileGroup' {
+              [void]$fgScript.AppendLine("ALTER DATABASE CURRENT ADD FILEGROUP [$($fg.Name)] CONTAINS FILESTREAM;")
+            }
+            default {
+              Write-Host "  [WARNING] Unknown FileGroup type '$($fg.FileGroupType)' for '$($fg.Name)', using standard syntax" -ForegroundColor Yellow
+              [void]$fgScript.AppendLine("ALTER DATABASE CURRENT ADD FILEGROUP [$($fg.Name)];")
+            }
           }
           [void]$fgScript.AppendLine("GO")
 
@@ -4967,6 +4983,63 @@ function Test-ObjectTypeExcluded {
   }
 
   return $false
+}
+
+function Test-UserExcludedByLoginType {
+  <#
+    .SYNOPSIS
+        Checks if a database user should be excluded based on their LoginType.
+    .DESCRIPTION
+        Enables granular control over user exports based on authentication type.
+        Useful for excluding Windows users when exporting to Linux/different domain.
+    .PARAMETER User
+        The SMO User object to check.
+    .OUTPUTS
+        $true if the user should be excluded, $false otherwise.
+  #>
+  param(
+    [Parameter(Mandatory = $true)]
+    $User
+  )
+
+  # Get exclusion settings from config
+  $excludeTypes = @()
+  if ($script:Config -and $script:Config.export -and $script:Config.export.excludeObjectTypes) {
+    $excludeTypes = $script:Config.export.excludeObjectTypes
+  }
+
+  # Map LoginType to exclusion object types
+  # SMO LoginType enum: WindowsUser(0), WindowsGroup(1), SqlLogin(2), Certificate(3), 
+  #                     AsymmetricKey(4), ExternalUser(5), ExternalGroup(6)
+  $loginType = $User.LoginType.ToString()
+
+  switch ($loginType) {
+    'WindowsUser' {
+      return $excludeTypes -contains 'WindowsUsers'
+    }
+    'WindowsGroup' {
+      return $excludeTypes -contains 'WindowsUsers'
+    }
+    'SqlLogin' {
+      return $excludeTypes -contains 'SqlUsers'
+    }
+    'Certificate' {
+      return $excludeTypes -contains 'CertificateMappedUsers'
+    }
+    'AsymmetricKey' {
+      return $excludeTypes -contains 'CertificateMappedUsers'
+    }
+    'ExternalUser' {
+      return $excludeTypes -contains 'ExternalUsers'
+    }
+    'ExternalGroup' {
+      return $excludeTypes -contains 'ExternalUsers'
+    }
+    default {
+      # Unknown type - don't exclude
+      return $false
+    }
+  }
 }
 
 function Test-SchemaExcluded {

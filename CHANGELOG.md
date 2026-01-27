@@ -5,6 +5,48 @@ All notable changes to Export-SqlServerSchema will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+**Granular User Type Exclusions (Bug Fix #2)**
+- New exclusion options for database users by authentication type:
+  - `WindowsUsers` - Exclude Windows domain users and groups
+  - `SqlUsers` - Exclude SQL Server login-based users
+  - `ExternalUsers` - Exclude Azure AD users and groups
+  - `CertificateMappedUsers` - Exclude certificate and asymmetric key-mapped users
+- Enables cross-platform exports by excluding Windows users that fail on Linux SQL Server
+- `DatabaseUsers` still works as umbrella exclusion for all user types
+- Example: `excludeObjectTypes: [WindowsUsers]` to export SQL logins only
+
+### Fixed
+
+**removeToPrimary Missing TEXTIMAGE_ON/FILESTREAM_ON (Bug Fix #4)**
+- `fileGroupStrategy: removeToPrimary` now correctly remaps `TEXTIMAGE_ON` and `FILESTREAM_ON` clauses
+- Previously only `ON [FileGroup]` after closing parenthesis was remapped
+- Tables with LOB columns (varchar(max), varbinary(max), xml, etc.) now work correctly
+
+**Memory-Optimized FileGroup Export Syntax (Bug Fix #5)**
+- Fixed export of memory-optimized FileGroups to use correct `CONTAINS MEMORY_OPTIMIZED_DATA` syntax
+- Previously all non-standard FileGroups were exported with `CONTAINS FILESTREAM`
+- Now correctly handles all three FileGroup types: RowsFileGroup, FileStreamDataFileGroup, MemoryOptimizedDataFileGroup
+
+**removeToPrimary with Memory-Optimized Tables (Bug Fix #6)**
+- `fileGroupStrategy: removeToPrimary` now creates required memory-optimized FileGroups
+- Memory-optimized FileGroups cannot be remapped to PRIMARY (they're required infrastructure)
+- Standard and FILESTREAM FileGroups are still skipped as expected
+
+### Improved
+
+**Import Error Reporting (Bug Fix #3)**
+- Errors now shown in RED immediately when they occur (not hidden in verbose output)
+- Shows actual SQL error message inline, not just script name
+- Creates `import-errors.log` file with full error details
+- Final summary lists all failed scripts with their error messages
+- Programmability dependency retry failures still use appropriate yellow warnings during retries
+
+---
+
 ## [1.7.0] - 2026-01-27
 
 ### Changed

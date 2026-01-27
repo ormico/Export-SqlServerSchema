@@ -41,6 +41,29 @@ You can whitelist or blacklist specific object types.
 -   **Whitelist**: `-IncludeObjectTypes Tables,Views`
 -   **Blacklist**: `-ExcludeObjectTypes Data,SecurityPolicies`
 
+#### Cross-Platform User Filtering
+
+When exporting for Linux SQL Server or a different Windows domain, exclude Windows-authenticated users:
+
+```powershell
+# Export for Linux target (exclude Windows users, keep SQL logins)
+./Export-SqlServerSchema.ps1 -Server "localhost" -Database "MyDatabase" `
+    -ExcludeObjectTypes WindowsUsers
+
+# Or in config file:
+# excludeObjectTypes:
+#   - WindowsUsers
+```
+
+**User Type Exclusions:**
+| Type | Description |
+|------|-------------|
+| `WindowsUsers` | Windows domain users and groups (DOMAIN\user) |
+| `SqlUsers` | SQL Server login-based users |
+| `ExternalUsers` | Azure AD users and groups |
+| `CertificateMappedUsers` | Certificate/asymmetric key mapped users |
+| `DatabaseUsers` | All user types (umbrella) |
+
 ### 1.5 Delta Export (Incremental)
 
 For databases where most objects rarely change, delta export dramatically reduces export time by only re-scripting modified objects.

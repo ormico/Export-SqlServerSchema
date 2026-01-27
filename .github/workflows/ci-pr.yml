@@ -109,6 +109,27 @@ jobs:
         run: |
           Write-Host "Running FileGroup strategy tests..."
           ./test-minimal-filegroups.ps1
+
+      - name: Run user type filtering tests
+        shell: pwsh
+        working-directory: ./tests
+        run: |
+          Write-Host "Running user type filtering tests..."
+          ./test-user-type-filtering.ps1
+
+      - name: Run advanced FileGroup tests
+        shell: pwsh
+        working-directory: ./tests
+        run: |
+          Write-Host "Running advanced FileGroup tests..."
+          ./test-advanced-filegroups.ps1
+
+      - name: Run error handling tests
+        shell: pwsh
+        working-directory: ./tests
+        run: |
+          Write-Host "Running error handling tests..."
+          ./test-error-handling.ps1
       
       - name: Cleanup
         if: always()
