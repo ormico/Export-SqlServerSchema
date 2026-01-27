@@ -274,24 +274,67 @@ try {
             Write-Host "  Parallel SQL files: $($parallelSqlFiles.Count)" -ForegroundColor White
             Write-Host "  Sequential SQL files: $($sqlFiles.Count)" -ForegroundColor White
 
-            if ($parallelSqlFiles.Count -eq $sqlFiles.Count) {
-                Write-TestStep "Parallel export file count matches sequential" -Type Success
-                $parallelExportValid = $true
-            } else {
-                # Show differences for debugging
-                $seqFiles = $sqlFiles | Select-Object -ExpandProperty Name | Sort-Object
-                $parFiles = $parallelSqlFiles | Select-Object -ExpandProperty Name | Sort-Object
-                $diff = Compare-Object $seqFiles $parFiles
-                if ($diff) {
-                    Write-Host "  File differences:" -ForegroundColor Yellow
-                    $diff | ForEach-Object {
-                        $indicator = if ($_.SideIndicator -eq '<=') { 'Sequential only' } else { 'Parallel only' }
-                        Write-Host "    [$indicator] $($_.InputObject)" -ForegroundColor Yellow
+            # Compare relative paths (not just filenames)
+            $seqRelPaths = $sqlFiles | ForEach-Object { $_.FullName.Replace($exportDir + [IO.Path]::DirectorySeparatorChar, '') } | Sort-Object
+            $parRelPaths = $parallelSqlFiles | ForEach-Object { $_.FullName.Replace($parallelDir + [IO.Path]::DirectorySeparatorChar, '') } | Sort-Object
+
+            $pathDiff = Compare-Object $seqRelPaths $parRelPaths
+            if ($pathDiff) {
+                Write-Host "  [ERROR] File path differences found:" -ForegroundColor Red
+                $pathDiff | ForEach-Object {
+                    $indicator = if ($_.SideIndicator -eq '<=') { 'Sequential only' } else { 'Parallel only' }
+                    Write-Host "    [$indicator] $($_.InputObject)" -ForegroundColor Yellow
+                }
+                throw "Parallel export file paths must match sequential export"
+            }
+            Write-TestStep "Parallel export file paths match sequential" -Type Success
+
+            # Compare file contents using hashes
+            Write-Host "  Comparing file contents..." -ForegroundColor Gray
+            $contentMismatches = @()
+            $emptyFiles = @()
+            
+            foreach ($seqFile in $sqlFiles) {
+                $relPath = $seqFile.FullName.Replace($exportDir + [IO.Path]::DirectorySeparatorChar, '')
+                $parFile = Join-Path $parallelDir $relPath
+                
+                if (Test-Path $parFile) {
+                    # Check for empty files (except known empty ones like public.role.sql)
+                    $seqSize = (Get-Item $seqFile.FullName).Length
+                    $parSize = (Get-Item $parFile).Length
+                    
+                    if ($seqSize -gt 0 -and $parSize -eq 0) {
+                        $emptyFiles += $relPath
+                    }
+                    elseif ($seqSize -eq 0 -and $parSize -gt 0) {
+                        $emptyFiles += "$relPath (sequential empty, parallel has content)"
+                    }
+                    elseif ($seqSize -gt 0 -and $parSize -gt 0) {
+                        # Compare hashes for non-empty files
+                        $seqHash = (Get-FileHash $seqFile.FullName -Algorithm MD5).Hash
+                        $parHash = (Get-FileHash $parFile -Algorithm MD5).Hash
+                        
+                        if ($seqHash -ne $parHash) {
+                            $contentMismatches += $relPath
+                        }
                     }
                 }
-                Write-TestStep "Parallel export file count mismatch (parallel: $($parallelSqlFiles.Count), sequential: $($sqlFiles.Count))" -Type Error
-                throw "Parallel export must produce the same files as sequential export"
             }
+            
+            if ($emptyFiles.Count -gt 0) {
+                Write-Host "  [ERROR] Files with unexpected empty content:" -ForegroundColor Red
+                $emptyFiles | ForEach-Object { Write-Host "    - $_" -ForegroundColor Yellow }
+                throw "Parallel export produced empty files that should have content"
+            }
+            
+            if ($contentMismatches.Count -gt 0) {
+                Write-Host "  [ERROR] Files with content differences:" -ForegroundColor Red
+                $contentMismatches | ForEach-Object { Write-Host "    - $_" -ForegroundColor Yellow }
+                throw "Parallel export file contents must match sequential export"
+            }
+            
+            Write-TestStep "Parallel export file contents match sequential" -Type Success
+            $parallelExportValid = $true
         }
     }
 

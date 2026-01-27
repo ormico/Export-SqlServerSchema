@@ -392,7 +392,58 @@ try {
     $exportedFiles = (Get-ChildItem $ExportPath -Recurse -File | Measure-Object).Count
     Write-Host "  Exported $exportedFiles files" -ForegroundColor Gray
     
-    Write-Host "  [SUCCESS] Database export completed ($('{0:N2}' -f $exportDuration.TotalSeconds)s)" -ForegroundColor Green
+    Write-Host "  [SUCCESS] Sequential export completed ($('{0:N2}' -f $exportDuration.TotalSeconds)s)" -ForegroundColor Green
+    
+    # Step 6b: Parallel Export (comparison)
+    Write-TestStep "Step 6b: Running parallel export for performance comparison..." -Type Info
+    
+    $parallelExportPath = Join-Path $PSScriptRoot "exports_perf_parallel"
+    
+    # Clean parallel export directory
+    if (Test-Path $parallelExportPath) {
+        Write-Host "  Cleaning previous parallel exports..." -ForegroundColor Gray
+        Remove-Item $parallelExportPath -Recurse -Force
+    }
+    
+    Write-Host "  Starting parallel export (default workers)..." -ForegroundColor Gray
+    $parallelExportStart = Get-Date
+    
+    # Build parallel export args - use the parallel config file
+    $parallelConfigFile = Join-Path $PSScriptRoot "test-parallel-config.yml"
+    $parallelExportArgs = @{
+        Server = $TEST_SERVER
+        Database = $SourceDatabase
+        OutputPath = $parallelExportPath
+        IncludeData = $true
+        Credential = $credential
+        CollectMetrics = $true
+        ConfigFile = $parallelConfigFile
+    }
+    
+    & $ExportScript @parallelExportArgs
+    
+    $parallelExportDuration = (Get-Date) - $parallelExportStart
+    
+    # Count parallel exported files
+    $parallelExportedFiles = (Get-ChildItem $parallelExportPath -Recurse -File | Measure-Object).Count
+    Write-Host "  Exported $parallelExportedFiles files" -ForegroundColor Gray
+    
+    Write-Host "  [SUCCESS] Parallel export completed ($('{0:N2}' -f $parallelExportDuration.TotalSeconds)s)" -ForegroundColor Green
+    
+    # Calculate speedup
+    $speedup = $exportDuration.TotalSeconds / $parallelExportDuration.TotalSeconds
+    if ($speedup -gt 1) {
+        Write-Host "  [INFO] Parallel speedup: $([math]::Round($speedup, 2))x faster" -ForegroundColor Cyan
+    } else {
+        Write-Host "  [INFO] Parallel speedup: $([math]::Round($speedup, 2))x (no improvement)" -ForegroundColor Yellow
+    }
+    
+    # Verify parallel export produces same number of files
+    if ($exportedFiles -eq $parallelExportedFiles) {
+        Write-Host "  [SUCCESS] File counts match: $exportedFiles files" -ForegroundColor Green
+    } else {
+        Write-Host "  [WARNING] File count mismatch: Sequential=$exportedFiles Parallel=$parallelExportedFiles" -ForegroundColor Yellow
+    }
     
     # Step 7: Import database
     Write-TestStep "Step 7: Importing database with Import-SqlServerSchema.ps1..." -Type Info
@@ -480,9 +531,15 @@ try {
     
     Write-Host ""
     Write-Host "Export Performance:" -ForegroundColor Yellow
-    Write-Host "  Duration: $([math]::Round($exportDuration.TotalSeconds, 2))s" -ForegroundColor White
-    Write-Host "  Files Generated: $exportedFiles" -ForegroundColor White
-    Write-Host "  Export Speed: $([math]::Round($sourceStats.Rows / $exportDuration.TotalSeconds, 0)) rows/sec" -ForegroundColor White
+    Write-Host "  Sequential:" -ForegroundColor White
+    Write-Host "    Duration: $([math]::Round($exportDuration.TotalSeconds, 2))s" -ForegroundColor White
+    Write-Host "    Files Generated: $exportedFiles" -ForegroundColor White
+    Write-Host "    Export Speed: $([math]::Round($sourceStats.Rows / $exportDuration.TotalSeconds, 0)) rows/sec" -ForegroundColor White
+    Write-Host "  Parallel:" -ForegroundColor White
+    Write-Host "    Duration: $([math]::Round($parallelExportDuration.TotalSeconds, 2))s" -ForegroundColor White
+    Write-Host "    Files Generated: $parallelExportedFiles" -ForegroundColor White
+    Write-Host "    Export Speed: $([math]::Round($sourceStats.Rows / $parallelExportDuration.TotalSeconds, 0)) rows/sec" -ForegroundColor White
+    Write-Host "  Speedup: $([math]::Round($speedup, 2))x" -ForegroundColor $(if ($speedup -gt 1) { 'Green' } else { 'Yellow' })
     
     Write-Host ""
     Write-Host "Import Performance:" -ForegroundColor Yellow
@@ -499,9 +556,17 @@ try {
         Timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
         ConfigFile = if ($ExportConfigYaml) { Split-Path $ExportConfigYaml -Leaf } else { "default (single)" }
         DatabasePopulationSeconds = [math]::Round($scriptDuration.TotalSeconds, 2)
-        ExportDurationSeconds = [math]::Round($exportDuration.TotalSeconds, 2)
-        ExportFilesGenerated = $exportedFiles
-        ExportRowsPerSecond = [math]::Round($sourceStats.Rows / $exportDuration.TotalSeconds, 0)
+        SequentialExport = @{
+            DurationSeconds = [math]::Round($exportDuration.TotalSeconds, 2)
+            FilesGenerated = $exportedFiles
+            RowsPerSecond = [math]::Round($sourceStats.Rows / $exportDuration.TotalSeconds, 0)
+        }
+        ParallelExport = @{
+            DurationSeconds = [math]::Round($parallelExportDuration.TotalSeconds, 2)
+            FilesGenerated = $parallelExportedFiles
+            RowsPerSecond = [math]::Round($sourceStats.Rows / $parallelExportDuration.TotalSeconds, 0)
+        }
+        ParallelSpeedup = [math]::Round($speedup, 2)
         ImportDurationSeconds = [math]::Round($importDuration.TotalSeconds, 2)
         ImportRowsPerSecond = [math]::Round($targetStats.Rows / $importDuration.TotalSeconds, 0)
         TotalRoundTripSeconds = [math]::Round($totalDuration.TotalSeconds, 2)
