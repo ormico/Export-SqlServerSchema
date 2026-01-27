@@ -176,8 +176,6 @@ jobs:
 
       - name: Copy release files
         run: |
-          cp .editorconfig release/
-          cp .gitignore release/
           cp CHANGELOG.md release/
           cp docs/USER_GUIDE.md release/USER_GUIDE.md
           cp export-import-config.example.yml release/
