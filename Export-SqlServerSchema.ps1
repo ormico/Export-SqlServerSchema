@@ -7680,7 +7680,10 @@ function Export-DatabaseObjects {
 function Export-TableData {
   <#
     .SYNOPSIS
-        Exports table data as INSERT statements.
+        Exports table data as INSERT statements using the unified work items infrastructure.
+    .DESCRIPTION
+        Routes sequential data export through Build-WorkItems-Data for consistency with parallel mode.
+        This ensures both modes use identical logic for row-count filtering and file naming.
     .OUTPUTS
         Returns a hashtable with TablesWithData, SuccessCount, FailCount, and EmptyCount for metrics.
     #>
@@ -7705,85 +7708,67 @@ function Export-TableData {
   Write-Output 'EXPORTING TABLE DATA'
   Write-Output '═══════════════════════════════════════════════'
 
-  # Get tables collection (not passed as parameter to keep function self-contained)
-  $tables = @($Database.Tables | Where-Object { -not $_.IsSystemObject -and -not (Test-ObjectExcluded -Schema $_.Schema -Name $_.Name) })
+  # Use the same work items builder as parallel mode (ensures identical row-count filtering)
+  $workItems = @(Build-WorkItems-Data -Database $Database -OutputDir $OutputDir)
 
-  if ($tables.Count -eq 0) {
-    Write-Output 'No tables found.'
+  if ($workItems.Count -eq 0) {
+    Write-Output '  No tables with data to export.'
     return $dataMetrics
   }
 
-  Write-Output "  Found $($tables.Count) table(s) to check for data export"
+  Write-Output "  Found $($workItems.Count) table(s) with data to export"
 
-  # OPTIMIZATION: Get all row counts in a single query instead of per-table COUNT(*)
-  # This reduces N database round-trips to just 1
-  Write-Output "  Fetching row counts for all tables..."
-  $rowCountQuery = @"
-SELECT
-    s.name AS SchemaName,
-    t.name AS TableName,
-    SUM(p.rows) AS TableRowCount
-FROM sys.tables t
-INNER JOIN sys.schemas s ON t.schema_id = s.schema_id
-INNER JOIN sys.partitions p ON t.object_id = p.object_id
-WHERE p.index_id IN (0, 1)  -- Heap or clustered index
-  AND t.is_ms_shipped = 0
-GROUP BY s.name, t.name
-"@
-  $rowCountData = $Database.ExecuteWithResults($rowCountQuery)
-  $rowCountLookup = @{}
-  foreach ($row in $rowCountData.Tables[0].Rows) {
-    $key = "$($row.SchemaName).$($row.TableName)"
-    $rowCountLookup[$key] = [long]$row.TableRowCount
-  }
-  Write-Output "  [SUCCESS] Retrieved row counts for $($rowCountLookup.Count) table(s)"
-
+  # Configure scripting options for data export
   $opts = New-ScriptingOptions -TargetVersion $TargetVersion -Overrides @{
     ScriptSchema = $false
     ScriptData   = $true
   }
-  $Scripter.Options = $opts
 
   $successCount = 0
   $failCount = 0
-  $emptyCount = 0
 
   $currentItem = 0
   Write-ProgressHeader 'TableData'
-  foreach ($table in $tables) {
-    $currentItem++
-    $percentComplete = [math]::Round(($currentItem / $tables.Count) * 100)
-    try {
-      # Look up row count from pre-fetched data (no network round-trip)
-      $tableKey = "$($table.Schema).$($table.Name)"
-      $rowCount = if ($rowCountLookup.ContainsKey($tableKey)) { $rowCountLookup[$tableKey] } else { 0 }
 
-      if ($rowCount -gt 0) {
-        Write-ObjectProgress -ObjectName "$($table.Schema).$($table.Name) ($rowCount row(s))" -Current $currentItem -Total $tables.Count
-        $fileName = Join-Path $OutputDir '21_Data' "$($table.Schema).$($table.Name).data.sql"
-        Ensure-DirectoryExists $fileName
-        $opts.FileName = $fileName
-        $Scripter.Options = $opts
-        $Scripter.EnumScript($table) | Out-Null
-        Write-ObjectProgress -ObjectName "$($table.Schema).$($table.Name)" -Current $currentItem -Total $tables.Count -Success
-        $successCount++
+  foreach ($workItem in $workItems) {
+    $currentItem++
+
+    # Get table info from work item
+    $objInfo = $workItem.Objects[0]  # Single mode: one table per work item
+    $tableName = "$($objInfo.Schema).$($objInfo.Name)"
+
+    try {
+      Write-ObjectProgress -ObjectName $tableName -Current $currentItem -Total $workItems.Count
+
+      # Fetch the SMO table object
+      $table = $Database.Tables[$objInfo.Name, $objInfo.Schema]
+      if (-not $table) {
+        throw "Table not found: $tableName"
       }
-      else {
-        $emptyCount++
-      }
+
+      # Ensure output directory exists
+      Ensure-DirectoryExists $workItem.OutputPath
+
+      # Configure scripter for this file
+      $opts.FileName = $workItem.OutputPath
+      $opts.AppendToFile = $workItem.AppendToFile
+      $Scripter.Options = $opts
+
+      # Script the data
+      $Scripter.EnumScript($table) | Out-Null
+
+      Write-ObjectProgress -ObjectName $tableName -Current $currentItem -Total $workItems.Count -Success
+      $successCount++
     }
     catch {
-      Write-ObjectProgress -ObjectName "$($table.Schema).$($table.Name)" -Current $currentItem -Total $tables.Count -Failed
-      Write-ExportError -ObjectType 'TableData' -ObjectName "$($table.Schema).$($table.Name)" -ErrorRecord $_ -AdditionalContext "Exporting $rowCount row(s)"
+      Write-ObjectProgress -ObjectName $tableName -Current $currentItem -Total $workItems.Count -Failed
+      Write-ExportError -ObjectType 'TableData' -ObjectName $tableName -ErrorRecord $_
       $failCount++
     }
   }
   $script:CurrentProgressLabel = $null
 
-  Write-Output "  [SUMMARY] Exported data from $successCount/$($tables.Count) table(s) successfully"
-  if ($emptyCount -gt 0) {
-    Write-Output "  [INFO] Skipped $emptyCount empty table(s)"
-  }
+  Write-Output "  [SUMMARY] Exported data from $successCount/$($workItems.Count) table(s) successfully"
   if ($failCount -gt 0) {
     Write-Output "  [WARNING] Failed to export data from $failCount table(s)"
   }
@@ -7792,7 +7777,7 @@ GROUP BY s.name, t.name
   $dataMetrics.TablesWithData = $successCount + $failCount
   $dataMetrics.SuccessCount = $successCount
   $dataMetrics.FailCount = $failCount
-  $dataMetrics.EmptyCount = $emptyCount
+  $dataMetrics.EmptyCount = 0  # Empty tables already filtered by Build-WorkItems-Data
   return $dataMetrics
 }
 
