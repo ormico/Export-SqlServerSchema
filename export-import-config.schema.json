@@ -180,6 +180,7 @@
           "items": {
             "type": "string"
           },
+          "uniqueItems": true,
           "examples": ["staging", "temp", "archive"]
         },
         "groupByObjectTypes": {
@@ -316,10 +317,11 @@
         },
         "excludeSchemas": {
           "type": "array",
-          "description": "Schemas to exclude from import (scripts with filenames starting with these schemas will be skipped)",
+          "description": "Schemas to exclude from import (only applies to schema-bound object folders like Tables, Views, Functions, etc.)",
           "items": {
             "type": "string"
           },
+          "uniqueItems": true,
           "examples": ["staging", "temp"]
         },
         "dependencyRetries": {

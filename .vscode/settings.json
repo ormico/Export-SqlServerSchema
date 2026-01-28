@@ -125,6 +125,10 @@
         "/^cd d:\\\\Export-SqlServerSchema\\\\tests; pwsh -NoProfile -File \\.\\\\run-integration-test\\.ps1$/": {
             "approve": true,
             "matchCommandLine": true
+        },
+        "/^pwsh -NoProfile -File D:\\\\Export-SqlServerSchema\\\\tests\\\\run-integration-test\\.ps1$/": {
+            "approve": true,
+            "matchCommandLine": true
         }
     }
 }

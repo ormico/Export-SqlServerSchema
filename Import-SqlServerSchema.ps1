@@ -1548,6 +1548,8 @@ function Test-SchemaExcluded {
     .DESCRIPTION
         Extracts schema from filename patterns like 'Schema.ObjectName.sql' or
         'Schema.ObjectName.type.sql' and checks against excluded schemas list.
+        Only applies to schema-bound object folders (Tables, Views, Functions, etc.)
+        to avoid false positives on users/roles/security objects.
     .PARAMETER ScriptPath
         Full path to the script file.
     .PARAMETER ExcludeSchemas
@@ -1564,13 +1566,50 @@ function Test-SchemaExcluded {
     return $false
   }
 
+  # Only apply schema filtering to folders containing schema-bound objects
+  # This prevents false positives like user "cdc.user.sql" being treated as schema "cdc"
+  # Note: Programmability has nested subfolders (02_Functions, 03_StoredProcedures, etc.)
+  $schemaBoundFolders = @(
+    'Tables',           # Matches 09_Tables_PrimaryKey, 10_Tables_ForeignKeys, etc.
+    'Indexes',          # Matches 11_Indexes
+    'Views',            # Matches 05_Views (nested under 14_Programmability)
+    'Functions',        # Matches 02_Functions (nested under 14_Programmability)
+    'StoredProcedures', # Matches 03_StoredProcedures (nested under 14_Programmability)
+    'Triggers',         # Matches 04_Triggers (nested under 14_Programmability)
+    'Synonyms',         # Matches 15_Synonyms
+    'Sequences',        # Matches 04_Sequences
+    'Data'              # Matches 21_Data
+  )
+
+  # Extract folder name from path (immediate parent)
+  $parentFolder = Split-Path (Split-Path $ScriptPath -Parent) -Leaf
+
+  # Check if this is a schema-bound folder
+  # Use partial matching since folders have numeric prefixes (e.g., 09_Tables_PrimaryKey)
+  $isSchemaBoundFolder = $false
+  foreach ($folder in $schemaBoundFolders) {
+    if ($parentFolder -match $folder) {
+      $isSchemaBoundFolder = $true
+      break
+    }
+  }
+
+  if (-not $isSchemaBoundFolder) {
+    return $false  # Not a schema-bound folder, don't filter
+  }
+
   $fileName = Split-Path $ScriptPath -Leaf
 
-  # Pattern: Schema.ObjectName.sql or Schema.ObjectName.type.sql
+  # Pattern 1: Schema.ObjectName.sql or Schema.ObjectName.type.sql
   # Examples: cdc.fn_cdc_get_all_changes.function.sql, dbo.MyTable.sql
-  # First segment before the first dot is typically the schema
   if ($fileName -match '^([^.]+)\.') {
     $schemaName = $matches[1]
+
+    # Skip numeric prefixes from grouped files (e.g., 001_dbo.sql -> extract dbo)
+    if ($schemaName -match '^\d{3}_(.+)$') {
+      $schemaName = $matches[1]
+    }
+
     if ($ExcludeSchemas -contains $schemaName) {
       return $true
     }

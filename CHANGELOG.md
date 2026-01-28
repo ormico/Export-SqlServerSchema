@@ -37,11 +37,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Explicit: `CREATE USER [AppUser] FOR LOGIN [AppUser]` → `CREATE USER [AppUser] WITHOUT LOGIN`
   - Implicit Windows: `CREATE USER [DOMAIN\User]` → `CREATE USER [DOMAIN\User] WITHOUT LOGIN`
 
-**Import Exclusion Examples Documentation**
-- New `docs/IMPORT_EXCLUSION_EXAMPLES.md` with comprehensive examples
-- Covers all exclusion types: object types, user types, and schemas
-- Includes YAML config and command-line examples
-
 ### Fixed
 
 **Windows User Detection for Implicit Logins**
