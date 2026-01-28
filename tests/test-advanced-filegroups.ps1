@@ -201,8 +201,8 @@ GO
 -- Insert some test data
 INSERT INTO dbo.Documents (Title, Content, BinaryData)
 VALUES 
-    ('Doc1', 'This is some long content for document 1', 0x48656C6C6F),
-    ('Doc2', 'This is some long content for document 2', 0x576F726C64);
+    ('Doc1', 'This is some long content for document 1', 0x48656C6C6F),  -- 0x48656C6C6F = 'Hello'
+    ('Doc2', 'This is some long content for document 2', 0x576F726C64);  -- 0x576F726C64 = 'World'
 
 INSERT INTO dbo.ArchivedOrders (OrderId, OrderDate, TotalAmount)
 VALUES (1, '2024-01-15', 150.00), (2, '2024-02-20', 275.50);
