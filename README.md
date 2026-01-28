@@ -536,10 +536,10 @@ When importing in multiple passes (e.g., structure first, then programmability),
 | PlanGuides | Yes | Yes | |
 | DatabaseRoles | Yes | Yes | |
 | DatabaseUsers | Yes | Yes | Umbrella for all user types |
-| WindowsUsers | Yes | No | Windows domain users/groups |
-| SqlUsers | Yes | No | SQL Server login-based users |
-| ExternalUsers | Yes | No | Azure AD users/groups |
-| CertificateMappedUsers | Yes | No | Certificate/AsymmetricKey mapped users |
+| WindowsUsers | Yes | Yes | Windows domain users/groups |
+| SqlUsers | Yes | Yes | SQL Server login-based users |
+| ExternalUsers | Yes | Yes | Azure AD users/groups |
+| CertificateMappedUsers | Yes | Yes | Certificate/AsymmetricKey mapped users |
 | SecurityPolicies | Yes | Yes | |
 | Data | Yes | Yes | Requires -IncludeData for import |
 
