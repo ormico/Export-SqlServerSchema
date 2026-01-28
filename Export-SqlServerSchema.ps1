@@ -113,8 +113,8 @@ param(
     'ForeignKeys', 'Indexes', 'Defaults', 'Rules', 'Assemblies', 'DatabaseTriggers', 'TableTriggers',
     'Functions', 'UserDefinedAggregates', 'StoredProcedures', 'Views', 'Synonyms', 'FullTextCatalogs',
     'FullTextStopLists', 'SearchPropertyLists', 'ExternalDataSources', 'ExternalFileFormats',
-    'DatabaseRoles', 'DatabaseUsers', 'Certificates', 'AsymmetricKeys', 'SymmetricKeys',
-    'SecurityPolicies', 'PlanGuides', 'Data')]
+    'DatabaseRoles', 'DatabaseUsers', 'WindowsUsers', 'SqlUsers', 'ExternalUsers', 'CertificateMappedUsers',
+    'Certificates', 'AsymmetricKeys', 'SymmetricKeys', 'SecurityPolicies', 'PlanGuides', 'Data')]
   [string[]]$IncludeObjectTypes,
 
   [Parameter(HelpMessage = 'Exclude specific object types (overrides config file). Example: Data,SecurityPolicies')]
@@ -123,8 +123,8 @@ param(
     'ForeignKeys', 'Indexes', 'Defaults', 'Rules', 'Assemblies', 'DatabaseTriggers', 'TableTriggers',
     'Functions', 'UserDefinedAggregates', 'StoredProcedures', 'Views', 'Synonyms', 'FullTextCatalogs',
     'FullTextStopLists', 'SearchPropertyLists', 'ExternalDataSources', 'ExternalFileFormats',
-    'DatabaseRoles', 'DatabaseUsers', 'Certificates', 'AsymmetricKeys', 'SymmetricKeys',
-    'SecurityPolicies', 'PlanGuides', 'Data')]
+    'DatabaseRoles', 'DatabaseUsers', 'WindowsUsers', 'SqlUsers', 'ExternalUsers', 'CertificateMappedUsers',
+    'Certificates', 'AsymmetricKeys', 'SymmetricKeys', 'SecurityPolicies', 'PlanGuides', 'Data')]
   [string[]]$ExcludeObjectTypes,
 
   [Parameter(HelpMessage = 'Enable parallel export processing for improved performance')]
@@ -302,7 +302,12 @@ $script:ParallelWorkerScriptBlock = {
             'Schema' { $smoObj = $db.Schemas[$objId.Name] }
             'Sequence' { $smoObj = $db.Sequences[$objId.Name, $objId.Schema] }
             'Synonym' { $smoObj = $db.Synonyms[$objId.Name, $objId.Schema] }
-            'UserDefinedType' { $smoObj = $db.UserDefinedTypes[$objId.Name, $objId.Schema] }
+            'UserDefinedType' {
+              # Try all three UDT collections (CLR types, alias types, table types)
+              $smoObj = $db.UserDefinedTypes[$objId.Name, $objId.Schema]
+              if (-not $smoObj) { $smoObj = $db.UserDefinedDataTypes[$objId.Name, $objId.Schema] }
+              if (-not $smoObj) { $smoObj = $db.UserDefinedTableTypes[$objId.Name, $objId.Schema] }
+            }
             'UserDefinedDataType' { $smoObj = $db.UserDefinedDataTypes[$objId.Name, $objId.Schema] }
             'UserDefinedTableType' { $smoObj = $db.UserDefinedTableTypes[$objId.Name, $objId.Schema] }
             'XmlSchemaCollection' { $smoObj = $db.XmlSchemaCollections[$objId.Name, $objId.Schema] }
@@ -1746,7 +1751,7 @@ function Build-WorkItems-TableTriggers {
           -ObjectType 'TableTrigger' `
           -GroupingMode 'schema' `
           -Objects $objects `
-          -OutputPath (Join-Path $baseDir $fileName) `
+          -OutputPath (Join-Path $baseDir '04_Triggers' $fileName) `
           -ScriptingOptions $scriptOpts `
           -SpecialHandler 'TableTriggers'
         $schemaNum++
@@ -1759,7 +1764,7 @@ function Build-WorkItems-TableTriggers {
         -ObjectType 'TableTrigger' `
         -GroupingMode 'all' `
         -Objects $objects `
-        -OutputPath (Join-Path $baseDir '001_TableTriggers.sql') `
+        -OutputPath (Join-Path $baseDir '04_Triggers' '001_TableTriggers.sql') `
         -ScriptingOptions $scriptOpts `
         -SpecialHandler 'TableTriggers'
     }
@@ -2357,10 +2362,17 @@ function Build-WorkItems-Security {
   }
 
   # Database Users - respect grouping mode (default: single to match sequential export)
+  # Supports granular exclusions: WindowsUsers, SqlUsers, ExternalUsers, CertificateMappedUsers
   if (-not (Test-ObjectTypeExcluded -ObjectType 'DatabaseUsers')) {
     $groupBy = Get-ObjectGroupingMode -ObjectType 'DatabaseUsers'
     try {
-      $users = @($Database.Users | Where-Object { -not $_.IsSystemObject -and $_.Name -ne 'dbo' -and -not (Test-ObjectExcluded -Schema $null -Name $_.Name) })
+      # Filter users: exclude system, dbo, explicitly excluded, and those excluded by LoginType
+      $users = @($Database.Users | Where-Object {
+        -not $_.IsSystemObject -and
+        $_.Name -ne 'dbo' -and
+        -not (Test-ObjectExcluded -Schema $null -Name $_.Name) -and
+        -not (Test-UserExcludedByLoginType -User $_)
+      })
       if ($users.Count -gt 0) {
         switch ($groupBy) {
           'single' {
@@ -2736,19 +2748,31 @@ function Export-NonParallelizableObjects {
             files      = [System.Collections.ArrayList]::new()
           }
 
+          # Escape identifier to prevent SQL injection via malicious filegroup names
+          $escapedFgName = Get-EscapedSqlIdentifier -Name $fg.Name
+
           [void]$fgScript.AppendLine("-- FileGroup: $($fg.Name)")
           [void]$fgScript.AppendLine("-- Type: $($fg.FileGroupType)")
 
-          if ($fg.FileGroupType -eq 'RowsFileGroup') {
-            [void]$fgScript.AppendLine("ALTER DATABASE CURRENT ADD FILEGROUP [$($fg.Name)];")
-          }
-          else {
-            [void]$fgScript.AppendLine("ALTER DATABASE CURRENT ADD FILEGROUP [$($fg.Name)] CONTAINS FILESTREAM;")
+          switch ($fg.FileGroupType) {
+            'RowsFileGroup' {
+              [void]$fgScript.AppendLine("ALTER DATABASE CURRENT ADD FILEGROUP [$escapedFgName];")
+            }
+            'MemoryOptimizedDataFileGroup' {
+              [void]$fgScript.AppendLine("ALTER DATABASE CURRENT ADD FILEGROUP [$escapedFgName] CONTAINS MEMORY_OPTIMIZED_DATA;")
+            }
+            'FileStreamDataFileGroup' {
+              [void]$fgScript.AppendLine("ALTER DATABASE CURRENT ADD FILEGROUP [$escapedFgName] CONTAINS FILESTREAM;")
+            }
+            default {
+              Write-Host "  [WARNING] Unknown FileGroup type '$($fg.FileGroupType)' for '$($fg.Name)', using standard syntax" -ForegroundColor Yellow
+              [void]$fgScript.AppendLine("ALTER DATABASE CURRENT ADD FILEGROUP [$escapedFgName];")
+            }
           }
           [void]$fgScript.AppendLine("GO")
 
           if ($fg.IsReadOnly) {
-            [void]$fgScript.AppendLine("ALTER DATABASE CURRENT MODIFY FILEGROUP [$($fg.Name)] READONLY;")
+            [void]$fgScript.AppendLine("ALTER DATABASE CURRENT MODIFY FILEGROUP [$escapedFgName] READONLY;")
             [void]$fgScript.AppendLine("GO")
           }
           [void]$fgScript.AppendLine("")
@@ -2782,13 +2806,17 @@ function Export-NonParallelizableObjects {
             }
             [void]$fgMetadata.files.Add($fileMetadata)
 
+            # Escape file name identifier (stored as sysname which uses '' for escaping in string context,
+            # but NAME uses string literal context, so escape single quotes)
+            $escapedFileName = $file.Name -replace "'", "''"
+
             [void]$fgScript.AppendLine("-- File: $($file.Name)")
             [void]$fgScript.AppendLine("-- Original Path: $($file.FileName)")
             [void]$fgScript.AppendLine("-- Original Size: $($file.Size)KB, Growth: $($file.Growth)$(if ($file.GrowthType -eq 'KB') {'KB'} else {'%'}), MaxSize: $(if ($file.MaxSize -eq -1) {'UNLIMITED'} else {$file.MaxSize + 'KB'})")
             [void]$fgScript.AppendLine("-- NOTE: Uses SQLCMD variables for path, size, and growth")
             [void]$fgScript.AppendLine("-- Configure via fileGroupPathMapping and fileGroupFileSizeDefaults in config file")
             [void]$fgScript.AppendLine("ALTER DATABASE CURRENT ADD FILE (")
-            [void]$fgScript.AppendLine("    NAME = N'$($file.Name)',")
+            [void]$fgScript.AppendLine("    NAME = N'$escapedFileName',")
             [void]$fgScript.AppendLine("    FILENAME = N'`$($pathVar)',")
             [void]$fgScript.AppendLine("    SIZE = `$($sizeVar)")
             [void]$fgScript.AppendLine("    , FILEGROWTH = `$($growthVar)")
@@ -2800,7 +2828,7 @@ function Export-NonParallelizableObjects {
               [void]$fgScript.AppendLine("    , MAXSIZE = UNLIMITED")
             }
 
-            [void]$fgScript.AppendLine(") TO FILEGROUP [$($fg.Name)];")
+            [void]$fgScript.AppendLine(") TO FILEGROUP [$escapedFgName];")
             [void]$fgScript.AppendLine("GO")
             [void]$fgScript.AppendLine("")
           }
@@ -4969,6 +4997,68 @@ function Test-ObjectTypeExcluded {
   return $false
 }
 
+function Test-UserExcludedByLoginType {
+  <#
+    .SYNOPSIS
+        Checks if a database user should be excluded based on their LoginType.
+    .DESCRIPTION
+        Enables granular control over user exports based on authentication type.
+        Useful for excluding Windows users when exporting to Linux/different domain.
+    .PARAMETER User
+        The SMO User object to check.
+    .OUTPUTS
+        $true if the user should be excluded, $false otherwise.
+  #>
+  param(
+    [Parameter(Mandatory = $true)]
+    $User
+  )
+
+  # Get exclusion settings from config
+  $excludeTypes = @()
+  if ($script:Config -and $script:Config.export -and $script:Config.export.excludeObjectTypes) {
+    $excludeTypes = $script:Config.export.excludeObjectTypes
+  }
+
+  # Check for umbrella DatabaseUsers exclusion first (excludes ALL user types)
+  if ($excludeTypes -contains 'DatabaseUsers') {
+    return $true
+  }
+
+  # Map LoginType to exclusion object types
+  # SMO LoginType enum: WindowsUser(0), WindowsGroup(1), SqlLogin(2), Certificate(3),
+  #                     AsymmetricKey(4), ExternalUser(5), ExternalGroup(6)
+  $loginType = $User.LoginType.ToString()
+
+  switch ($loginType) {
+    'WindowsUser' {
+      return $excludeTypes -contains 'WindowsUsers'
+    }
+    'WindowsGroup' {
+      return $excludeTypes -contains 'WindowsUsers'
+    }
+    'SqlLogin' {
+      return $excludeTypes -contains 'SqlUsers'
+    }
+    'Certificate' {
+      return $excludeTypes -contains 'CertificateMappedUsers'
+    }
+    'AsymmetricKey' {
+      return $excludeTypes -contains 'CertificateMappedUsers'
+    }
+    'ExternalUser' {
+      return $excludeTypes -contains 'ExternalUsers'
+    }
+    'ExternalGroup' {
+      return $excludeTypes -contains 'ExternalUsers'
+    }
+    default {
+      # Unknown type - don't exclude
+      return $false
+    }
+  }
+}
+
 function Test-SchemaExcluded {
   <#
     .SYNOPSIS
@@ -5017,6 +5107,35 @@ function Test-ObjectExcluded {
   }
 
   return $false
+}
+
+function Get-EscapedSqlIdentifier {
+  <#
+    .SYNOPSIS
+        Escapes a SQL Server identifier for safe use in bracketed notation.
+    .DESCRIPTION
+        SQL Server uses square brackets [] to delimit identifiers. To include a literal
+        ] character within a bracketed identifier, it must be escaped as ]].
+        This function ensures identifiers are safe from second-order SQL injection
+        via malicious object names stored in the database.
+    .PARAMETER Name
+        The identifier name to escape.
+    .OUTPUTS
+        The escaped identifier name (without surrounding brackets).
+    .EXAMPLE
+        Get-EscapedSqlIdentifier -Name 'Normal_Name'
+        # Returns: Normal_Name
+    .EXAMPLE
+        Get-EscapedSqlIdentifier -Name 'Malicious]; DROP TABLE Users;--'
+        # Returns: Malicious]]; DROP TABLE Users;--
+    #>
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$Name
+  )
+
+  # Escape ] as ]] to prevent breaking out of bracketed identifier context
+  return $Name -replace '\]', ']]'
 }
 
 function Get-ObjectGroupingMode {
@@ -5134,7 +5253,13 @@ function Get-SmoObjectByIdentifier {
       'Schema' { return $Database.Schemas[$Name] }
       'Sequence' { return $Database.Sequences[$Name, $Schema] }
       'Synonym' { return $Database.Synonyms[$Name, $Schema] }
-      'UserDefinedType' { return $Database.UserDefinedTypes[$Name, $Schema] }
+      'UserDefinedType' {
+        # Try all three UDT collections (CLR types, alias types, table types)
+        $obj = $Database.UserDefinedTypes[$Name, $Schema]
+        if (-not $obj) { $obj = $Database.UserDefinedDataTypes[$Name, $Schema] }
+        if (-not $obj) { $obj = $Database.UserDefinedTableTypes[$Name, $Schema] }
+        return $obj
+      }
       'UserDefinedDataType' { return $Database.UserDefinedDataTypes[$Name, $Schema] }
       'UserDefinedTableType' { return $Database.UserDefinedTableTypes[$Name, $Schema] }
       'XmlSchemaCollection' { return $Database.XmlSchemaCollections[$Name, $Schema] }
@@ -5911,7 +6036,7 @@ function Show-ExportSummary {
 try {
   # Initialize metrics collection (CLI switch or config file)
   $script:CollectMetrics = $CollectMetrics.IsPresent
-  
+
   # Load configuration if provided
   $config = @{ export = @{ includeObjectTypes = @(); excludeObjectTypes = @(); includeData = $false; excludeObjects = @() } }
   $configSource = "None (using defaults)"

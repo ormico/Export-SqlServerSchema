@@ -263,10 +263,124 @@ $tables = @($Database.Tables | Where-Object { -not $_.IsSystemObject })
 
 ---
 
-## 8. Anti-Patterns to Avoid
+## 8. Avoiding Interactive Prompts (CRITICAL for AI Agents)
+
+**CRITICAL**: The Export-SqlServerSchema.ps1 and Import-SqlServerSchema.ps1 scripts have **mandatory parameters** that will prompt for input if not provided. Interactive prompts **block terminal execution indefinitely** when run by AI agents, wasting time and credits.
+
+### 8.1 NEVER Run Scripts Without Required Parameters
+
+```powershell
+# WRONG - Will prompt for Server and Database, blocking the terminal
+pwsh -NoProfile -Command "& { . './Export-SqlServerSchema.ps1' }"
+& ./Export-SqlServerSchema.ps1
+./Import-SqlServerSchema.ps1
+
+# WRONG - Dot-sourcing EXECUTES the script and triggers mandatory parameter prompts
+# This is a common mistake when trying to "load functions" from a script
+. './Export-SqlServerSchema.ps1'
+pwsh -Command ". './Export-SqlServerSchema.ps1'"
+
+# CORRECT - Always provide ALL mandatory parameters
+& ./Export-SqlServerSchema.ps1 -Server 'localhost' -Database 'TestDb' -OutputPath './output'
+& ./Import-SqlServerSchema.ps1 -Server 'localhost' -Database 'TargetDb' -SourcePath './scripts'
+
+# CORRECT - To check syntax without execution
+pwsh -NoProfile -Command "Get-Command './Export-SqlServerSchema.ps1' -Syntax"
+```
+
+### 8.2 NEVER Use Get-Credential Interactively
+
+`Get-Credential` displays a GUI/console prompt. Always construct credentials programmatically:
+
+```powershell
+# WRONG - Will display interactive credential prompt
+$cred = Get-Credential
+& ./Export-SqlServerSchema.ps1 -Server 'localhost' -Database 'TestDb' -Credential $cred
+
+# CORRECT - Construct PSCredential from known values
+$securePassword = ConvertTo-SecureString 'YourPassword' -AsPlainText -Force
+$credential = New-Object System.Management.Automation.PSCredential('sa', $securePassword)
+& ./Export-SqlServerSchema.ps1 -Server 'localhost' -Database 'TestDb' -Credential $credential
+
+# BEST - Use environment variables for sensitive values
+$securePassword = ConvertTo-SecureString $env:SA_PASSWORD -AsPlainText -Force
+$credential = New-Object System.Management.Automation.PSCredential($env:SA_USERNAME, $securePassword)
+```
+
+### 8.3 Test Environment Defaults
+
+For this project's test environment (Docker SQL Server), use these defaults:
+
+| Parameter | Value | Source |
+|-----------|-------|--------|
+| Server | `localhost` or `localhost,1433` | Docker default |
+| SA_PASSWORD | `Test@1234` | `tests/.env` file |
+| Username | `sa` | SQL Server default |
+
+```powershell
+# Standard test invocation pattern
+$password = 'Test@1234'  # From tests/.env
+$securePassword = ConvertTo-SecureString $password -AsPlainText -Force
+$credential = New-Object System.Management.Automation.PSCredential('sa', $securePassword)
+
+& ./Export-SqlServerSchema.ps1 `
+    -Server 'localhost' `
+    -Database 'TestDb' `
+    -OutputPath './test-output' `
+    -Credential $credential
+```
+
+### 8.4 Config Files Eliminate Parameter Prompts
+
+Use `-ConfigFile` to provide settings via YAML instead of parameters:
+
+```powershell
+# Config file can specify server, credentials path, and other settings
+& ./Export-SqlServerSchema.ps1 -ConfigFile './test-config.yml'
+& ./Import-SqlServerSchema.ps1 -ConfigFile './test-config.yml' -SourcePath './scripts'
+```
+
+### 8.5 Required Parameters Reference
+
+**Export-SqlServerSchema.ps1** mandatory parameters:
+- `-Server` (string) - SQL Server instance name
+- `-Database` (string) - Database name to export
+
+**Import-SqlServerSchema.ps1** mandatory parameters:
+- `-Server` (string) - SQL Server instance name  
+- `-Database` (string) - Target database name
+- `-SourcePath` (string) - Path to exported scripts folder
+
+### 8.6 Subprocess Pattern for Test Scripts
+
+When test scripts need to call Export/Import and capture output:
+
+```powershell
+# Pass credentials via environment variables to avoid embedding in command string
+$env:TEST_PASSWORD = $Password
+$env:TEST_USERNAME = $Username
+
+$cmd = @"
+`$securePassword = ConvertTo-SecureString `$env:TEST_PASSWORD -AsPlainText -Force
+`$cred = New-Object System.Management.Automation.PSCredential(`$env:TEST_USERNAME, `$securePassword)
+& '$scriptPath' -Server '$Server' -Database '$Database' -OutputPath '$OutputPath' -Credential `$cred
+"@
+
+$output = pwsh -NoProfile -Command $cmd 2>&1 | Out-String
+
+# Clean up environment variables after use
+Remove-Item Env:\TEST_PASSWORD -ErrorAction SilentlyContinue
+Remove-Item Env:\TEST_USERNAME -ErrorAction SilentlyContinue
+```
+
+---
+
+## 9. Anti-Patterns to Avoid
 
 - **Concatenating Paths**: `"$Dir\$File"` (Wrong) vs `Join-Path $Dir $File` (Right).
 - **Silent Failures**: Empty `catch {}` blocks.
 - **Global Variables**: Using `$global:Var`. Use `$script:Var` if necessary.
 - **Magic Numbers**: Hardcoding IDs or timeouts without named constants or parameters.
 - **Assumed Defaults**: Always specify `-Encoding UTF8` (or generic) when writing files if the default isn't guaranteed.
+- **Interactive Prompts**: Using `Get-Credential`, `Read-Host`, or omitting mandatory parameters.
+- **Omitting Mandatory Parameters**: Calling Export/Import scripts without `-Server` and `-Database`.

@@ -5,6 +5,66 @@ All notable changes to Export-SqlServerSchema will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.7.1] - 2025-01-28
+
+### Added
+
+**Granular User Type Exclusions (Bug Fix #2)**
+- New exclusion options for database users by authentication type:
+  - `WindowsUsers` - Exclude Windows domain users and groups
+  - `SqlUsers` - Exclude SQL Server login-based users
+  - `ExternalUsers` - Exclude Azure AD users and groups
+  - `CertificateMappedUsers` - Exclude certificate and asymmetric key-mapped users
+- Enables cross-platform exports by excluding Windows users that fail on Linux SQL Server
+- `DatabaseUsers` still works as umbrella exclusion for all user types
+- Example: `excludeObjectTypes: [WindowsUsers]` to export SQL logins only
+
+### Fixed
+
+**removeToPrimary Missing TEXTIMAGE_ON/FILESTREAM_ON (Bug Fix #4)**
+- `fileGroupStrategy: removeToPrimary` now correctly remaps `TEXTIMAGE_ON` and `FILESTREAM_ON` clauses
+- Previously only `ON [FileGroup]` after closing parenthesis was remapped
+- Tables with LOB columns (varchar(max), varbinary(max), xml, etc.) now work correctly
+
+**Memory-Optimized FileGroup Export Syntax (Bug Fix #5)**
+- Fixed export of memory-optimized FileGroups to use correct `CONTAINS MEMORY_OPTIMIZED_DATA` syntax
+- Previously all non-standard FileGroups were exported with `CONTAINS FILESTREAM`
+- Now correctly handles all three FileGroup types: RowsFileGroup, FileStreamDataFileGroup, MemoryOptimizedDataFileGroup
+
+**removeToPrimary with Memory-Optimized Tables (Bug Fix #6)**
+- `fileGroupStrategy: removeToPrimary` now creates required memory-optimized FileGroups
+- Memory-optimized FileGroups cannot be remapped to PRIMARY (they're required infrastructure)
+- Standard and FILESTREAM FileGroups are still skipped as expected
+
+### Improved
+
+**Import Error Reporting (Bug Fix #3)**
+- Errors now shown in RED immediately when they occur (not hidden in verbose output)
+- Shows actual SQL error message inline, not just script name
+- Creates `import_errors_<timestamp>.log` file with full error details
+- Final summary lists all failed scripts with their error messages
+- Programmability dependency retry failures still use appropriate yellow warnings during retries
+- Fixed: Error log is now always written when import fails (even on structural failures or fatal errors)
+- Fixed: Structural script failures now properly record errors to the error log before aborting
+
+**SQL Injection Prevention (Bug Fix #7)**
+- Added `Get-EscapedSqlIdentifier` function to both Export and Import scripts
+- FileGroup names are now escaped when generating ALTER DATABASE statements
+- Database names are now escaped when replacing ALTER DATABASE CURRENT (memory-optimized FileGroups)
+- Prevents second-order SQL injection via malicious object names containing `]` characters
+
+**removeToPrimary Case Sensitivity (Bug Fix #8)**
+- FileGroup remapping regex patterns now use case-insensitive matching for `PRIMARY`
+- Handles scripts with `ON [primary]`, `ON [Primary]`, or any other case variant
+- SQL Server identifiers are case-insensitive, so the regex should be too
+
+**Parallel Export Schema/All Grouping Fixes (Bug Fix #9)**
+- Fixed TableTriggers export to use `04_Triggers` subfolder for all grouping modes (not just single)
+- Fixed `UserDefinedType` lookup to try all three UDT collections (CLR types, alias types, table types)
+- Previously schema/all modes with mixed UDT types would fail to find alias types like `dbo.PhoneNumber`
+
+---
+
 ## [1.7.0] - 2026-01-27
 
 ### Changed

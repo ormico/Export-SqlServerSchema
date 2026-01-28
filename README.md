@@ -465,6 +465,9 @@ Both Export and Import scripts support filtering which object types to process v
 
 # Export everything except Security objects
 ./Export-SqlServerSchema.ps1 -Server localhost -Database MyDb -ExcludeObjectTypes DatabaseRoles,DatabaseUsers
+
+# Export for Linux target (exclude Windows-authenticated users)
+./Export-SqlServerSchema.ps1 -Server localhost -Database MyDb -ExcludeObjectTypes WindowsUsers
 ```
 
 ### Import Filtering
@@ -532,7 +535,11 @@ When importing in multiple passes (e.g., structure first, then programmability),
 | SearchPropertyLists | Yes | Yes | |
 | PlanGuides | Yes | Yes | |
 | DatabaseRoles | Yes | Yes | |
-| DatabaseUsers | Yes | Yes | |
+| DatabaseUsers | Yes | Yes | Umbrella for all user types |
+| WindowsUsers | Yes | Yes | Windows domain users/groups |
+| SqlUsers | Yes | Yes | SQL Server login-based users |
+| ExternalUsers | Yes | Yes | Azure AD users/groups |
+| CertificateMappedUsers | Yes | Yes | Certificate/AsymmetricKey mapped users |
 | SecurityPolicies | Yes | Yes | |
 | Data | Yes | Yes | Requires -IncludeData for import |
 

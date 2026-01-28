@@ -135,8 +135,17 @@ param(
   [ValidateSet('FileGroups', 'DatabaseConfiguration', 'Schemas', 'Sequences', 'PartitionFunctions', 'PartitionSchemes',
     'Types', 'XmlSchemaCollections', 'Tables', 'ForeignKeys', 'Indexes', 'Defaults', 'Rules',
     'Programmability', 'Views', 'Functions', 'StoredProcedures', 'Synonyms', 'SearchPropertyLists',
-    'PlanGuides', 'DatabaseRoles', 'DatabaseUsers', 'SecurityPolicies', 'Data')]
-  [string[]]$IncludeObjectTypes
+    'PlanGuides', 'DatabaseRoles', 'DatabaseUsers', 'WindowsUsers', 'SqlUsers', 'ExternalUsers',
+    'CertificateMappedUsers', 'SecurityPolicies', 'Data')]
+  [string[]]$IncludeObjectTypes,
+
+  [Parameter(HelpMessage = 'Exclude specific object types (overrides config file). Example: WindowsUsers,SqlUsers')]
+  [ValidateSet('FileGroups', 'DatabaseConfiguration', 'Schemas', 'Sequences', 'PartitionFunctions', 'PartitionSchemes',
+    'Types', 'XmlSchemaCollections', 'Tables', 'ForeignKeys', 'Indexes', 'Defaults', 'Rules',
+    'Programmability', 'Views', 'Functions', 'StoredProcedures', 'Synonyms', 'SearchPropertyLists',
+    'PlanGuides', 'DatabaseRoles', 'DatabaseUsers', 'WindowsUsers', 'SqlUsers', 'ExternalUsers',
+    'CertificateMappedUsers', 'SecurityPolicies', 'Data')]
+  [string[]]$ExcludeObjectTypes
 )
 
 $ErrorActionPreference = if ($ContinueOnError) { 'Continue' } else { 'Stop' }
@@ -144,6 +153,14 @@ $script:LogFile = $null  # Will be set during import
 
 # Store IncludeObjectTypes parameter at script level for use in Get-ScriptFiles
 $script:IncludeObjectTypesFilter = $IncludeObjectTypes
+
+# Store ExcludeObjectTypes parameter at script level for use in Get-ScriptFiles
+$script:ExcludeObjectTypesFilter = $ExcludeObjectTypes
+
+# Error tracking for improved reporting (Bug 3 fix)
+# Stores final failures (not temporary retry failures) for summary display
+$script:FailedScripts = [System.Collections.ArrayList]::new()
+$script:LastScriptError = $null  # Stores last error from Invoke-SqlScript for caller access
 
 # Performance metrics tracking (when -CollectMetrics is used)
 $script:Metrics = @{
@@ -363,6 +380,94 @@ function Test-Dependencies {
   }
 }
 
+function Add-FailedScript {
+  <#
+    .SYNOPSIS
+        Records a script failure for error summary reporting.
+    .DESCRIPTION
+        Adds a failed script entry to the script-level FailedScripts collection.
+        These are displayed in the final summary and written to the error log.
+    .PARAMETER ScriptName
+        Name of the failed script file.
+    .PARAMETER ErrorMessage
+        The error message (preferably the innermost SQL error).
+    .PARAMETER Folder
+        The folder the script belongs to (e.g., '09_Tables_PrimaryKey').
+    .PARAMETER IsFinal
+        Whether this is a final failure (not a temporary retry failure).
+  #>
+  param(
+    [Parameter(Mandatory)]
+    [string]$ScriptName,
+
+    [Parameter(Mandatory)]
+    [string]$ErrorMessage,
+
+    [string]$Folder = '',
+
+    [bool]$IsFinal = $true
+  )
+
+  if (-not $IsFinal) { return }
+
+  # Extract the most useful error message (innermost exception)
+  $shortError = $ErrorMessage -split "`n" | Where-Object { $_ -match 'Error \d+:|Message:' } | Select-Object -First 1
+  if (-not $shortError) { $shortError = ($ErrorMessage -split "`n")[0] }
+  $shortError = $shortError.Trim() -replace '^\s*-?\s*', ''
+
+  [void]$script:FailedScripts.Add([PSCustomObject]@{
+    ScriptName   = $ScriptName
+    Folder       = $Folder
+    ErrorMessage = $shortError
+    FullError    = $ErrorMessage
+    Timestamp    = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+  })
+}
+
+function Write-ErrorLog {
+  <#
+    .SYNOPSIS
+        Writes the error log file with all failed scripts.
+    .PARAMETER SourcePath
+        The source path where the error log will be created.
+  #>
+  param(
+    [Parameter(Mandatory)]
+    [string]$SourcePath
+  )
+
+  if ($script:FailedScripts.Count -eq 0) { return $null }
+
+  [string]$timestamp = Get-Date -Format 'yyyyMMdd_HHmmss'
+  [string]$fileName = "import_errors_$timestamp.log"
+  $logPath = Join-Path $SourcePath $fileName
+  $sb = [System.Text.StringBuilder]::new()
+
+  [void]$sb.AppendLine("Import Error Log - $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')")
+  [void]$sb.AppendLine("=" * 80)
+  [void]$sb.AppendLine("")
+
+  $index = 1
+  foreach ($failure in $script:FailedScripts) {
+    [void]$sb.AppendLine("[$index] $($failure.ScriptName)")
+    [void]$sb.AppendLine("    Folder: $($failure.Folder)")
+    [void]$sb.AppendLine("    Time: $($failure.Timestamp)")
+    [void]$sb.AppendLine("    Error: $($failure.ErrorMessage)")
+    [void]$sb.AppendLine("")
+    [void]$sb.AppendLine("    Full Error Details:")
+    foreach ($line in ($failure.FullError -split "`n")) {
+      [void]$sb.AppendLine("      $line")
+    }
+    [void]$sb.AppendLine("")
+    [void]$sb.AppendLine("-" * 80)
+    [void]$sb.AppendLine("")
+    $index++
+  }
+
+  Set-Content -Path $logPath -Value $sb.ToString() -Encoding UTF8
+  return $logPath
+}
+
 function Get-TargetServerOS {
   <#
     .SYNOPSIS
@@ -533,6 +638,66 @@ function Get-FileGroupFileSizeValues {
     SizeKB      = $sizeKB
     GrowthValue = $growthValue
   }
+}
+
+function Get-MemoryOptimizedFileGroupSql {
+  <#
+    .SYNOPSIS
+    Extracts memory-optimized FileGroup creation SQL from a FileGroups script.
+    .DESCRIPTION
+    Memory-optimized FileGroups cannot be remapped to PRIMARY - they're required infrastructure
+    for In-Memory OLTP tables. This function parses the FileGroups SQL file and extracts
+    only the blocks for MEMORY_OPTIMIZED_DATA FileGroups.
+    .PARAMETER FilePath
+    Path to the 001_FileGroups.sql file.
+    .OUTPUTS
+    Array of SQL blocks for memory-optimized FileGroups, or empty array if none found.
+  #>
+  param(
+    [Parameter(Mandatory)]
+    [string]$FilePath
+  )
+
+  if (-not (Test-Path $FilePath)) {
+    return @()
+  }
+
+  $content = Get-Content $FilePath -Raw
+  $memoryOptimizedBlocks = @()
+
+  # Split into blocks by GO statements
+  $blocks = $content -split '(?m)^GO\s*$'
+
+  $currentType = $null
+  $currentBlock = @()
+
+  foreach ($block in $blocks) {
+    $trimmedBlock = $block.Trim()
+    if ([string]::IsNullOrWhiteSpace($trimmedBlock)) { continue }
+
+    # Check if this block defines a FileGroup type
+    if ($trimmedBlock -match '-- Type:\s*(MemoryOptimizedDataFileGroup)') {
+      $currentType = 'MemoryOptimized'
+    }
+    elseif ($trimmedBlock -match '-- Type:\s*(RowsFileGroup|FileStreamDataFileGroup)') {
+      $currentType = 'Standard'
+    }
+    elseif ($trimmedBlock -match '-- FileGroup:') {
+      # New FileGroup starting, reset type
+      $currentType = $null
+    }
+
+    # If we're in a memory-optimized context, collect blocks
+    if ($currentType -eq 'MemoryOptimized') {
+      # Include ADD FILEGROUP and ADD FILE blocks
+      if ($trimmedBlock -match 'ADD FILEGROUP.*MEMORY_OPTIMIZED_DATA' -or
+          ($trimmedBlock -match 'ALTER DATABASE.*ADD FILE' -and $trimmedBlock -match 'TO FILEGROUP')) {
+        $memoryOptimizedBlocks += $trimmedBlock
+      }
+    }
+  }
+
+  return $memoryOptimizedBlocks
 }
 
 function Get-DefaultDataPath {
@@ -936,13 +1101,30 @@ function Invoke-SqlScript {
       $varValue = $SqlCmdVariables[$varName]
       $sql = $sql -replace [regex]::Escape("`$($varName)"), $varValue
     }
+    
+    # Handle memory-optimized FileGroups - remove SIZE/FILEGROWTH clauses marked for removal
+    # Memory-optimized containers don't support SIZE/FILEGROWTH
+    if ($sql -match '__MEMORY_OPTIMIZED_REMOVE__') {
+      # Remove SIZE = __MEMORY_OPTIMIZED_REMOVE__ and , FILEGROWTH = __MEMORY_OPTIMIZED_REMOVE__
+      $sql = $sql -replace ',?\s*SIZE\s*=\s*__MEMORY_OPTIMIZED_REMOVE__', ''
+      $sql = $sql -replace ',?\s*FILEGROWTH\s*=\s*__MEMORY_OPTIMIZED_REMOVE__', ''
+    }
 
     # Transform FileGroup references to PRIMARY when using removeToPrimary strategy
     if ($SqlCmdVariables.ContainsKey('__RemapFileGroupsToPrimary__')) {
 
       # 1. Tables/Indexes: Replace ) ON [FileGroup] with ) ON [PRIMARY]
       #    Pattern: closing paren followed by ON [anything-except-PRIMARY]
-      $sql = $sql -replace '\)\s*ON\s*\[(?!PRIMARY\])[^\]]+\]', ') ON [PRIMARY]'
+      #    Uses (?i) for case-insensitive PRIMARY match (SQL identifiers are case-insensitive)
+      $sql = $sql -replace '\)\s*ON\s*\[(?!(?i)PRIMARY\])[^\]]+\]', ') ON [PRIMARY]'
+
+      # 1b. TEXTIMAGE_ON [FileGroup] -> TEXTIMAGE_ON [PRIMARY]
+      #     For LOB data (text, ntext, image, varchar(max), etc.)
+      $sql = $sql -replace 'TEXTIMAGE_ON\s*\[(?!(?i)PRIMARY\])[^\]]+\]', 'TEXTIMAGE_ON [PRIMARY]'
+
+      # 1c. FILESTREAM_ON [FileGroup] -> FILESTREAM_ON [PRIMARY]
+      #     For FILESTREAM data columns
+      $sql = $sql -replace 'FILESTREAM_ON\s*\[(?!(?i)PRIMARY\])[^\]]+\]', 'FILESTREAM_ON [PRIMARY]'
 
       # 2. Partition Schemes (TO ...): Replace TO ([FG1], [FG2], ...) with ALL TO ([PRIMARY])
       #    Pattern: TO ( followed by list of filegroups in brackets
@@ -956,7 +1138,9 @@ function Invoke-SqlScript {
 
     # Replace ALTER DATABASE CURRENT with actual database name
     # CURRENT keyword doesn't work with SMO ExecuteNonQuery
-    $sql = $sql -replace '\bALTER\s+DATABASE\s+CURRENT\b', "ALTER DATABASE [$DatabaseName]"
+    # Escape the database name to prevent SQL injection via ] characters
+    $escapedDbName = Get-EscapedSqlIdentifier -Name $DatabaseName
+    $sql = $sql -replace '\bALTER\s+DATABASE\s+CURRENT\b', "ALTER DATABASE [$escapedDbName]"
 
     # For FileGroups scripts, ensure logical file names are unique by prefixing with database name
     # This prevents conflicts when multiple databases on same server use similar schema
@@ -1052,6 +1236,7 @@ For more details, see: https://go.microsoft.com/fwlink/?linkid=2226722
 
     # Output success message to Verbose stream only (quiet by default for performance)
     Write-Verbose "  [SUCCESS] Applied: $scriptName"
+    $script:LastScriptError = $null
     return $true
   }
   catch {
@@ -1079,6 +1264,9 @@ For more details, see: https://go.microsoft.com/fwlink/?linkid=2226722
       }
       $level++
     }
+
+    # Store error for caller to access (structural scripts need this for error reporting)
+    $script:LastScriptError = $errorMessage
 
     # Use Write-Verbose for retry attempts (failure may be temporary due to dependencies)
     # The calling code will use Write-Error if all retries fail
@@ -1203,7 +1391,11 @@ function Invoke-ScriptsWithDependencyRetries {
       }
       catch {
         $result = -1
-        $scriptError = $_
+        # Convert error record to string for consistent error handling
+        $scriptError = $_.Exception.Message
+        if ($_.Exception.InnerException) {
+          $scriptError += "`n  Inner: $($_.Exception.InnerException.Message)"
+        }
       }
 
       $ErrorActionPreference = 'Stop'  # Restore default
@@ -1245,18 +1437,40 @@ function Invoke-ScriptsWithDependencyRetries {
   if ($pendingScripts.Count -gt 0) {
     $failureCount = $pendingScripts.Count
     Write-Output ''
-    Write-Host "[WARNING] $failureCount script(s) failed after $MaxRetries retry attempt(s):" -ForegroundColor Yellow
+    Write-Host "[ERROR] $failureCount script(s) failed after $MaxRetries retry attempt(s):" -ForegroundColor Red
+
     foreach ($failedScript in $pendingScripts) {
-      Write-Host "  - $($failedScript.Name)" -ForegroundColor Yellow
-      # Show last captured error if available
-      if ($failedScriptErrors.ContainsKey($failedScript.Name)) {
-        $lastError = $failedScriptErrors[$failedScript.Name]
-        Write-Verbose "    Last error: $lastError"
+      # Get the error message for display - ensure it's a string
+      $errorMsg = if ($failedScriptErrors.ContainsKey($failedScript.Name)) {
+        $rawError = $failedScriptErrors[$failedScript.Name]
+        # Convert ErrorRecord or other objects to string
+        if ($rawError -is [System.Management.Automation.ErrorRecord]) {
+          $rawError.Exception.Message
+        } elseif ($rawError -is [string]) {
+          $rawError
+        } else {
+          [string]$rawError
+        }
+      } else {
+        'Unknown error'
       }
+
+      # Extract short error for display
+      $shortError = $errorMsg -split "`n" | Where-Object { $_ -match 'Error \d+:|Message:' } | Select-Object -First 1
+      if (-not $shortError) { $shortError = ($errorMsg -split "`n")[0] }
+      $shortError = $shortError.Trim() -replace '^\s*-?\s*', ''
+
+      Write-Host "  - $($failedScript.Name)" -ForegroundColor Red
+      Write-Host "    $shortError" -ForegroundColor DarkRed
+
+      # Record for final summary
+      Add-FailedScript -ScriptName $failedScript.Name -ErrorMessage $errorMsg -Folder '14_Programmability' -IsFinal $true
     }
 
     if (-not $ContinueOnError) {
-      Write-Error "[ERROR] Dependency retry limit reached with $failureCount failed script(s). Enable -Verbose for error details."
+      # Don't use Write-Error as it terminates before error log can be written
+      # Returning failure count allows caller to handle gracefully
+      Write-Host "[ERROR] Dependency retry limit reached with $failureCount failed script(s). Aborting import after writing error log." -ForegroundColor Red
     }
   }
   else {
@@ -1268,6 +1482,208 @@ function Invoke-ScriptsWithDependencyRetries {
     Failure = $failureCount
     Skip    = $skipCount
   }
+}
+
+function Get-EscapedSqlIdentifier {
+  <#
+    .SYNOPSIS
+        Escapes a SQL Server identifier for safe use in bracketed notation.
+    .DESCRIPTION
+        SQL Server uses square brackets [] to delimit identifiers. To include a literal
+        ] character within a bracketed identifier, it must be escaped as ]].
+        This function ensures identifiers are safe from second-order SQL injection
+        via malicious object names stored in the database.
+    .PARAMETER Name
+        The identifier name to escape.
+    .OUTPUTS
+        The escaped identifier name (without surrounding brackets).
+    .EXAMPLE
+        Get-EscapedSqlIdentifier -Name 'Normal_Name'
+        # Returns: Normal_Name
+    .EXAMPLE
+        Get-EscapedSqlIdentifier -Name 'Malicious]; DROP TABLE Users;--'
+        # Returns: Malicious]]; DROP TABLE Users;--
+    #>
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$Name
+  )
+
+  # Escape ] as ]] to prevent breaking out of bracketed identifier context
+  return $Name -replace '\]', ']]'
+}
+
+function Test-ScriptExcluded {
+  <#
+    .SYNOPSIS
+        Checks if a script file should be excluded based on ExcludeObjectTypes settings.
+    .DESCRIPTION
+        Determines exclusion based on folder path and filename patterns.
+        Supports granular user type exclusions (WindowsUsers, SqlUsers, etc.).
+    .PARAMETER ScriptPath
+        Full path to the script file.
+    .PARAMETER ExcludeTypes
+        Array of object types to exclude.
+    .OUTPUTS
+        $true if script should be excluded, $false otherwise.
+  #>
+  param(
+    [string]$ScriptPath,
+    [string[]]$ExcludeTypes
+  )
+
+  if (-not $ExcludeTypes -or $ExcludeTypes.Count -eq 0) {
+    return $false
+  }
+
+  $fileName = Split-Path $ScriptPath -Leaf
+  $relativePath = $ScriptPath
+
+  # Build exclusion patterns based on ExcludeTypes
+  foreach ($excludeType in $ExcludeTypes) {
+    switch ($excludeType) {
+      'FileGroups' {
+        if ($relativePath -match '00_FileGroups') { return $true }
+      }
+      'DatabaseConfiguration' {
+        if ($relativePath -match '02_DatabaseConfiguration') { return $true }
+      }
+      'Schemas' {
+        if ($relativePath -match '03_Schemas') { return $true }
+      }
+      'Sequences' {
+        if ($relativePath -match '04_Sequences') { return $true }
+      }
+      'PartitionFunctions' {
+        if ($relativePath -match '05_PartitionFunctions') { return $true }
+      }
+      'PartitionSchemes' {
+        if ($relativePath -match '06_PartitionSchemes') { return $true }
+      }
+      'Types' {
+        if ($relativePath -match '07_Types') { return $true }
+      }
+      'XmlSchemaCollections' {
+        if ($relativePath -match '08_XmlSchemaCollections') { return $true }
+      }
+      'Tables' {
+        if ($relativePath -match '09_Tables|10_Tables') { return $true }
+      }
+      'ForeignKeys' {
+        if ($relativePath -match '10_Tables.*ForeignKeys') { return $true }
+      }
+      'Indexes' {
+        if ($relativePath -match '11_Indexes') { return $true }
+      }
+      'Defaults' {
+        if ($relativePath -match '12_Defaults') { return $true }
+      }
+      'Rules' {
+        if ($relativePath -match '13_Rules') { return $true }
+      }
+      'Programmability' {
+        if ($relativePath -match '14_Programmability') { return $true }
+      }
+      'Views' {
+        if ($relativePath -match '14_Programmability[\\/]05_Views') { return $true }
+      }
+      'Functions' {
+        if ($relativePath -match '14_Programmability[\\/]02_Functions') { return $true }
+      }
+      'StoredProcedures' {
+        if ($relativePath -match '14_Programmability[\\/]03_StoredProcedures') { return $true }
+      }
+      'Synonyms' {
+        if ($relativePath -match '15_Synonyms') { return $true }
+      }
+      'SearchPropertyLists' {
+        if ($relativePath -match '18_SearchPropertyLists') { return $true }
+      }
+      'PlanGuides' {
+        if ($relativePath -match '19_PlanGuides') { return $true }
+      }
+      'DatabaseRoles' {
+        # Exclude .role.sql files in 01_Security
+        if ($relativePath -match '01_Security' -and $fileName -match '\.role\.sql$') { return $true }
+      }
+      'DatabaseUsers' {
+        # Exclude ALL .user.sql files (umbrella exclusion)
+        if ($relativePath -match '01_Security' -and $fileName -match '\.user\.sql$') { return $true }
+      }
+      'WindowsUsers' {
+        # Exclude Windows domain user files based on file CONTENT (not filename pattern)
+        # Detection: File contains "FOR LOGIN [DOMAIN\Username]" where login name has a backslash
+        # Example filenames: "dbo.DOMAIN.TestUser.user.sql", "dbo.NT SERVICE.SQLSERVERAGENT.user.sql"
+        # Filename patterns vary widely - we inspect the SQL content for reliable detection
+        if ($relativePath -match '01_Security' -and $fileName -match '\.user\.sql$') {
+          $content = Get-Content $ScriptPath -Raw -ErrorAction SilentlyContinue
+          if ($content) {
+            # Extract login name from: FOR LOGIN [loginname]
+            if ($content -match 'FOR LOGIN\s*\[([^\]]+)\]') {
+              $loginName = $matches[1]
+              # Windows logins contain backslash: DOMAIN\User, NT SERVICE\name, etc.
+              if ($loginName -match '\\') {
+                return $true
+              }
+            }
+          }
+        }
+      }
+      'SqlUsers' {
+        # Exclude SQL Server login mapped users based on file CONTENT
+        # Detection: File contains "FOR LOGIN [username]" where login name has NO backslash
+        #            and is NOT an external provider (Azure AD)
+        # Also includes: "WITHOUT LOGIN" users (contained database users)
+        # Example filenames: "dbo.AppUser.user.sql", "dbo.sa.user.sql"
+        if ($relativePath -match '01_Security' -and $fileName -match '\.user\.sql$') {
+          $content = Get-Content $ScriptPath -Raw -ErrorAction SilentlyContinue
+          if ($content) {
+            if ($content -match 'FOR LOGIN\s*\[([^\]]+)\]') {
+              $loginName = $matches[1]
+              # SQL logins: no backslash (not Windows), not external provider (not Azure AD)
+              if ($loginName -notmatch '\\' -and $content -notmatch 'EXTERNAL PROVIDER') {
+                return $true
+              }
+            }
+            # WITHOUT LOGIN users are SQL type (contained database users)
+            if ($content -match 'WITHOUT LOGIN') {
+              return $true
+            }
+          }
+        }
+      }
+      'ExternalUsers' {
+        # Exclude Azure AD / External provider users based on file CONTENT
+        # Detection: File contains "EXTERNAL PROVIDER" or "FROM EXTERNAL PROVIDER"
+        # Example filenames: "dbo.user@domain.com.user.sql", "dbo.AzureADGroup.user.sql"
+        if ($relativePath -match '01_Security' -and $fileName -match '\.user\.sql$') {
+          $content = Get-Content $ScriptPath -Raw -ErrorAction SilentlyContinue
+          if ($content -match 'EXTERNAL PROVIDER|FROM EXTERNAL PROVIDER') {
+            return $true
+          }
+        }
+      }
+      'CertificateMappedUsers' {
+        # Exclude certificate or asymmetric key mapped users based on file CONTENT
+        # Detection: File contains "FOR CERTIFICATE" or "FOR ASYMMETRIC KEY"
+        # Example filenames: "dbo.CertUser.user.sql", "dbo.KeyMappedUser.user.sql"
+        if ($relativePath -match '01_Security' -and $fileName -match '\.user\.sql$') {
+          $content = Get-Content $ScriptPath -Raw -ErrorAction SilentlyContinue
+          if ($content -match 'FOR CERTIFICATE|FOR ASYMMETRIC KEY') {
+            return $true
+          }
+        }
+      }
+      'SecurityPolicies' {
+        if ($relativePath -match '20_SecurityPolicies') { return $true }
+      }
+      'Data' {
+        if ($relativePath -match '21_Data') { return $true }
+      }
+    }
+  }
+
+  return $false
 }
 
 function Get-ScriptFiles {
@@ -1349,7 +1765,7 @@ function Get-ScriptFiles {
     } else {
       'autoRemap'  # Default strategy
     }
-    
+
     if ($prodStrategy -eq 'autoRemap') {
       $sourceFileGroups = Join-Path $Path '00_FileGroups'
       if (Test-Path $sourceFileGroups) {
@@ -1529,6 +1945,19 @@ function Get-ScriptFiles {
     }
   }
 
+  # Apply ExcludeObjectTypes filter if specified (command-line parameter)
+  if ($script:ExcludeObjectTypesFilter -and $script:ExcludeObjectTypesFilter.Count -gt 0) {
+    Write-Verbose "Applying ExcludeObjectTypes filter: $($script:ExcludeObjectTypesFilter -join ', ')"
+    $originalCount = $scripts.Count
+    $scripts = @($scripts | Where-Object {
+        -not (Test-ScriptExcluded -ScriptPath $_.FullName -ExcludeTypes $script:ExcludeObjectTypesFilter)
+      })
+    $excludedCount = $originalCount - $scripts.Count
+    if ($excludedCount -gt 0) {
+      Write-Output "  [INFO] Excluded $excludedCount script(s) based on ExcludeObjectTypes filter"
+    }
+  }
+
   # Track skipped folders for reporting
   $allPossibleDirs = @('00_FileGroups', '02_DatabaseConfiguration', '17_ExternalData', '20_SecurityPolicies', '21_Data')
   foreach ($dir in $allPossibleDirs) {
@@ -1645,6 +2074,16 @@ function Show-ImportConfiguration {
   Write-Host $(if ($DatabaseCreation) { "Yes" } else { "No" }) -ForegroundColor White
   Write-Host "Include Data: " -NoNewline -ForegroundColor Gray
   Write-Host $(if ($DataImport) { "Yes" } else { "No" }) -ForegroundColor White
+
+  # Display Include/Exclude object type filters if active
+  if ($script:IncludeObjectTypesFilter -and $script:IncludeObjectTypesFilter.Count -gt 0) {
+    Write-Host "Include Types: " -NoNewline -ForegroundColor Gray
+    Write-Host ($script:IncludeObjectTypesFilter -join ', ') -ForegroundColor Cyan
+  }
+  if ($script:ExcludeObjectTypesFilter -and $script:ExcludeObjectTypesFilter.Count -gt 0) {
+    Write-Host "Exclude Types: " -NoNewline -ForegroundColor Gray
+    Write-Host ($script:ExcludeObjectTypesFilter -join ', ') -ForegroundColor Yellow
+  }
 
   Write-Host ""
   Write-Host "IMPORT STRATEGY ($Mode Mode)" -ForegroundColor Yellow
@@ -1847,6 +2286,14 @@ try {
         if ($config.import.includeObjectTypes -and $config.import.includeObjectTypes.Count -gt 0) {
           $script:IncludeObjectTypesFilter = $config.import.includeObjectTypes
           Write-Verbose "[INFO] IncludeObjectTypes set from config file: $($config.import.includeObjectTypes -join ', ')"
+        }
+      }
+
+      # Override ExcludeObjectTypes from config ONLY if not explicitly set on command line
+      if (-not $PSBoundParameters.ContainsKey('ExcludeObjectTypes')) {
+        if ($config.import.excludeObjectTypes -and $config.import.excludeObjectTypes.Count -gt 0) {
+          $script:ExcludeObjectTypesFilter = $config.import.excludeObjectTypes
+          Write-Verbose "[INFO] ExcludeObjectTypes set from config file: $($config.import.excludeObjectTypes -join ', ')"
         }
       }
     }
@@ -2240,6 +2687,7 @@ try {
         $currentFG = $null
         $currentFileName = $null
         $fileIndex = @{}  # Track file count per FileGroup for uniqueness
+        $currentFGType = 'Standard'  # Track FileGroup type (Standard vs MemoryOptimized)
 
         foreach ($line in (Get-Content $fileGroupScript)) {
           if ($line -match '-- FileGroup: (.+)') {
@@ -2258,6 +2706,13 @@ try {
 
             $currentFG = $fgName
             $fileIndex[$currentFG] = 0
+            $currentFGType = 'Standard'  # Reset for new FileGroup
+          }
+          elseif ($line -match '-- Type:\s*(MemoryOptimizedDataFileGroup)') {
+            $currentFGType = 'MemoryOptimized'
+          }
+          elseif ($line -match '-- Type:\s*(RowsFileGroup|FileStreamDataFileGroup)') {
+            $currentFGType = 'Standard'
           }
           elseif ($line -match '-- File: (.+)' -and $currentFG) {
             $originalFileName = $matches[1].Trim()
@@ -2272,9 +2727,16 @@ try {
             $fileIndex[$currentFG]++
             $currentFileName = $originalFileName
 
-            # Build unique filename: DatabaseName_FileGroupName_OriginalName.ndf
+            # Build unique filename: DatabaseName_FileGroupName_OriginalName
             $uniqueFileName = "${sanitizedDbName}_${currentFG}_${originalFileName}"
-            $fullPath = "${defaultDataPath}${pathSeparator}${uniqueFileName}.ndf"
+            
+            # Memory-optimized FileGroups use directories (no extension)
+            # Regular FileGroups use .ndf files
+            if ($currentFGType -eq 'MemoryOptimized') {
+              $fullPath = "${defaultDataPath}${pathSeparator}${uniqueFileName}"
+            } else {
+              $fullPath = "${defaultDataPath}${pathSeparator}${uniqueFileName}.ndf"
+            }
 
             # Set the SQLCMD variables (PATH, SIZE, GROWTH)
             # Preserve original behavior for first file, add numeric suffix for additional files
@@ -2292,17 +2754,25 @@ try {
             $sqlCmdVars[$pathVarName] = $fullPath
             Write-Verbose "  Auto-mapped: `$($pathVarName) = $fullPath"
 
-            # Get SIZE and GROWTH values from config or metadata using helper function
-            $fileSizeValues = Get-FileGroupFileSizeValues `
-              -FileGroupName $currentFG `
-              -FileName $originalFileName `
-              -FgSizeDefaults $fgSizeDefaults `
-              -ExportMetadata $exportMetadata
+            # Memory-optimized FileGroups don't use SIZE/GROWTH - use special marker
+            if ($currentFGType -eq 'MemoryOptimized') {
+              # Mark these for special handling in Invoke-SqlScript
+              $sqlCmdVars[$sizeVarName] = '__MEMORY_OPTIMIZED_REMOVE__'
+              $sqlCmdVars[$growthVarName] = '__MEMORY_OPTIMIZED_REMOVE__'
+              Write-Verbose "  Memory-optimized FileGroup - SIZE/GROWTH will be removed"
+            } else {
+              # Get SIZE and GROWTH values from config or metadata using helper function
+              $fileSizeValues = Get-FileGroupFileSizeValues `
+                -FileGroupName $currentFG `
+                -FileName $originalFileName `
+                -FgSizeDefaults $fgSizeDefaults `
+                -ExportMetadata $exportMetadata
 
-            $sqlCmdVars[$sizeVarName] = "$($fileSizeValues.SizeKB)KB"
-            $sqlCmdVars[$growthVarName] = $fileSizeValues.GrowthValue
-            Write-Verbose "  Auto-mapped: `$($sizeVarName) = $($fileSizeValues.SizeKB)KB"
-            Write-Verbose "  Auto-mapped: `$($growthVarName) = $($fileSizeValues.GrowthValue)"
+              $sqlCmdVars[$sizeVarName] = "$($fileSizeValues.SizeKB)KB"
+              $sqlCmdVars[$growthVarName] = $fileSizeValues.GrowthValue
+              Write-Verbose "  Auto-mapped: `$($sizeVarName) = $($fileSizeValues.SizeKB)KB"
+              Write-Verbose "  Auto-mapped: `$($growthVarName) = $($fileSizeValues.GrowthValue)"
+            }
           }
         }
       }
@@ -2312,6 +2782,30 @@ try {
       Write-Warning "  Falling back to FileGroup strategy: removeToPrimary (all FileGroups will map to PRIMARY)."
       $sqlCmdVars['__RemapFileGroupsToPrimary__'] = $true
       Write-Warning "  To customize FileGroup paths, provide fileGroupPathMapping in config or define SQLCMD variables explicitly."
+
+      # Bug 6 Fix: Even in fallback mode, create memory-optimized FileGroups (they can't be remapped to PRIMARY)
+      $fileGroupScript = Join-Path $SourcePath '00_FileGroups' '001_FileGroups.sql'
+      if (Test-Path $fileGroupScript) {
+        $memoryOptimizedSql = Get-MemoryOptimizedFileGroupSql -FilePath $fileGroupScript
+        if ($memoryOptimizedSql.Count -gt 0) {
+          Write-Output "[INFO] Found $($memoryOptimizedSql.Count) memory-optimized FileGroup block(s) - these cannot be remapped to PRIMARY"
+          Write-Output "[INFO] Creating required memory-optimized FileGroups..."
+
+          foreach ($sqlBlock in $memoryOptimizedSql) {
+            # Escape the database name to prevent SQL injection via ] characters
+            $escapedDbName = Get-EscapedSqlIdentifier -Name $Database
+            $sql = $sqlBlock -replace '\bALTER\s+DATABASE\s+CURRENT\b', "ALTER DATABASE [$escapedDbName]"
+            try {
+              $script:SharedConnection.ConnectionContext.ExecuteNonQuery($sql) | Out-Null
+              Write-Verbose "  Executed memory-optimized FileGroup SQL block"
+            }
+            catch {
+              Write-Host "  [ERROR] Failed to create memory-optimized FileGroup: $_" -ForegroundColor Red
+            }
+          }
+          Write-Output "[SUCCESS] Memory-optimized FileGroup(s) created"
+        }
+      }
     }
   }
 
@@ -2334,6 +2828,61 @@ try {
     if ($fileGroupStrategy -eq 'removeToPrimary') {
       $sqlCmdVars['__RemapFileGroupsToPrimary__'] = $true
       Write-Output "[INFO] FileGroup strategy: removeToPrimary - all FileGroup references will map to PRIMARY"
+
+      # Bug 6 Fix: Memory-optimized FileGroups cannot be remapped to PRIMARY - they must be created
+      $fileGroupScript = Join-Path $SourcePath '00_FileGroups' '001_FileGroups.sql'
+      if (Test-Path $fileGroupScript) {
+        $memoryOptimizedSql = Get-MemoryOptimizedFileGroupSql -FilePath $fileGroupScript
+        if ($memoryOptimizedSql.Count -gt 0) {
+          Write-Output "[INFO] Found $($memoryOptimizedSql.Count) memory-optimized FileGroup block(s) - these cannot be remapped to PRIMARY"
+          Write-Output "[INFO] Creating required memory-optimized FileGroups..."
+
+          # Get default data path for memory-optimized container
+          $memOptDataPath = Get-DefaultDataPath -Connection $script:SharedConnection
+          if (-not $memOptDataPath) {
+            Write-Warning "[WARNING] Could not detect default data path - memory-optimized FileGroup may fail"
+            $memOptDataPath = 'C:\Data'  # Fallback
+          }
+          
+          # Determine path separator based on detected path format
+          $memOptPathSep = if ($memOptDataPath -match '^/') { '/' } else { '\' }
+          
+          # SECURITY: Sanitize database name for filesystem path
+          $sanitizedDbName = $Database -replace '[^a-zA-Z0-9_-]', '_'
+
+          foreach ($sqlBlock in $memoryOptimizedSql) {
+            # Replace ALTER DATABASE CURRENT with actual database name
+            # Escape the database name to prevent SQL injection via ] characters
+            $escapedDbName = Get-EscapedSqlIdentifier -Name $Database
+            $sql = $sqlBlock -replace '\bALTER\s+DATABASE\s+CURRENT\b', "ALTER DATABASE [$escapedDbName]"
+            
+            # Replace SQLCMD variables for memory-optimized FileGroups
+            # Pattern: $(FG_NAME_PATH_FILE), $(FG_NAME_SIZE), $(FG_NAME_GROWTH)
+            if ($sql -match '\$\(([A-Za-z0-9_]+)_PATH_FILE\)') {
+              $fgName = $matches[1]
+              # Memory-optimized uses a folder, not a file (no extension)
+              $containerPath = "${memOptDataPath}${memOptPathSep}${sanitizedDbName}_${fgName}"
+              $varPattern = [regex]::Escape("`$(" + $fgName + "_PATH_FILE)")
+              $sql = $sql -replace $varPattern, $containerPath
+              
+              # Memory-optimized containers don't use SIZE/FILEGROWTH - remove these clauses entirely
+              # SIZE = value and , FILEGROWTH = value need to be removed
+              $sql = $sql -replace ',?\s*SIZE\s*=\s*\$\([A-Za-z0-9_]+_SIZE\)', ''
+              $sql = $sql -replace ',?\s*FILEGROWTH\s*=\s*\$\([A-Za-z0-9_]+_GROWTH\)', ''
+            }
+
+            try {
+              $script:SharedConnection.ConnectionContext.ExecuteNonQuery($sql) | Out-Null
+              Write-Verbose "  Executed memory-optimized FileGroup SQL block"
+            }
+            catch {
+              Write-Host "  [ERROR] Failed to create memory-optimized FileGroup: $_" -ForegroundColor Red
+              # Continue - don't abort the entire import for this
+            }
+          }
+          Write-Output "[SUCCESS] Memory-optimized FileGroup(s) created"
+        }
+      }
     }
   }
 
@@ -2485,8 +3034,23 @@ try {
 
   Write-Verbose "[RETRY] Found $($programmabilityScripts.Count) programmability scripts, $($securityPolicyScripts.Count) security policy scripts, $($structuralScripts.Count) structural scripts"
 
+  # Track current folder for error reporting
+  $currentFolder = ''
+  # Flag to track if we should abort after structural failures (but still write error log)
+  $abortAfterStructuralFailure = $false
+
   # Process structural scripts first (no retry logic - these define structure)
   foreach ($scriptFile in $structuralScripts) {
+    # Skip remaining scripts if we've already decided to abort
+    if ($abortAfterStructuralFailure) { break }
+
+    # Extract folder from path for error reporting
+    $relativePath = $scriptFile.FullName -replace [regex]::Escape($SourcePath), '' -replace '^[\\/]', ''
+    $scriptFolder = ($relativePath -split '[\\/]')[0]
+    if ($scriptFolder -ne $currentFolder) {
+      $currentFolder = $scriptFolder
+    }
+
     $result = Invoke-WithRetry -MaxAttempts $effectiveMaxRetries -InitialDelaySeconds $effectiveRetryDelay -OperationName "Script: $($scriptFile.Name)" -ScriptBlock {
       Invoke-SqlScript -FilePath $scriptFile.FullName -ServerName $Server `
         -DatabaseName $Database -Cred $Credential -Timeout $effectiveCommandTimeout -Show:$ShowSQL `
@@ -2498,10 +3062,23 @@ try {
     }
     elseif ($result -eq -1) {
       $failureCount++
+
+      # Get and display error immediately (structural failures are fatal)
+      $errorMsg = if ($script:LastScriptError) { $script:LastScriptError } else { 'Unknown error' }
+      $shortError = $errorMsg -split "`n" | Where-Object { $_ -match 'Error \d+:|Message:' } | Select-Object -First 1
+      if (-not $shortError) { $shortError = ($errorMsg -split "`n")[0] }
+      $shortError = $shortError.Trim() -replace '^\s*-?\s*', ''
+
+      Write-Host "  [ERROR] $($scriptFile.Name)" -ForegroundColor Red
+      Write-Host "    $shortError" -ForegroundColor DarkRed
+
+      # Record for final summary
+      Add-FailedScript -ScriptName $scriptFile.Name -ErrorMessage $errorMsg -Folder $currentFolder -IsFinal $true
+
       if (-not $ContinueOnError) {
-        # Don't process programmability scripts if structural scripts failed
-        Write-Error "[ERROR] Structural script failed. Aborting import."
-        break
+        # Set flag to abort - but don't throw error so we can still write error log
+        $abortAfterStructuralFailure = $true
+        Write-Host "[ERROR] Structural script failed. Aborting import after writing error log." -ForegroundColor Red
       }
     }
     else {
@@ -2509,8 +3086,8 @@ try {
     }
   }
 
-  # Process programmability scripts with dependency retry logic (only if no structural failures)
-  if ($programmabilityScripts.Count -gt 0 -and ($failureCount -eq 0 -or $ContinueOnError)) {
+  # Process programmability scripts with dependency retry logic (only if no structural failures or abort flag)
+  if ($programmabilityScripts.Count -gt 0 -and -not $abortAfterStructuralFailure -and ($failureCount -eq 0 -or $ContinueOnError)) {
     $retryResults = Invoke-ScriptsWithDependencyRetries `
       -Scripts $programmabilityScripts `
       -MaxRetries $retryMaxAttempts `
@@ -2529,17 +3106,24 @@ try {
     $successCount += $retryResults.Success
     $failureCount += $retryResults.Failure
     $skipCount += $retryResults.Skip
+
+    # If programmability scripts failed and not in ContinueOnError mode, set abort flag
+    if ($retryResults.Failure -gt 0 -and -not $ContinueOnError) {
+      $abortAfterStructuralFailure = $true
+    }
   }
-  elseif ($programmabilityScripts.Count -gt 0) {
+  elseif ($programmabilityScripts.Count -gt 0 -and ($abortAfterStructuralFailure -or $failureCount -gt 0)) {
     Write-Warning "[WARNING] Skipping $($programmabilityScripts.Count) programmability script(s) due to earlier failures"
     $skipCount += $programmabilityScripts.Count
   }
 
   # Process security policy scripts AFTER programmability objects (they depend on functions/procedures)
-  if ($securityPolicyScripts.Count -gt 0 -and ($failureCount -eq 0 -or $ContinueOnError)) {
+  if ($securityPolicyScripts.Count -gt 0 -and -not $abortAfterStructuralFailure -and ($failureCount -eq 0 -or $ContinueOnError)) {
     Write-Output ''
     Write-Output "[INFO] Processing $($securityPolicyScripts.Count) security policy script(s)..."
     foreach ($scriptFile in $securityPolicyScripts) {
+      if ($abortAfterStructuralFailure) { break }
+
       $result = Invoke-WithRetry -MaxAttempts $effectiveMaxRetries -InitialDelaySeconds $effectiveRetryDelay -OperationName "Script: $($scriptFile.Name)" -ScriptBlock {
         Invoke-SqlScript -FilePath $scriptFile.FullName -ServerName $Server `
           -DatabaseName $Database -Cred $Credential -Timeout $effectiveCommandTimeout -Show:$ShowSQL `
@@ -2551,8 +3135,22 @@ try {
       }
       elseif ($result -eq -1) {
         $failureCount++
+
+        # Get error details
+        $errorMsg = if ($script:LastScriptError) { $script:LastScriptError } else { 'Unknown error' }
+        $shortError = $errorMsg -split "`n" | Where-Object { $_ -match 'Error \d+:|Message:' } | Select-Object -First 1
+        if (-not $shortError) { $shortError = ($errorMsg -split "`n")[0] }
+        $shortError = $shortError.Trim() -replace '^\s*-?\s*', ''
+
+        Write-Host "  [ERROR] $($scriptFile.Name)" -ForegroundColor Red
+        Write-Host "    $shortError" -ForegroundColor DarkRed
+
+        # Record for final summary
+        Add-FailedScript -ScriptName $scriptFile.Name -ErrorMessage $errorMsg -Folder '15_SecurityPolicies' -IsFinal $true
+
         if (-not $ContinueOnError) {
-          Write-Error "[ERROR] Security policy script failed. Aborting import."
+          $abortAfterStructuralFailure = $true
+          Write-Host "[ERROR] Security policy script failed. Aborting import after writing error log." -ForegroundColor Red
           break
         }
       }
@@ -2561,14 +3159,14 @@ try {
       }
     }
   }
-  elseif ($securityPolicyScripts.Count -gt 0) {
+  elseif ($securityPolicyScripts.Count -gt 0 -and ($abortAfterStructuralFailure -or $failureCount -gt 0)) {
     Write-Warning "[WARNING] Skipping $($securityPolicyScripts.Count) security policy script(s) due to earlier failures"
     $skipCount += $securityPolicyScripts.Count
   }
 
-  # If we have data scripts and no failures so far, handle them with FK constraints disabled
-  Write-Verbose "FK disable check: dataScripts.Count=$($dataScripts.Count), failureCount=$failureCount"
-  if ($dataScripts.Count -gt 0 -and $failureCount -eq 0) {
+  # If we have data scripts and no failures so far (and no abort flag), handle them with FK constraints disabled
+  Write-Verbose "FK disable check: dataScripts.Count=$($dataScripts.Count), failureCount=$failureCount, abortFlag=$abortAfterStructuralFailure"
+  if ($dataScripts.Count -gt 0 -and $failureCount -eq 0 -and -not $abortAfterStructuralFailure) {
     Write-Output ''
     Write-Output 'Preparing for data import...'
     Write-Verbose "Attempting to disable foreign key constraints..."
@@ -2651,6 +3249,19 @@ try {
       }
       elseif ($result -eq -1) {
         $failureCount++
+
+        # Get error details
+        $errorMsg = if ($script:LastScriptError) { $script:LastScriptError } else { 'Unknown error' }
+        $shortError = $errorMsg -split "`n" | Where-Object { $_ -match 'Error \d+:|Message:' } | Select-Object -First 1
+        if (-not $shortError) { $shortError = ($errorMsg -split "`n")[0] }
+        $shortError = $shortError.Trim() -replace '^\s*-?\s*', ''
+
+        Write-Host "  [ERROR] $($scriptFile.Name)" -ForegroundColor Red
+        Write-Host "    $shortError" -ForegroundColor DarkRed
+
+        # Record for final summary
+        Add-FailedScript -ScriptName $scriptFile.Name -ErrorMessage $errorMsg -Folder '16_Data' -IsFinal $true
+
         if (-not $ContinueOnError) {
           break
         }
@@ -2847,7 +3458,27 @@ try {
   }
 
   if ($failureCount -gt 0) {
-    Write-Output '[ERROR] Import completed with errors - review output above'
+    # Write error log file
+    $errorLogPath = Write-ErrorLog -SourcePath $SourcePath
+
+    Write-Output ''
+    Write-Host "[ERROR] Import completed with $failureCount error(s):" -ForegroundColor Red
+
+    # Show error summary (up to 10 errors)
+    $displayCount = [Math]::Min($script:FailedScripts.Count, 10)
+    for ($i = 0; $i -lt $displayCount; $i++) {
+      $failure = $script:FailedScripts[$i]
+      Write-Host "  $($i + 1). $($failure.ScriptName) - $($failure.ErrorMessage)" -ForegroundColor Red
+    }
+    if ($script:FailedScripts.Count -gt 10) {
+      Write-Host "  ... and $($script:FailedScripts.Count - 10) more error(s)" -ForegroundColor Red
+    }
+
+    if ($errorLogPath) {
+      Write-Output ''
+      Write-Output "See $errorLogPath for full error details."
+    }
+
     Write-Output ''
     Write-Log "Import completed with $failureCount error(s)" -Severity ERROR
   }
@@ -2902,8 +3533,8 @@ try {
 
 }
 catch {
-  Write-Error "[ERROR] Script error: $_"
-  Write-Log "Script error: $_" -Severity ERROR
+  Write-Error "[ERROR] Script error: $($_.ToString())"
+  Write-Log "Script error: $($_.ToString())" -Severity ERROR
   exit 1
 }
 
