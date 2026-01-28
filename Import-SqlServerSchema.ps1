@@ -1557,14 +1557,17 @@ function Test-ScriptExcluded {
         if ($relativePath -match '01_Security' -and $fileName -match '\.user\.sql$') { return $true }
       }
       'WindowsUsers' {
-        # Exclude Windows domain user files - check file content for Windows login pattern
+        # Exclude Windows domain user files based on file CONTENT (not filename pattern)
+        # Detection: File contains "FOR LOGIN [DOMAIN\Username]" where login name has a backslash
+        # Example filenames: "dbo.DOMAIN.TestUser.user.sql", "dbo.NT SERVICE.SQLSERVERAGENT.user.sql"
+        # Filename patterns vary widely - we inspect the SQL content for reliable detection
         if ($relativePath -match '01_Security' -and $fileName -match '\.user\.sql$') {
-          # Read file content and check for Windows login pattern (contains backslash in login name)
           $content = Get-Content $ScriptPath -Raw -ErrorAction SilentlyContinue
           if ($content) {
-            # Windows logins have backslash in the login name: FOR LOGIN [DOMAIN\Username]
+            # Extract login name from: FOR LOGIN [loginname]
             if ($content -match 'FOR LOGIN\s*\[([^\]]+)\]') {
               $loginName = $matches[1]
+              # Windows logins contain backslash: DOMAIN\User, NT SERVICE\name, etc.
               if ($loginName -match '\\') {
                 return $true
               }
@@ -1573,20 +1576,22 @@ function Test-ScriptExcluded {
         }
       }
       'SqlUsers' {
-        # Exclude SQL login mapped users - check file content
+        # Exclude SQL Server login mapped users based on file CONTENT
+        # Detection: File contains "FOR LOGIN [username]" where login name has NO backslash
+        #            and is NOT an external provider (Azure AD)
+        # Also includes: "WITHOUT LOGIN" users (contained database users)
+        # Example filenames: "dbo.AppUser.user.sql", "dbo.sa.user.sql"
         if ($relativePath -match '01_Security' -and $fileName -match '\.user\.sql$') {
           $content = Get-Content $ScriptPath -Raw -ErrorAction SilentlyContinue
           if ($content) {
-            # SQL login mapped users have FOR LOGIN [username] without backslash (not Windows)
-            # and without EXTERNAL PROVIDER (not Azure AD)
             if ($content -match 'FOR LOGIN\s*\[([^\]]+)\]') {
               $loginName = $matches[1]
-              # SQL logins don't have backslash (Windows) and aren't external providers
+              # SQL logins: no backslash (not Windows), not external provider (not Azure AD)
               if ($loginName -notmatch '\\' -and $content -notmatch 'EXTERNAL PROVIDER') {
                 return $true
               }
             }
-            # Also exclude WITHOUT LOGIN users (they're SqlLogin type in SMO)
+            # WITHOUT LOGIN users are SQL type (contained database users)
             if ($content -match 'WITHOUT LOGIN') {
               return $true
             }
@@ -1594,7 +1599,9 @@ function Test-ScriptExcluded {
         }
       }
       'ExternalUsers' {
-        # Exclude Azure AD / External users
+        # Exclude Azure AD / External provider users based on file CONTENT
+        # Detection: File contains "EXTERNAL PROVIDER" or "FROM EXTERNAL PROVIDER"
+        # Example filenames: "dbo.user@domain.com.user.sql", "dbo.AzureADGroup.user.sql"
         if ($relativePath -match '01_Security' -and $fileName -match '\.user\.sql$') {
           $content = Get-Content $ScriptPath -Raw -ErrorAction SilentlyContinue
           if ($content -match 'EXTERNAL PROVIDER|FROM EXTERNAL PROVIDER') {
@@ -1603,7 +1610,9 @@ function Test-ScriptExcluded {
         }
       }
       'CertificateMappedUsers' {
-        # Exclude certificate/asymmetric key mapped users
+        # Exclude certificate or asymmetric key mapped users based on file CONTENT
+        # Detection: File contains "FOR CERTIFICATE" or "FOR ASYMMETRIC KEY"
+        # Example filenames: "dbo.CertUser.user.sql", "dbo.KeyMappedUser.user.sql"
         if ($relativePath -match '01_Security' -and $fileName -match '\.user\.sql$') {
           $content = Get-Content $ScriptPath -Raw -ErrorAction SilentlyContinue
           if ($content -match 'FOR CERTIFICATE|FOR ASYMMETRIC KEY') {

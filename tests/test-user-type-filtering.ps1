@@ -331,21 +331,27 @@ $importOutput3a = ""
 try {
     # Run the import script in a separate PowerShell process to isolate error handling
     # This ensures we capture all output including Write-Host and Write-Error
-    # Escape single quotes in password for safe embedding in command string
-    $escapedPassword = $Password -replace "'", "''"
-    $escapedSourcePath = $importSourceDir.FullName -replace "'", "''"
-    $escapedConfigPath = $configPath3a -replace "'", "''"
+    # Pass credentials via environment variables for security (avoid embedding in command string)
+    $env:TEST_IMPORT_PASSWORD = $Password
+    $env:TEST_IMPORT_USERNAME = $Username
     
-    # Build command to run with credentials passed inline
+    # Build command to run with credentials from environment variables
     $importCmd = @"
-`$securePassword = ConvertTo-SecureString '$escapedPassword' -AsPlainText -Force
-`$cred = New-Object System.Management.Automation.PSCredential('$Username', `$securePassword)
-& '$importScript' -Server '$Server' -Database '$targetDb3a' -SourcePath '$escapedSourcePath' -ConfigFile '$escapedConfigPath' -Credential `$cred
+`$securePassword = ConvertTo-SecureString `$env:TEST_IMPORT_PASSWORD -AsPlainText -Force
+`$cred = New-Object System.Management.Automation.PSCredential(`$env:TEST_IMPORT_USERNAME, `$securePassword)
+& '$importScript' -Server '$Server' -Database '$targetDb3a' -SourcePath '$($importSourceDir.FullName)' -ConfigFile '$configPath3a' -Credential `$cred
 "@
     
     $importOutput3a = pwsh -NoProfile -Command $importCmd 2>&1 | Out-String
+    
+    # Clean up environment variables
+    Remove-Item Env:\TEST_IMPORT_PASSWORD -ErrorAction SilentlyContinue
+    Remove-Item Env:\TEST_IMPORT_USERNAME -ErrorAction SilentlyContinue
 } catch {
     $importOutput3a += "`n" + $_.Exception.Message
+    # Clean up environment variables on error too
+    Remove-Item Env:\TEST_IMPORT_PASSWORD -ErrorAction SilentlyContinue
+    Remove-Item Env:\TEST_IMPORT_USERNAME -ErrorAction SilentlyContinue
 }
 
 # Check if import reported failure (Windows user script should fail)
