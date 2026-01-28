@@ -1557,15 +1557,17 @@ function Test-ScriptExcluded {
         if ($relativePath -match '01_Security' -and $fileName -match '\.user\.sql$') { return $true }
       }
       'WindowsUsers' {
-        # Exclude Windows domain user files (pattern: DOMAIN.Username.user.sql or contains backslash-escaped)
+        # Exclude Windows domain user files - check file content for Windows login pattern
         if ($relativePath -match '01_Security' -and $fileName -match '\.user\.sql$') {
-          # Check if filename contains domain pattern (e.g., "DOMAIN.User.user.sql" or "DOMAIN_User.user.sql")
-          # Windows users typically have domain prefix with separator
-          if ($fileName -match '^[A-Z0-9_-]+\.[A-Z0-9_-]+\.user\.sql$' -and $fileName -notmatch '^\d') {
-            # Could be DOMAIN.User pattern - check file content for FOR LOGIN with backslash
-            $content = Get-Content $ScriptPath -Raw -ErrorAction SilentlyContinue
-            if ($content -match 'FOR LOGIN\s*\[[^\]]*\\[^\]]*\]') {
-              return $true
+          # Read file content and check for Windows login pattern (contains backslash in login name)
+          $content = Get-Content $ScriptPath -Raw -ErrorAction SilentlyContinue
+          if ($content) {
+            # Windows logins have backslash in the login name: FOR LOGIN [DOMAIN\Username]
+            if ($content -match 'FOR LOGIN\s*\[([^\]]+)\]') {
+              $loginName = $matches[1]
+              if ($loginName -match '\\') {
+                return $true
+              }
             }
           }
         }
@@ -1574,14 +1576,20 @@ function Test-ScriptExcluded {
         # Exclude SQL login mapped users - check file content
         if ($relativePath -match '01_Security' -and $fileName -match '\.user\.sql$') {
           $content = Get-Content $ScriptPath -Raw -ErrorAction SilentlyContinue
-          # SQL login mapped users have FOR LOGIN [username] without backslash (not Windows)
-          # and without EXTERNAL PROVIDER (not Azure AD)
-          if ($content -match 'FOR LOGIN\s*\[[^\]\\]+\]' -and $content -notmatch 'EXTERNAL PROVIDER') {
-            return $true
-          }
-          # Also exclude WITHOUT LOGIN users (they're SqlLogin type in SMO)
-          if ($content -match 'WITHOUT LOGIN') {
-            return $true
+          if ($content) {
+            # SQL login mapped users have FOR LOGIN [username] without backslash (not Windows)
+            # and without EXTERNAL PROVIDER (not Azure AD)
+            if ($content -match 'FOR LOGIN\s*\[([^\]]+)\]') {
+              $loginName = $matches[1]
+              # SQL logins don't have backslash (Windows) and aren't external providers
+              if ($loginName -notmatch '\\' -and $content -notmatch 'EXTERNAL PROVIDER') {
+                return $true
+              }
+            }
+            # Also exclude WITHOUT LOGIN users (they're SqlLogin type in SMO)
+            if ($content -match 'WITHOUT LOGIN') {
+              return $true
+            }
           }
         }
       }

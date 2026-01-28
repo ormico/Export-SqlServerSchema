@@ -5008,6 +5008,11 @@ function Test-UserExcludedByLoginType {
     $excludeTypes = $script:Config.export.excludeObjectTypes
   }
 
+  # Check for umbrella DatabaseUsers exclusion first (excludes ALL user types)
+  if ($excludeTypes -contains 'DatabaseUsers') {
+    return $true
+  }
+
   # Map LoginType to exclusion object types
   # SMO LoginType enum: WindowsUser(0), WindowsGroup(1), SqlLogin(2), Certificate(3), 
   #                     AsymmetricKey(4), ExternalUser(5), ExternalGroup(6)
