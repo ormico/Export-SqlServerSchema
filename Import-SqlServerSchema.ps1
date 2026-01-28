@@ -2761,7 +2761,9 @@ try {
           Write-Output "[INFO] Creating required memory-optimized FileGroups..."
 
           foreach ($sqlBlock in $memoryOptimizedSql) {
-            $sql = $sqlBlock -replace '\bALTER\s+DATABASE\s+CURRENT\b', "ALTER DATABASE [$Database]"
+            # Escape the database name to prevent SQL injection via ] characters
+            $escapedDbName = Get-EscapedSqlIdentifier -Name $Database
+            $sql = $sqlBlock -replace '\bALTER\s+DATABASE\s+CURRENT\b', "ALTER DATABASE [$escapedDbName]"
             try {
               $script:SharedConnection.ExecuteNonQuery($sql) | Out-Null
               Write-Verbose "  Executed memory-optimized FileGroup SQL block"

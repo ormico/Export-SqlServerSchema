@@ -3,7 +3,7 @@
 <#
 .SYNOPSIS
     Tests advanced FileGroup scenarios including TEXTIMAGE_ON and memory-optimized tables
-    
+
 .DESCRIPTION
     This test validates FileGroup-related fixes:
     1. TEXTIMAGE_ON/FILESTREAM_ON clause remapping (Bug #4)
@@ -97,7 +97,7 @@ function Invoke-SqlCommand {
         [string]$Query,
         [string]$Database = "master"
     )
-    
+
     $result = sqlcmd -S $Server -U $Username -P $Password -d $Database -C -Q $Query -h -1 2>&1
     if ($LASTEXITCODE -ne 0) {
         throw "SQL command failed: $result"
@@ -200,7 +200,7 @@ GO
 
 -- Insert some test data
 INSERT INTO dbo.Documents (Title, Content, BinaryData)
-VALUES 
+VALUES
     ('Doc1', 'This is some long content for document 1', 0x48656C6C6F),  -- 0x48656C6C6F = 'Hello'
     ('Doc2', 'This is some long content for document 2', 0x576F726C64);  -- 0x576F726C64 = 'World'
 
@@ -341,17 +341,22 @@ if (-not $supportsMemoryOptimized) {
 } else {
     # Check FileGroup script for correct syntax
     $fgScript = Get-ChildItem -Path (Join-Path $exportedDir1.FullName "00_FileGroups") -Filter "*.sql" | Select-Object -First 1
-    $fgContent = Get-Content $fgScript.FullName -Raw
-    
-    # Should contain CONTAINS MEMORY_OPTIMIZED_DATA for FG_MEMORY
-    $hasMemOptSyntax = $fgContent -match "ADD FILEGROUP\s*\[FG_MEMORY\]\s*CONTAINS\s*MEMORY_OPTIMIZED_DATA"
-    Write-TestResult -TestName "Export has CONTAINS MEMORY_OPTIMIZED_DATA" -Passed $hasMemOptSyntax `
-        -Message "FileGroup script should have correct memory-optimized syntax"
-    
-    # Should NOT just have plain ADD FILEGROUP [FG_MEMORY] without CONTAINS
-    $hasPlainFG = $fgContent -match "ADD FILEGROUP\s*\[FG_MEMORY\]\s*;" -and -not $hasMemOptSyntax
-    Write-TestResult -TestName "No incorrect plain FileGroup syntax" -Passed (-not $hasPlainFG) `
-        -Message "Should not have plain 'ADD FILEGROUP [FG_MEMORY];' without CONTAINS clause"
+    if (-not $fgScript) {
+        Write-TestResult -TestName "Export has CONTAINS MEMORY_OPTIMIZED_DATA" -Passed $false `
+            -Message "No FileGroup script found in 00_FileGroups directory"
+    } else {
+        $fgContent = Get-Content $fgScript.FullName -Raw
+
+        # Should contain CONTAINS MEMORY_OPTIMIZED_DATA for FG_MEMORY
+        $hasMemOptSyntax = $fgContent -match "ADD FILEGROUP\s*\[FG_MEMORY\]\s*CONTAINS\s*MEMORY_OPTIMIZED_DATA"
+        Write-TestResult -TestName "Export has CONTAINS MEMORY_OPTIMIZED_DATA" -Passed $hasMemOptSyntax `
+            -Message "FileGroup script should have correct memory-optimized syntax"
+
+        # Should NOT just have plain ADD FILEGROUP [FG_MEMORY] without CONTAINS
+        $hasPlainFG = $fgContent -match "ADD FILEGROUP\s*\[FG_MEMORY\]\s*;" -and -not $hasMemOptSyntax
+        Write-TestResult -TestName "No incorrect plain FileGroup syntax" -Passed (-not $hasPlainFG) `
+            -Message "Should not have plain 'ADD FILEGROUP [FG_MEMORY];' without CONTAINS clause"
+    }
 }
 
 # ═══════════════════════════════════════════════════════════════
@@ -366,7 +371,7 @@ if (-not $supportsMemoryOptimized) {
 } else {
     $targetDb3 = "TestDb_MemOptRemove"
     Drop-TestDatabase -DbName $targetDb3
-    
+
     $configContent3 = @"
 import:
   importMode: Dev
@@ -375,21 +380,21 @@ import:
 "@
     $configPath3 = Join-Path $ExportPath "test-memopt-remove.yml"
     $configContent3 | Set-Content -Path $configPath3
-    
+
     $importOutput3 = & $importScript -Server $Server -Database $targetDb3 `
         -SourcePath $exportedDir1.FullName -ConfigFile $configPath3 `
         -Credential $credential 2>&1 | Out-String
-    
+
     # Verify import succeeded
     $success3 = $importOutput3 -match "Import completed successfully"
     Write-TestResult -TestName "Import succeeds with removeToPrimary" -Passed $success3 `
         -Message "Import should succeed even with memory-optimized tables"
-    
+
     # Verify memory-optimized FileGroup was created (required, can't be removed)
     $memFGExists = Invoke-SqlCommand "SELECT COUNT(*) FROM sys.filegroups WHERE name = 'FG_MEMORY' AND type = 'FX'" $targetDb3
     Write-TestResult -TestName "Memory-optimized FileGroup created in removeToPrimary" -Passed ([int]$memFGExists.Trim() -eq 1) `
         -Message "Memory-optimized FileGroup is required and should be created"
-    
+
     # Verify memory-optimized table exists and has data
     try {
         $hotDataCount = Invoke-SqlCommand "SELECT COUNT(*) FROM dbo.HotData" $targetDb3
@@ -399,12 +404,12 @@ import:
         Write-TestResult -TestName "Memory-optimized table imported" -Passed $false `
             -Message "Could not query HotData table: $_"
     }
-    
+
     # Verify non-memory FileGroups were NOT created
     $nonMemFGCount = Invoke-SqlCommand "SELECT COUNT(*) FROM sys.filegroups WHERE name NOT IN ('PRIMARY', 'FG_MEMORY')" $targetDb3
     Write-TestResult -TestName "Non-memory FileGroups removed" -Passed ([int]$nonMemFGCount.Trim() -eq 0) `
         -Message "FG_LOB and FG_ARCHIVE should not exist in removeToPrimary mode"
-    
+
     Drop-TestDatabase -DbName $targetDb3
 }
 

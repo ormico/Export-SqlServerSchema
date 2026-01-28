@@ -10,4 +10,5 @@ exports_perf_schema_parallel/*
 exports_seq_schema/*
 exports_perf_schema/*
 exports_parallel_test/*
+exports_*/*
 perf-metrics-*.json
