@@ -267,7 +267,7 @@ $exportDir1 = Join-Path $ExportPath "textimage_test"
 $exportedDir1 = Get-ChildItem $exportDir1 -Directory | Select-Object -First 1
 
 # Test 1a: Verify TEXTIMAGE_ON is in exported table script
-$tableScript = Get-ChildItem -Path (Join-Path $exportedDir1.FullName "10_Tables" "01_Tables") -Filter "dbo.Documents.sql" | Select-Object -First 1
+$tableScript = Get-ChildItem -Path (Join-Path $exportedDir1.FullName "09_Tables_PrimaryKey") -Filter "dbo.Documents.sql" | Select-Object -First 1
 $tableContent = Get-Content $tableScript.FullName -Raw
 
 $hasTextimageFGLob = $tableContent -match "TEXTIMAGE_ON\s*\[FG_LOB\]"
