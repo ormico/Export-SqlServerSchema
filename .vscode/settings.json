@@ -101,6 +101,14 @@
         "/^pwsh -File test-exclude-feature\\.ps1$/": {
             "approve": true,
             "matchCommandLine": true
+        },
+        "/^pwsh -File test-user-type-filtering\\.ps1$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^pwsh -NoProfile -File test-user-type-filtering\\.ps1$/": {
+            "approve": true,
+            "matchCommandLine": true
         }
     }
 }

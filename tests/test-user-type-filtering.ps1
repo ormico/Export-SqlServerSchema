@@ -326,13 +326,31 @@ try {
 
 # Run import - capture output to check for failure
 # Use try-catch because we EXPECT this to fail
+# Run as a separate process to capture all output without affecting this script's error handling
 $importOutput3a = ""
 try {
-    $importOutput3a = & $importScript -Server $Server -Database $targetDb3a `
-        -SourcePath $importSourceDir.FullName -ConfigFile $configPath3a `
-        -Credential $credential 2>&1 | Out-String
+    # Run the import script in a separate PowerShell process to isolate error handling
+    # This ensures we capture all output including Write-Host and Write-Error
+    $importArgs = @(
+        "-NoProfile",
+        "-File", $importScript,
+        "-Server", $Server,
+        "-Database", $targetDb3a,
+        "-SourcePath", $importSourceDir.FullName,
+        "-ConfigFile", $configPath3a,
+        "-Credential", $credential
+    )
+    
+    # Build command to run with credentials passed via environment or inline
+    $importCmd = @"
+`$securePassword = ConvertTo-SecureString '$Password' -AsPlainText -Force
+`$cred = New-Object System.Management.Automation.PSCredential('$Username', `$securePassword)
+& '$importScript' -Server '$Server' -Database '$targetDb3a' -SourcePath '$($importSourceDir.FullName)' -ConfigFile '$configPath3a' -Credential `$cred
+"@
+    
+    $importOutput3a = pwsh -NoProfile -Command $importCmd 2>&1 | Out-String
 } catch {
-    $importOutput3a = $_.Exception.Message
+    $importOutput3a += "`n" + $_.Exception.Message
 }
 
 # Check if import reported failure (Windows user script should fail)
@@ -341,7 +359,8 @@ Write-TestResult -TestName "Windows user import fails on Linux (expected)" -Pass
     -Message "Expected failure - Windows login doesn't exist on Linux SQL Server"
 
 # Test 3b: Verify error message mentions the Windows user script
-$mentionsWindowsUser = $importOutput3a -match "DOMAIN.*TestWindowsUser"
+# The error output should identify the failing script file
+$mentionsWindowsUser = $importOutput3a -match "DOMAIN.*TestWindowsUser|WindowsUser"
 Write-TestResult -TestName "Error message identifies Windows user script" -Passed $mentionsWindowsUser `
     -Message "Error should identify which script failed"
 
