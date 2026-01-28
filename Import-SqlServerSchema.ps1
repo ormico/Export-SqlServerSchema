@@ -438,7 +438,9 @@ function Write-ErrorLog {
 
   if ($script:FailedScripts.Count -eq 0) { return $null }
 
-  $logPath = Join-Path $SourcePath 'import-errors.log'
+  [string]$timestamp = Get-Date -Format 'yyyyMMdd_HHmmss'
+  [string]$fileName = "import_errors_$timestamp.log"
+  $logPath = Join-Path $SourcePath $fileName
   $sb = [System.Text.StringBuilder]::new()
 
   [void]$sb.AppendLine("Import Error Log - $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')")
