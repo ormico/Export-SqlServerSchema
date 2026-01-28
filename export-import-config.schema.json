@@ -375,6 +375,11 @@
           "description": "FileGroup handling strategy (autoRemap = import FileGroups with auto-detected paths, removeToPrimary = skip FileGroups and remap all ON clauses to PRIMARY)",
           "default": "autoRemap"
         },
+        "convertLoginsToContained": {
+          "type": "boolean",
+          "description": "Convert login-mapped users to contained users (WITHOUT LOGIN). Strips FOR LOGIN clauses so users can be created without requiring server logins. Useful for dev environments.",
+          "default": false
+        },
         "includeConfigurations": {
           "type": "boolean",
           "description": "Import database scoped configurations",

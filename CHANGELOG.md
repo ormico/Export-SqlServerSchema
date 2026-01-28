@@ -5,6 +5,55 @@ All notable changes to Export-SqlServerSchema will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.7.2] - 2026-01-28
+
+### Added
+
+**Schema-Based Import Exclusion**
+- New `-ExcludeSchemas` parameter for Import-SqlServerSchema.ps1
+- Filters scripts by filename prefix (e.g., `cdc.fn_get_changes.sql` excluded when `cdc` in list)
+- Supports both command-line parameter and YAML config file:
+  ```yaml
+  import:
+    excludeSchemas:
+      - cdc
+      - staging
+  ```
+- Command-line parameter overrides config file setting
+- Useful for excluding CDC schema objects, staging tables, or temp schemas during import
+
+**Convert Login-Mapped Users to Contained Users**
+- New `convertLoginsToContained` option in developerMode/productionMode settings
+- Transforms `FOR LOGIN [loginname]` to `WITHOUT LOGIN` during import
+- Allows user creation without requiring server-level logins to exist
+- Preserves users for schema ownership, object permissions, and role membership
+- Example config:
+  ```yaml
+  import:
+    developerMode:
+      convertLoginsToContained: true
+  ```
+- Handles all user types:
+  - Explicit: `CREATE USER [AppUser] FOR LOGIN [AppUser]` → `CREATE USER [AppUser] WITHOUT LOGIN`
+  - Implicit Windows: `CREATE USER [DOMAIN\User]` → `CREATE USER [DOMAIN\User] WITHOUT LOGIN`
+
+**Import Exclusion Examples Documentation**
+- New `docs/IMPORT_EXCLUSION_EXAMPLES.md` with comprehensive examples
+- Covers all exclusion types: object types, user types, and schemas
+- Includes YAML config and command-line examples
+
+### Fixed
+
+**Windows User Detection for Implicit Logins**
+- `WindowsUsers` exclusion now handles all CREATE USER forms:
+  - `CREATE USER [DOMAIN\User] FOR LOGIN [DOMAIN\User]` (explicit)
+  - `CREATE USER [DOMAIN\User] WITH DEFAULT_SCHEMA=[dbo]` (implicit - login name = user name)
+  - `CREATE USER [NT SERVICE\SQLSERVERAGENT]` (NT service accounts)
+- Previously only detected explicit `FOR LOGIN` syntax
+- Detection based on backslash (`\`) in username for Windows principals
+
+---
+
 ## [1.7.1] - 2025-01-28
 
 ### Added

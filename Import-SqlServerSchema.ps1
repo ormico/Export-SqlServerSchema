@@ -1142,6 +1142,28 @@ function Invoke-SqlScript {
       $sql = $sql -replace 'ALL\s+TO\s*\(\s*\[(?!PRIMARY\])[^\]]+\]\s*\)', 'ALL TO ([PRIMARY])'
     }
 
+    # Convert login-mapped users to contained users (WITHOUT LOGIN)
+    # This allows user creation without requiring server-level logins to exist
+    # Transforms: CREATE USER [name] FOR LOGIN [login] -> CREATE USER [name] WITHOUT LOGIN
+    if ($SqlCmdVariables.ContainsKey('__ConvertLoginsToContained__')) {
+      # Only apply to user scripts
+      if ($scriptName -match '\.user\.sql$') {
+        # Pattern: FOR LOGIN [loginname] - remove and replace with WITHOUT LOGIN
+        # Handle both explicit FOR LOGIN and implicit (username = login name)
+        if ($sql -match 'FOR LOGIN\s*\[[^\]]+\]') {
+          $sql = $sql -replace '\s*FOR LOGIN\s*\[[^\]]+\]', ' WITHOUT LOGIN'
+          Write-Verbose "  [TRANSFORM] Converted login-mapped user to contained user: $scriptName"
+        }
+        # Handle implicit Windows users: CREATE USER [DOMAIN\User] WITH ... (no FOR LOGIN)
+        # These need WITHOUT LOGIN added after the username
+        elseif ($sql -match 'CREATE USER\s*\[([^\]]*\\[^\]]*)\]' -and $sql -notmatch 'WITHOUT LOGIN' -and $sql -notmatch 'EXTERNAL PROVIDER') {
+          # Insert WITHOUT LOGIN after the user name bracket
+          $sql = $sql -replace '(CREATE USER\s*\[[^\]]+\])', '$1 WITHOUT LOGIN'
+          Write-Verbose "  [TRANSFORM] Converted implicit Windows user to contained user: $scriptName"
+        }
+      }
+    }
+
     # Replace ALTER DATABASE CURRENT with actual database name
     # CURRENT keyword doesn't work with SMO ExecuteNonQuery
     # Escape the database name to prevent SQL injection via ] characters
@@ -2911,6 +2933,12 @@ try {
       'autoRemap'
     }
 
+    # Check for convertLoginsToContained setting
+    if ($devSettings.ContainsKey('convertLoginsToContained') -and $devSettings.convertLoginsToContained -eq $true) {
+      $sqlCmdVars['__ConvertLoginsToContained__'] = $true
+      Write-Output "[INFO] Login conversion: enabled - FOR LOGIN users will be converted to WITHOUT LOGIN (contained)"
+    }
+
     if ($fileGroupStrategy -eq 'removeToPrimary') {
       $sqlCmdVars['__RemapFileGroupsToPrimary__'] = $true
       Write-Output "[INFO] FileGroup strategy: removeToPrimary - all FileGroup references will map to PRIMARY"
@@ -2969,6 +2997,20 @@ try {
           Write-Output "[SUCCESS] Memory-optimized FileGroup(s) created"
         }
       }
+    }
+  }
+  elseif ($ImportMode -eq 'Prod') {
+    # Check for convertLoginsToContained in Prod mode (less common but supported)
+    $prodSettings = if ($config -and $config.import -and $config.import.productionMode) {
+      $config.import.productionMode
+    }
+    else {
+      @{}
+    }
+
+    if ($prodSettings.ContainsKey('convertLoginsToContained') -and $prodSettings.convertLoginsToContained -eq $true) {
+      $sqlCmdVars['__ConvertLoginsToContained__'] = $true
+      Write-Output "[INFO] Login conversion: enabled - FOR LOGIN users will be converted to WITHOUT LOGIN (contained)"
     }
   }
 
