@@ -721,7 +721,7 @@ GO
 
     # Check if the import succeeded without errors (would fail if Windows user script ran)
     # The exclusion should have skipped the Windows user file
-    if ($LASTEXITCODE -eq 0 -or $LASTEXITCODE -eq $null) {
+    if (-not $LASTEXITCODE) {
         # Check output for exclusion message
         if ($importOutput -match "Excluded.*script") {
             Write-TestStep "PASS: WindowsUsers exclusion worked - Windows user script skipped" -Type Success
