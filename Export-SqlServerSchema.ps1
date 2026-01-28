@@ -302,7 +302,12 @@ $script:ParallelWorkerScriptBlock = {
             'Schema' { $smoObj = $db.Schemas[$objId.Name] }
             'Sequence' { $smoObj = $db.Sequences[$objId.Name, $objId.Schema] }
             'Synonym' { $smoObj = $db.Synonyms[$objId.Name, $objId.Schema] }
-            'UserDefinedType' { $smoObj = $db.UserDefinedTypes[$objId.Name, $objId.Schema] }
+            'UserDefinedType' {
+              # Try all three UDT collections (CLR types, alias types, table types)
+              $smoObj = $db.UserDefinedTypes[$objId.Name, $objId.Schema]
+              if (-not $smoObj) { $smoObj = $db.UserDefinedDataTypes[$objId.Name, $objId.Schema] }
+              if (-not $smoObj) { $smoObj = $db.UserDefinedTableTypes[$objId.Name, $objId.Schema] }
+            }
             'UserDefinedDataType' { $smoObj = $db.UserDefinedDataTypes[$objId.Name, $objId.Schema] }
             'UserDefinedTableType' { $smoObj = $db.UserDefinedTableTypes[$objId.Name, $objId.Schema] }
             'XmlSchemaCollection' { $smoObj = $db.XmlSchemaCollections[$objId.Name, $objId.Schema] }
@@ -1746,7 +1751,7 @@ function Build-WorkItems-TableTriggers {
           -ObjectType 'TableTrigger' `
           -GroupingMode 'schema' `
           -Objects $objects `
-          -OutputPath (Join-Path $baseDir $fileName) `
+          -OutputPath (Join-Path $baseDir '04_Triggers' $fileName) `
           -ScriptingOptions $scriptOpts `
           -SpecialHandler 'TableTriggers'
         $schemaNum++
@@ -1759,7 +1764,7 @@ function Build-WorkItems-TableTriggers {
         -ObjectType 'TableTrigger' `
         -GroupingMode 'all' `
         -Objects $objects `
-        -OutputPath (Join-Path $baseDir '001_TableTriggers.sql') `
+        -OutputPath (Join-Path $baseDir '04_Triggers' '001_TableTriggers.sql') `
         -ScriptingOptions $scriptOpts `
         -SpecialHandler 'TableTriggers'
     }
@@ -5248,7 +5253,13 @@ function Get-SmoObjectByIdentifier {
       'Schema' { return $Database.Schemas[$Name] }
       'Sequence' { return $Database.Sequences[$Name, $Schema] }
       'Synonym' { return $Database.Synonyms[$Name, $Schema] }
-      'UserDefinedType' { return $Database.UserDefinedTypes[$Name, $Schema] }
+      'UserDefinedType' {
+        # Try all three UDT collections (CLR types, alias types, table types)
+        $obj = $Database.UserDefinedTypes[$Name, $Schema]
+        if (-not $obj) { $obj = $Database.UserDefinedDataTypes[$Name, $Schema] }
+        if (-not $obj) { $obj = $Database.UserDefinedTableTypes[$Name, $Schema] }
+        return $obj
+      }
       'UserDefinedDataType' { return $Database.UserDefinedDataTypes[$Name, $Schema] }
       'UserDefinedTableType' { return $Database.UserDefinedTableTypes[$Name, $Schema] }
       'XmlSchemaCollection' { return $Database.XmlSchemaCollections[$Name, $Schema] }

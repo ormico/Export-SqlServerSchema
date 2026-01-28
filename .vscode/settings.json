@@ -109,6 +109,22 @@
         "/^pwsh -NoProfile -File test-user-type-filtering\\.ps1$/": {
             "approve": true,
             "matchCommandLine": true
+        },
+        "/^pwsh -NoProfile -File D:\\\\Export-SqlServerSchema\\\\tests\\\\debug-import\\.ps1$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^pwsh -NoProfile -Command \"& \\{ Set-Location 'd:\\\\Export-SqlServerSchema\\\\tests'; \\./test-error-handling\\.ps1 \\}\"$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^pwsh -NoProfile -Command \"Get-Command 'd:\\\\Export-SqlServerSchema\\\\Import-SqlServerSchema\\.ps1' -Syntax \\| Out-Null; Write-Host '\\[SUCCESS\\] Import script syntax valid' -ForegroundColor Green\"$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^cd d:\\\\Export-SqlServerSchema\\\\tests; pwsh -NoProfile -File \\.\\\\run-integration-test\\.ps1$/": {
+            "approve": true,
+            "matchCommandLine": true
         }
     }
 }

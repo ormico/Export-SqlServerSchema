@@ -58,6 +58,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Handles scripts with `ON [primary]`, `ON [Primary]`, or any other case variant
 - SQL Server identifiers are case-insensitive, so the regex should be too
 
+**Parallel Export Schema/All Grouping Fixes (Bug Fix #9)**
+- Fixed TableTriggers export to use `04_Triggers` subfolder for all grouping modes (not just single)
+- Fixed `UserDefinedType` lookup to try all three UDT collections (CLR types, alias types, table types)
+- Previously schema/all modes with mixed UDT types would fail to find alias types like `dbo.PhoneNumber`
+
 ---
 
 ## [1.7.0] - 2026-01-27
