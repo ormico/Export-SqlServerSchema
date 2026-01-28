@@ -2743,28 +2743,31 @@ function Export-NonParallelizableObjects {
             files      = [System.Collections.ArrayList]::new()
           }
 
+          # Escape identifier to prevent SQL injection via malicious filegroup names
+          $escapedFgName = Get-EscapedSqlIdentifier -Name $fg.Name
+
           [void]$fgScript.AppendLine("-- FileGroup: $($fg.Name)")
           [void]$fgScript.AppendLine("-- Type: $($fg.FileGroupType)")
 
           switch ($fg.FileGroupType) {
             'RowsFileGroup' {
-              [void]$fgScript.AppendLine("ALTER DATABASE CURRENT ADD FILEGROUP [$($fg.Name)];")
+              [void]$fgScript.AppendLine("ALTER DATABASE CURRENT ADD FILEGROUP [$escapedFgName];")
             }
             'MemoryOptimizedDataFileGroup' {
-              [void]$fgScript.AppendLine("ALTER DATABASE CURRENT ADD FILEGROUP [$($fg.Name)] CONTAINS MEMORY_OPTIMIZED_DATA;")
+              [void]$fgScript.AppendLine("ALTER DATABASE CURRENT ADD FILEGROUP [$escapedFgName] CONTAINS MEMORY_OPTIMIZED_DATA;")
             }
             'FileStreamDataFileGroup' {
-              [void]$fgScript.AppendLine("ALTER DATABASE CURRENT ADD FILEGROUP [$($fg.Name)] CONTAINS FILESTREAM;")
+              [void]$fgScript.AppendLine("ALTER DATABASE CURRENT ADD FILEGROUP [$escapedFgName] CONTAINS FILESTREAM;")
             }
             default {
               Write-Host "  [WARNING] Unknown FileGroup type '$($fg.FileGroupType)' for '$($fg.Name)', using standard syntax" -ForegroundColor Yellow
-              [void]$fgScript.AppendLine("ALTER DATABASE CURRENT ADD FILEGROUP [$($fg.Name)];")
+              [void]$fgScript.AppendLine("ALTER DATABASE CURRENT ADD FILEGROUP [$escapedFgName];")
             }
           }
           [void]$fgScript.AppendLine("GO")
 
           if ($fg.IsReadOnly) {
-            [void]$fgScript.AppendLine("ALTER DATABASE CURRENT MODIFY FILEGROUP [$($fg.Name)] READONLY;")
+            [void]$fgScript.AppendLine("ALTER DATABASE CURRENT MODIFY FILEGROUP [$escapedFgName] READONLY;")
             [void]$fgScript.AppendLine("GO")
           }
           [void]$fgScript.AppendLine("")
@@ -2798,13 +2801,17 @@ function Export-NonParallelizableObjects {
             }
             [void]$fgMetadata.files.Add($fileMetadata)
 
+            # Escape file name identifier (stored as sysname which uses '' for escaping in string context,
+            # but NAME uses string literal context, so escape single quotes)
+            $escapedFileName = $file.Name -replace "'", "''"
+
             [void]$fgScript.AppendLine("-- File: $($file.Name)")
             [void]$fgScript.AppendLine("-- Original Path: $($file.FileName)")
             [void]$fgScript.AppendLine("-- Original Size: $($file.Size)KB, Growth: $($file.Growth)$(if ($file.GrowthType -eq 'KB') {'KB'} else {'%'}), MaxSize: $(if ($file.MaxSize -eq -1) {'UNLIMITED'} else {$file.MaxSize + 'KB'})")
             [void]$fgScript.AppendLine("-- NOTE: Uses SQLCMD variables for path, size, and growth")
             [void]$fgScript.AppendLine("-- Configure via fileGroupPathMapping and fileGroupFileSizeDefaults in config file")
             [void]$fgScript.AppendLine("ALTER DATABASE CURRENT ADD FILE (")
-            [void]$fgScript.AppendLine("    NAME = N'$($file.Name)',")
+            [void]$fgScript.AppendLine("    NAME = N'$escapedFileName',")
             [void]$fgScript.AppendLine("    FILENAME = N'`$($pathVar)',")
             [void]$fgScript.AppendLine("    SIZE = `$($sizeVar)")
             [void]$fgScript.AppendLine("    , FILEGROWTH = `$($growthVar)")
@@ -2816,7 +2823,7 @@ function Export-NonParallelizableObjects {
               [void]$fgScript.AppendLine("    , MAXSIZE = UNLIMITED")
             }
 
-            [void]$fgScript.AppendLine(") TO FILEGROUP [$($fg.Name)];")
+            [void]$fgScript.AppendLine(") TO FILEGROUP [$escapedFgName];")
             [void]$fgScript.AppendLine("GO")
             [void]$fgScript.AppendLine("")
           }
@@ -5014,7 +5021,7 @@ function Test-UserExcludedByLoginType {
   }
 
   # Map LoginType to exclusion object types
-  # SMO LoginType enum: WindowsUser(0), WindowsGroup(1), SqlLogin(2), Certificate(3), 
+  # SMO LoginType enum: WindowsUser(0), WindowsGroup(1), SqlLogin(2), Certificate(3),
   #                     AsymmetricKey(4), ExternalUser(5), ExternalGroup(6)
   $loginType = $User.LoginType.ToString()
 
@@ -5095,6 +5102,35 @@ function Test-ObjectExcluded {
   }
 
   return $false
+}
+
+function Get-EscapedSqlIdentifier {
+  <#
+    .SYNOPSIS
+        Escapes a SQL Server identifier for safe use in bracketed notation.
+    .DESCRIPTION
+        SQL Server uses square brackets [] to delimit identifiers. To include a literal
+        ] character within a bracketed identifier, it must be escaped as ]].
+        This function ensures identifiers are safe from second-order SQL injection
+        via malicious object names stored in the database.
+    .PARAMETER Name
+        The identifier name to escape.
+    .OUTPUTS
+        The escaped identifier name (without surrounding brackets).
+    .EXAMPLE
+        Get-EscapedSqlIdentifier -Name 'Normal_Name'
+        # Returns: Normal_Name
+    .EXAMPLE
+        Get-EscapedSqlIdentifier -Name 'Malicious]; DROP TABLE Users;--'
+        # Returns: Malicious]]; DROP TABLE Users;--
+    #>
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$Name
+  )
+
+  # Escape ] as ]] to prevent breaking out of bracketed identifier context
+  return $Name -replace '\]', ']]'
 }
 
 function Get-ObjectGroupingMode {
@@ -5989,7 +6025,7 @@ function Show-ExportSummary {
 try {
   # Initialize metrics collection (CLI switch or config file)
   $script:CollectMetrics = $CollectMetrics.IsPresent
-  
+
   # Load configuration if provided
   $config = @{ export = @{ includeObjectTypes = @(); excludeObjectTypes = @(); includeData = $false; excludeObjects = @() } }
   $configSource = "None (using defaults)"

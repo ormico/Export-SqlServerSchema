@@ -1129,7 +1129,9 @@ function Invoke-SqlScript {
 
     # Replace ALTER DATABASE CURRENT with actual database name
     # CURRENT keyword doesn't work with SMO ExecuteNonQuery
-    $sql = $sql -replace '\bALTER\s+DATABASE\s+CURRENT\b', "ALTER DATABASE [$DatabaseName]"
+    # Escape the database name to prevent SQL injection via ] characters
+    $escapedDbName = Get-EscapedSqlIdentifier -Name $DatabaseName
+    $sql = $sql -replace '\bALTER\s+DATABASE\s+CURRENT\b', "ALTER DATABASE [$escapedDbName]"
 
     # For FileGroups scripts, ensure logical file names are unique by prefixing with database name
     # This prevents conflicts when multiple databases on same server use similar schema
@@ -1380,7 +1382,11 @@ function Invoke-ScriptsWithDependencyRetries {
       }
       catch {
         $result = -1
-        $scriptError = $_
+        # Convert error record to string for consistent error handling
+        $scriptError = $_.Exception.Message
+        if ($_.Exception.InnerException) {
+          $scriptError += "`n  Inner: $($_.Exception.InnerException.Message)"
+        }
       }
 
       $ErrorActionPreference = 'Stop'  # Restore default
@@ -1425,9 +1431,17 @@ function Invoke-ScriptsWithDependencyRetries {
     Write-Host "[ERROR] $failureCount script(s) failed after $MaxRetries retry attempt(s):" -ForegroundColor Red
 
     foreach ($failedScript in $pendingScripts) {
-      # Get the error message for display
+      # Get the error message for display - ensure it's a string
       $errorMsg = if ($failedScriptErrors.ContainsKey($failedScript.Name)) {
-        $failedScriptErrors[$failedScript.Name]
+        $rawError = $failedScriptErrors[$failedScript.Name]
+        # Convert ErrorRecord or other objects to string
+        if ($rawError -is [System.Management.Automation.ErrorRecord]) {
+          $rawError.Exception.Message
+        } elseif ($rawError -is [string]) {
+          $rawError
+        } else {
+          [string]$rawError
+        }
       } else {
         'Unknown error'
       }
@@ -1445,7 +1459,9 @@ function Invoke-ScriptsWithDependencyRetries {
     }
 
     if (-not $ContinueOnError) {
-      Write-Error "[ERROR] Dependency retry limit reached with $failureCount failed script(s)."
+      # Don't use Write-Error as it terminates before error log can be written
+      # Returning failure count allows caller to handle gracefully
+      Write-Host "[ERROR] Dependency retry limit reached with $failureCount failed script(s). Aborting import after writing error log." -ForegroundColor Red
     }
   }
   else {
@@ -1457,6 +1473,35 @@ function Invoke-ScriptsWithDependencyRetries {
     Failure = $failureCount
     Skip    = $skipCount
   }
+}
+
+function Get-EscapedSqlIdentifier {
+  <#
+    .SYNOPSIS
+        Escapes a SQL Server identifier for safe use in bracketed notation.
+    .DESCRIPTION
+        SQL Server uses square brackets [] to delimit identifiers. To include a literal
+        ] character within a bracketed identifier, it must be escaped as ]].
+        This function ensures identifiers are safe from second-order SQL injection
+        via malicious object names stored in the database.
+    .PARAMETER Name
+        The identifier name to escape.
+    .OUTPUTS
+        The escaped identifier name (without surrounding brackets).
+    .EXAMPLE
+        Get-EscapedSqlIdentifier -Name 'Normal_Name'
+        # Returns: Normal_Name
+    .EXAMPLE
+        Get-EscapedSqlIdentifier -Name 'Malicious]; DROP TABLE Users;--'
+        # Returns: Malicious]]; DROP TABLE Users;--
+    #>
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$Name
+  )
+
+  # Escape ] as ]] to prevent breaking out of bracketed identifier context
+  return $Name -replace '\]', ']]'
 }
 
 function Test-ScriptExcluded {
@@ -1711,7 +1756,7 @@ function Get-ScriptFiles {
     } else {
       'autoRemap'  # Default strategy
     }
-    
+
     if ($prodStrategy -eq 'autoRemap') {
       $sourceFileGroups = Join-Path $Path '00_FileGroups'
       if (Test-Path $sourceFileGroups) {
@@ -2927,9 +2972,14 @@ try {
 
   # Track current folder for error reporting
   $currentFolder = ''
+  # Flag to track if we should abort after structural failures (but still write error log)
+  $abortAfterStructuralFailure = $false
 
   # Process structural scripts first (no retry logic - these define structure)
   foreach ($scriptFile in $structuralScripts) {
+    # Skip remaining scripts if we've already decided to abort
+    if ($abortAfterStructuralFailure) { break }
+
     # Extract folder from path for error reporting
     $relativePath = $scriptFile.FullName -replace [regex]::Escape($SourcePath), '' -replace '^[\\/]', ''
     $scriptFolder = ($relativePath -split '[\\/]')[0]
@@ -2962,9 +3012,9 @@ try {
       Add-FailedScript -ScriptName $scriptFile.Name -ErrorMessage $errorMsg -Folder $currentFolder -IsFinal $true
 
       if (-not $ContinueOnError) {
-        # Don't process programmability scripts if structural scripts failed
-        Write-Error "[ERROR] Structural script failed. Aborting import."
-        break
+        # Set flag to abort - but don't throw error so we can still write error log
+        $abortAfterStructuralFailure = $true
+        Write-Host "[ERROR] Structural script failed. Aborting import after writing error log." -ForegroundColor Red
       }
     }
     else {
@@ -2972,8 +3022,8 @@ try {
     }
   }
 
-  # Process programmability scripts with dependency retry logic (only if no structural failures)
-  if ($programmabilityScripts.Count -gt 0 -and ($failureCount -eq 0 -or $ContinueOnError)) {
+  # Process programmability scripts with dependency retry logic (only if no structural failures or abort flag)
+  if ($programmabilityScripts.Count -gt 0 -and -not $abortAfterStructuralFailure -and ($failureCount -eq 0 -or $ContinueOnError)) {
     $retryResults = Invoke-ScriptsWithDependencyRetries `
       -Scripts $programmabilityScripts `
       -MaxRetries $retryMaxAttempts `
@@ -2992,17 +3042,24 @@ try {
     $successCount += $retryResults.Success
     $failureCount += $retryResults.Failure
     $skipCount += $retryResults.Skip
+
+    # If programmability scripts failed and not in ContinueOnError mode, set abort flag
+    if ($retryResults.Failure -gt 0 -and -not $ContinueOnError) {
+      $abortAfterStructuralFailure = $true
+    }
   }
-  elseif ($programmabilityScripts.Count -gt 0) {
+  elseif ($programmabilityScripts.Count -gt 0 -and ($abortAfterStructuralFailure -or $failureCount -gt 0)) {
     Write-Warning "[WARNING] Skipping $($programmabilityScripts.Count) programmability script(s) due to earlier failures"
     $skipCount += $programmabilityScripts.Count
   }
 
   # Process security policy scripts AFTER programmability objects (they depend on functions/procedures)
-  if ($securityPolicyScripts.Count -gt 0 -and ($failureCount -eq 0 -or $ContinueOnError)) {
+  if ($securityPolicyScripts.Count -gt 0 -and -not $abortAfterStructuralFailure -and ($failureCount -eq 0 -or $ContinueOnError)) {
     Write-Output ''
     Write-Output "[INFO] Processing $($securityPolicyScripts.Count) security policy script(s)..."
     foreach ($scriptFile in $securityPolicyScripts) {
+      if ($abortAfterStructuralFailure) { break }
+
       $result = Invoke-WithRetry -MaxAttempts $effectiveMaxRetries -InitialDelaySeconds $effectiveRetryDelay -OperationName "Script: $($scriptFile.Name)" -ScriptBlock {
         Invoke-SqlScript -FilePath $scriptFile.FullName -ServerName $Server `
           -DatabaseName $Database -Cred $Credential -Timeout $effectiveCommandTimeout -Show:$ShowSQL `
@@ -3014,8 +3071,22 @@ try {
       }
       elseif ($result -eq -1) {
         $failureCount++
+
+        # Get error details
+        $errorMsg = if ($script:LastScriptError) { $script:LastScriptError } else { 'Unknown error' }
+        $shortError = $errorMsg -split "`n" | Where-Object { $_ -match 'Error \d+:|Message:' } | Select-Object -First 1
+        if (-not $shortError) { $shortError = ($errorMsg -split "`n")[0] }
+        $shortError = $shortError.Trim() -replace '^\s*-?\s*', ''
+
+        Write-Host "  [ERROR] $($scriptFile.Name)" -ForegroundColor Red
+        Write-Host "    $shortError" -ForegroundColor DarkRed
+
+        # Record for final summary
+        Add-FailedScript -ScriptName $scriptFile.Name -ErrorMessage $errorMsg -Folder '15_SecurityPolicies' -IsFinal $true
+
         if (-not $ContinueOnError) {
-          Write-Error "[ERROR] Security policy script failed. Aborting import."
+          $abortAfterStructuralFailure = $true
+          Write-Host "[ERROR] Security policy script failed. Aborting import after writing error log." -ForegroundColor Red
           break
         }
       }
@@ -3024,14 +3095,14 @@ try {
       }
     }
   }
-  elseif ($securityPolicyScripts.Count -gt 0) {
+  elseif ($securityPolicyScripts.Count -gt 0 -and ($abortAfterStructuralFailure -or $failureCount -gt 0)) {
     Write-Warning "[WARNING] Skipping $($securityPolicyScripts.Count) security policy script(s) due to earlier failures"
     $skipCount += $securityPolicyScripts.Count
   }
 
-  # If we have data scripts and no failures so far, handle them with FK constraints disabled
-  Write-Verbose "FK disable check: dataScripts.Count=$($dataScripts.Count), failureCount=$failureCount"
-  if ($dataScripts.Count -gt 0 -and $failureCount -eq 0) {
+  # If we have data scripts and no failures so far (and no abort flag), handle them with FK constraints disabled
+  Write-Verbose "FK disable check: dataScripts.Count=$($dataScripts.Count), failureCount=$failureCount, abortFlag=$abortAfterStructuralFailure"
+  if ($dataScripts.Count -gt 0 -and $failureCount -eq 0 -and -not $abortAfterStructuralFailure) {
     Write-Output ''
     Write-Output 'Preparing for data import...'
     Write-Verbose "Attempting to disable foreign key constraints..."
@@ -3114,6 +3185,19 @@ try {
       }
       elseif ($result -eq -1) {
         $failureCount++
+
+        # Get error details
+        $errorMsg = if ($script:LastScriptError) { $script:LastScriptError } else { 'Unknown error' }
+        $shortError = $errorMsg -split "`n" | Where-Object { $_ -match 'Error \d+:|Message:' } | Select-Object -First 1
+        if (-not $shortError) { $shortError = ($errorMsg -split "`n")[0] }
+        $shortError = $shortError.Trim() -replace '^\s*-?\s*', ''
+
+        Write-Host "  [ERROR] $($scriptFile.Name)" -ForegroundColor Red
+        Write-Host "    $shortError" -ForegroundColor DarkRed
+
+        # Record for final summary
+        Add-FailedScript -ScriptName $scriptFile.Name -ErrorMessage $errorMsg -Folder '16_Data' -IsFinal $true
+
         if (-not $ContinueOnError) {
           break
         }

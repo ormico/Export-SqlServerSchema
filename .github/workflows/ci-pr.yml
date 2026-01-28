@@ -9,41 +9,41 @@ jobs:
   test:
     name: Run Integration Tests
     runs-on: ubuntu-latest
-    
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      
+
       - name: Setup PowerShell
         shell: pwsh
         run: |
           Write-Host "PowerShell version: $($PSVersionTable.PSVersion)"
           Write-Host "OS: $($PSVersionTable.OS)"
-      
+
       - name: Install SQL Server command-line tools
         run: |
           # Download and install Microsoft signing key
           curl https://packages.microsoft.com/keys/microsoft.asc | sudo apt-key add -
-          
+
           # Add Microsoft SQL Server repository
           curl https://packages.microsoft.com/config/ubuntu/22.04/prod.list | sudo tee /etc/apt/sources.list.d/msprod.list
-          
+
           # Update and install mssql-tools18
           sudo apt-get update
           sudo ACCEPT_EULA=Y apt-get install -y mssql-tools18 unixodbc-dev
-          
+
           # Add to PATH
           echo "/opt/mssql-tools18/bin" >> $GITHUB_PATH
-      
+
       - name: Install PowerShell modules
         shell: pwsh
         run: |
           Install-Module -Name SqlServer -Scope CurrentUser -Force -AllowClobber
           Install-Module -Name powershell-yaml -Scope CurrentUser -Force -AllowClobber
           Write-Host "[SUCCESS] PowerShell modules installed"
-      
+
       - name: Create .env file for Docker
         working-directory: ./tests
         run: |
@@ -56,13 +56,13 @@ jobs:
           TEST_USERNAME=sa
           EOF
           echo "Created .env file"
-      
+
       - name: Start SQL Server container
         working-directory: ./tests
         run: |
           docker compose up -d
           echo "Waiting for SQL Server to be ready..."
-          
+
           # Wait up to 2 minutes for SQL Server to be ready
           for i in {1..24}; do
             if docker compose exec -T sqlserver /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P Test@1234 -C -Q "SELECT 1" &> /dev/null; then
@@ -72,16 +72,16 @@ jobs:
             echo "Attempt $i: SQL Server not ready yet, waiting 5 seconds..."
             sleep 5
           done
-          
+
           # Final check
           docker compose exec -T sqlserver /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P Test@1234 -C -Q "SELECT 1"
-      
+
       - name: Check SQL Server status
         working-directory: ./tests
         run: |
           docker compose ps
           docker compose logs sqlserver
-      
+
       - name: Run integration tests
         shell: pwsh
         working-directory: ./tests
@@ -130,13 +130,13 @@ jobs:
         run: |
           Write-Host "Running error handling tests..."
           ./test-error-handling.ps1
-      
+
       - name: Cleanup
         if: always()
         working-directory: ./tests
         run: |
           docker compose down -v
-      
+
       - name: Upload test artifacts
         if: failure()
         uses: actions/upload-artifact@v4

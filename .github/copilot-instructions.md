@@ -1,5 +1,65 @@
 # Copilot Instructions for Export-SqlServerSchema
 
+## CRITICAL: Script Invocation Quick Reference
+
+**COPY-PASTE THESE PATTERNS** when running Export/Import scripts. Do NOT omit parameters or use Get-Credential.
+
+### Export Script - Required Parameters
+```powershell
+# Minimum required (Windows Auth)
+& ./Export-SqlServerSchema.ps1 -Server 'localhost' -Database 'MyDb' -OutputPath './output'
+
+# With SQL Auth (test environment)
+$securePass = ConvertTo-SecureString 'Test@1234' -AsPlainText -Force
+$cred = New-Object System.Management.Automation.PSCredential('sa', $securePass)
+& ./Export-SqlServerSchema.ps1 -Server 'localhost' -Database 'TestDb' -OutputPath './output' -Credential $cred
+```
+
+### Import Script - Required Parameters
+```powershell
+# Minimum required (Windows Auth)
+& ./Import-SqlServerSchema.ps1 -Server 'localhost' -Database 'TargetDb' -SourcePath './exported_scripts'
+
+# With SQL Auth (test environment)
+$securePass = ConvertTo-SecureString 'Test@1234' -AsPlainText -Force
+$cred = New-Object System.Management.Automation.PSCredential('sa', $securePass)
+& ./Import-SqlServerSchema.ps1 -Server 'localhost' -Database 'TargetDb' -SourcePath './exported_scripts' -Credential $cred
+```
+
+### Test Environment Values (from tests/.env)
+- **Server**: `localhost` or `localhost,1433`
+- **Password**: `Test@1234`
+- **Username**: `sa`
+
+### NEVER DO THIS (causes blocking prompts)
+```powershell
+# WRONG - missing mandatory parameters, will prompt and block
+& ./Export-SqlServerSchema.ps1
+& ./Import-SqlServerSchema.ps1
+pwsh -Command "& { . './Export-SqlServerSchema.ps1' }"
+
+# WRONG - dot-sourcing EXECUTES the script and triggers mandatory parameter prompts
+. './Export-SqlServerSchema.ps1'
+pwsh -Command ". './Export-SqlServerSchema.ps1'"
+
+# WRONG - Get-Credential prompts interactively
+$cred = Get-Credential
+```
+
+### Testing Internal Functions
+To test internal functions WITHOUT triggering mandatory parameters, you CANNOT dot-source.
+Instead, run the actual tests or use the scripts with valid parameters:
+```powershell
+# CORRECT - Run existing test scripts
+pwsh -NoProfile -File ./tests/run-integration-test.ps1
+pwsh -NoProfile -File ./tests/test-exclude-feature.ps1
+
+# CORRECT - Validate syntax without execution
+pwsh -NoProfile -Command "Get-Command './Export-SqlServerSchema.ps1' -Syntax"
+```
+
+---
+
 ## Active Development Tasks
 
 **Parallel Export Feature**: If implementing parallel export, read these documents first:

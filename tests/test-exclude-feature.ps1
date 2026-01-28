@@ -3,7 +3,7 @@
 <#
 .SYNOPSIS
     Tests the excludeObjectTypes configuration feature
-    
+
 .DESCRIPTION
     This test validates that the excludeObjectTypes, excludeSchemas, and excludeObjects
     settings are respected across export logic by:
@@ -52,12 +52,12 @@ function Invoke-SqlCommand {
         [string]$Query,
         [string]$Database = "master"
     )
-    
+
     $result = sqlcmd -S $Server -U $Username -P $Password -d $Database -C -Q $Query -h -1 2>&1
     if ($LASTEXITCODE -ne 0) {
         throw "SQL command failed: $result"
     }
-    
+
     $lines = $result -split "`n" | Where-Object { $_.Trim() -ne "" }
     if ($lines.Count -gt 0) {
         $firstLine = $lines[0].Trim()
@@ -65,7 +65,7 @@ function Invoke-SqlCommand {
             return $firstLine
         }
     }
-    
+
     return $result
 }
 
@@ -75,34 +75,34 @@ function Write-TestStep {
         [ValidateSet("Info", "Success", "Error", "Warning")]
         [string]$Type = "Info"
     )
-    
+
     $colors = @{
         Info = "Cyan"
         Success = "Green"
         Error = "Red"
         Warning = "Yellow"
     }
-    
+
     $prefixes = @{
         Info = "[INFO]"
         Success = "[SUCCESS]"
         Error = "[ERROR]"
         Warning = "[WARNING]"
     }
-    
+
     Write-Host "$($prefixes[$Type]) $Message" -ForegroundColor $colors[$Type]
 }
 
 try {
     # Step 1: Verify test database exists
     Write-TestStep "Step 1: Verifying test database exists..." -Type Info
-    
+
     $dbExists = Invoke-SqlCommand "SELECT COUNT(*) FROM sys.databases WHERE name = '$SourceDatabase'" "master"
     if ($dbExists.Trim() -eq "0") {
         Write-TestStep "Test database doesn't exist. Run run-integration-test.ps1 first." -Type Error
         exit 1
     }
-    
+
     # Count objects in source database
     $sourceViews = Invoke-SqlCommand "SELECT COUNT(*) FROM sys.views WHERE is_ms_shipped = 0" $SourceDatabase
     $sourceProcs = Invoke-SqlCommand "SELECT COUNT(*) FROM sys.procedures WHERE is_ms_shipped = 0" $SourceDatabase
@@ -114,7 +114,7 @@ try {
     $sourcePartitionFuncs = Invoke-SqlCommand "SELECT COUNT(*) FROM sys.partition_functions" $SourceDatabase
     $sourcePartitionSchemes = Invoke-SqlCommand "SELECT COUNT(*) FROM sys.partition_schemes" $SourceDatabase
     $sourceSecurityPolicies = Invoke-SqlCommand "SELECT COUNT(*) FROM sys.security_policies" $SourceDatabase
-    
+
     Write-Host "`nSource Database Object Counts:" -ForegroundColor White
     Write-Host "  Views: $($sourceViews.Trim())" -ForegroundColor Gray
     Write-Host "  Stored Procedures: $($sourceProcs.Trim())" -ForegroundColor Gray
@@ -126,31 +126,31 @@ try {
     Write-Host "  Partition Functions: $($sourcePartitionFuncs.Trim())" -ForegroundColor Gray
     Write-Host "  Partition Schemes: $($sourcePartitionSchemes.Trim())" -ForegroundColor Gray
     Write-Host "  Security Policies: $($sourceSecurityPolicies.Trim())" -ForegroundColor Gray
-    
+
     Write-TestStep "Source database verified" -Type Success
-    
+
     # Step 2: Export with exclusions
     Write-Host "`n" -NoNewline
     Write-TestStep "Step 2: Exporting schema with exclusions..." -Type Info
-    
+
     # Clean export directory
     if (Test-Path $ExportPath) {
         Write-Host "  Cleaning previous exports..." -ForegroundColor Gray
         Remove-Item $ExportPath -Recurse -Force
     }
-    
+
     $exportScript = Join-Path (Split-Path $PSScriptRoot -Parent) "Export-SqlServerSchema.ps1"
     if (-not (Test-Path $exportScript)) {
         throw "Export script not found: $exportScript"
     }
-    
+
     # Build credential object
     $securePassword = ConvertTo-SecureString $Password -AsPlainText -Force
     $credential = New-Object System.Management.Automation.PSCredential($Username, $securePassword)
-    
+
     Write-Host "  Running export with exclude config..." -ForegroundColor Gray
     Write-Host "  Config file: $ExcludeConfigFile" -ForegroundColor Gray
-    
+
     try {
         & $exportScript -Server $TEST_SERVER -Database $SourceDatabase -OutputPath $ExportPath -TargetSqlVersion 'Sql2022' -IncludeData -Credential $credential -ConfigFile $ExcludeConfigFile
         Write-TestStep "Schema exported with exclusions" -Type Success
@@ -158,22 +158,22 @@ try {
         Write-TestStep "Export failed: $_" -Type Error
         throw $_
     }
-    
+
     # Step 3: Verify exclusions
     Write-Host "`n" -NoNewline
     Write-TestStep "Step 3: Verifying excluded objects were not exported..." -Type Info
-    
+
     $exportDirs = Get-ChildItem $ExportPath -Directory | Where-Object { $_.Name -match "^$($TEST_SERVER)_" }
     if ($exportDirs.Count -eq 0) {
         throw "No export directory created"
     }
-    
+
     $exportDir = $exportDirs[0].FullName
     Write-Host "  Export location: $exportDir" -ForegroundColor Gray
-    
+
     # Check for excluded object types
     $testResults = @{}
-    
+
     # Test 1: Views should not be exported
     $viewsDir = Join-Path $exportDir "14_Programmability/05_Views"
     if (Test-Path $viewsDir) {
@@ -189,7 +189,7 @@ try {
         Write-TestStep "PASS: Views directory not created" -Type Success
         $testResults['Views'] = $true
     }
-    
+
     # Test 2: Stored Procedures should not be exported
     $procsDir = Join-Path $exportDir "14_Programmability/03_StoredProcedures"
     if (Test-Path $procsDir) {
@@ -205,7 +205,7 @@ try {
         Write-TestStep "PASS: Stored Procedures directory not created" -Type Success
         $testResults['StoredProcedures'] = $true
     }
-    
+
     # Test 3: Functions should not be exported
     $funcsDir = Join-Path $exportDir "14_Programmability/02_Functions"
     if (Test-Path $funcsDir) {
@@ -221,7 +221,7 @@ try {
         Write-TestStep "PASS: Functions directory not created" -Type Success
         $testResults['Functions'] = $true
     }
-    
+
     # Test 4: Sequences should not be exported
     $seqDir = Join-Path $exportDir "04_Sequences"
     if (Test-Path $seqDir) {
@@ -237,7 +237,7 @@ try {
         Write-TestStep "PASS: Sequences directory not created" -Type Success
         $testResults['Sequences'] = $true
     }
-    
+
     # Test 5: Synonyms should not be exported
     $synDir = Join-Path $exportDir "15_Synonyms"
     if (Test-Path $synDir) {
@@ -253,7 +253,7 @@ try {
         Write-TestStep "PASS: Synonyms directory not created" -Type Success
         $testResults['Synonyms'] = $true
     }
-    
+
     # Test 6: Database Triggers should not be exported
     $triggerDir = Join-Path $exportDir "14_Programmability/04_Triggers"
     if (Test-Path $triggerDir) {
@@ -269,10 +269,10 @@ try {
         Write-TestStep "PASS: Triggers directory not created" -Type Success
         $testResults['DatabaseTriggers'] = $true
     }
-    
+
     # Test 7: Table Triggers should not be exported
     if (Test-Path $triggerDir) {
-        $tableTriggerFiles = Get-ChildItem $triggerDir -Filter "*.sql" -ErrorAction SilentlyContinue | 
+        $tableTriggerFiles = Get-ChildItem $triggerDir -Filter "*.sql" -ErrorAction SilentlyContinue |
             Where-Object { $_.Name -notlike "Database.*" }
         if ($tableTriggerFiles.Count -gt 0) {
             Write-TestStep "FAIL: Table Triggers were exported despite exclusion ($($tableTriggerFiles.Count) files found)" -Type Error
@@ -285,7 +285,7 @@ try {
         Write-TestStep "PASS: Table Triggers not exported (no trigger directory)" -Type Success
         $testResults['TableTriggers'] = $true
     }
-    
+
     # Test 8: Partition Functions should not be exported
     $pfDir = Join-Path $exportDir "05_PartitionFunctions"
     if (Test-Path $pfDir) {
@@ -301,7 +301,7 @@ try {
         Write-TestStep "PASS: Partition Functions directory not created" -Type Success
         $testResults['PartitionFunctions'] = $true
     }
-    
+
     # Test 9: Partition Schemes should not be exported
     $psDir = Join-Path $exportDir "06_PartitionSchemes"
     if (Test-Path $psDir) {
@@ -317,7 +317,7 @@ try {
         Write-TestStep "PASS: Partition Schemes directory not created" -Type Success
         $testResults['PartitionSchemes'] = $true
     }
-    
+
     # Test 10: Security Policies should not be exported
     $spDir = Join-Path $exportDir "20_SecurityPolicies"
     if (Test-Path $spDir) {
@@ -447,7 +447,7 @@ try {
         Write-TestStep "PASS: Security directory not created" -Type Success
         $testResults['Security'] = $true
     }
-    
+
     # Test 18: Tables SHOULD be exported (not in exclusion list)
     $tablesDir = Join-Path $exportDir "09_Tables_PrimaryKey"
     if (Test-Path $tablesDir) {
@@ -463,7 +463,7 @@ try {
         Write-TestStep "FAIL: Tables directory not created" -Type Error
         $testResults['Tables_Included'] = $false
     }
-    
+
     # Test 19: Schemas SHOULD be exported (not in exclusion list)
     $schemasDir = Join-Path $exportDir "03_Schemas"
     if (Test-Path $schemasDir) {
@@ -540,17 +540,17 @@ try {
 
     # Step 5: First do a FULL export (no exclusions) to use for import exclusion tests
     Write-TestStep "Step 5: Creating full export for import exclusion tests..." -Type Info
-    
+
     $fullExportPath = Join-Path $PSScriptRoot "exports_import_exclude_test"
     if (Test-Path $fullExportPath) {
         Write-Host "  Cleaning previous full export..." -ForegroundColor Gray
         Remove-Item $fullExportPath -Recurse -Force
     }
-    
+
     # Export everything (no exclusions)
     Write-Host "  Running full export (no exclusions)..." -ForegroundColor Gray
     & $exportScript -Server $TEST_SERVER -Database $SourceDatabase -OutputPath $fullExportPath -TargetSqlVersion 'Sql2022' -Credential $credential
-    
+
     $fullExportDirs = Get-ChildItem $fullExportPath -Directory | Where-Object { $_.Name -match "^$($TEST_SERVER)_" }
     if ($fullExportDirs.Count -eq 0) {
         throw "No full export directory created"
@@ -560,29 +560,29 @@ try {
 
     # Step 6: Test import with SqlUsers exclusion
     Write-TestStep "Step 6: Testing import with SqlUsers exclusion..." -Type Info
-    
+
     $importTestDb1 = "TestDb_ImportExclude1"
     $importScript = Join-Path (Split-Path $PSScriptRoot -Parent) "Import-SqlServerSchema.ps1"
-    
+
     # Drop test database if exists
     try {
         Invoke-SqlCommand "IF EXISTS (SELECT 1 FROM sys.databases WHERE name = '$importTestDb1') BEGIN ALTER DATABASE [$importTestDb1] SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE [$importTestDb1]; END" "master"
     } catch {
         Write-Host "  Note: Could not drop existing test database (may not exist)" -ForegroundColor Gray
     }
-    
+
     # Import with SqlUsers excluded
     Write-Host "  Running import with -ExcludeObjectTypes SqlUsers..." -ForegroundColor Gray
     & $importScript -Server $TEST_SERVER -Database $importTestDb1 -SourcePath $fullExportDir -Credential $credential -CreateDatabase -ExcludeObjectTypes SqlUsers
-    
+
     # Check if SqlUsers were skipped (database should have no SQL-mapped users except db_owner)
     $sqlMappedUsers = Invoke-SqlCommand @"
 SELECT COUNT(*) FROM sys.database_principals dp
-WHERE dp.type = 'S' 
+WHERE dp.type = 'S'
   AND dp.name NOT IN ('dbo', 'guest', 'INFORMATION_SCHEMA', 'sys')
   AND dp.authentication_type_desc = 'INSTANCE'
 "@ $importTestDb1
-    
+
     if ([int]$sqlMappedUsers.Trim() -eq 0) {
         Write-TestStep "PASS: SqlUsers exclusion worked - no SQL-mapped users imported" -Type Success
         $testResults['Import_Exclude_SqlUsers'] = $true
@@ -593,28 +593,28 @@ WHERE dp.type = 'S'
 
     # Step 7: Test import with DatabaseRoles exclusion
     Write-TestStep "Step 7: Testing import with DatabaseRoles exclusion..." -Type Info
-    
+
     $importTestDb2 = "TestDb_ImportExclude2"
-    
+
     # Drop test database if exists
     try {
         Invoke-SqlCommand "IF EXISTS (SELECT 1 FROM sys.databases WHERE name = '$importTestDb2') BEGIN ALTER DATABASE [$importTestDb2] SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE [$importTestDb2]; END" "master"
     } catch {
         Write-Host "  Note: Could not drop existing test database (may not exist)" -ForegroundColor Gray
     }
-    
+
     # Import with DatabaseRoles excluded
     Write-Host "  Running import with -ExcludeObjectTypes DatabaseRoles..." -ForegroundColor Gray
     & $importScript -Server $TEST_SERVER -Database $importTestDb2 -SourcePath $fullExportDir -Credential $credential -CreateDatabase -ExcludeObjectTypes DatabaseRoles
-    
+
     # Check if custom roles were skipped (only built-in roles should exist)
     $customRoles = Invoke-SqlCommand @"
 SELECT COUNT(*) FROM sys.database_principals
-WHERE type = 'R' 
-  AND is_fixed_role = 0 
+WHERE type = 'R'
+  AND is_fixed_role = 0
   AND name NOT IN ('public')
 "@ $importTestDb2
-    
+
     if ([int]$customRoles.Trim() -eq 0) {
         Write-TestStep "PASS: DatabaseRoles exclusion worked - no custom roles imported" -Type Success
         $testResults['Import_Exclude_DatabaseRoles'] = $true
@@ -626,16 +626,16 @@ WHERE type = 'R'
     # Step 8: Test import with Views exclusion
     # NOTE: Excluding Views may cause dependent functions/procs to fail - we test that the exclusion itself works
     Write-TestStep "Step 8: Testing import with Views exclusion..." -Type Info
-    
+
     $importTestDb3 = "TestDb_ImportExclude3"
-    
+
     # Drop test database if exists
     try {
         Invoke-SqlCommand "IF EXISTS (SELECT 1 FROM sys.databases WHERE name = '$importTestDb3') BEGIN ALTER DATABASE [$importTestDb3] SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE [$importTestDb3]; END" "master"
     } catch {
         Write-Host "  Note: Could not drop existing test database (may not exist)" -ForegroundColor Gray
     }
-    
+
     # Import with Views excluded - may have partial failures due to dependencies
     Write-Host "  Running import with -ExcludeObjectTypes Views..." -ForegroundColor Gray
     Write-Host "  Note: Expecting possible dependency errors (functions referencing views)" -ForegroundColor Yellow
@@ -644,10 +644,10 @@ WHERE type = 'R'
     } catch {
         Write-Host "  Import completed with expected errors (dependency failures)" -ForegroundColor Yellow
     }
-    
+
     # Check if views were skipped - the key test is that no views exist in the database
     $viewCount = Invoke-SqlCommand "SELECT COUNT(*) FROM sys.views WHERE is_ms_shipped = 0" $importTestDb3
-    
+
     if ([int]$viewCount.Trim() -eq 0) {
         Write-TestStep "PASS: Views exclusion worked - no views imported" -Type Success
         $testResults['Import_Exclude_Views'] = $true
@@ -658,16 +658,16 @@ WHERE type = 'R'
 
     # Step 9: Test import with StoredProcedures exclusion
     Write-TestStep "Step 9: Testing import with StoredProcedures exclusion..." -Type Info
-    
+
     $importTestDb4 = "TestDb_ImportExclude4"
-    
+
     # Drop test database if exists
     try {
         Invoke-SqlCommand "IF EXISTS (SELECT 1 FROM sys.databases WHERE name = '$importTestDb4') BEGIN ALTER DATABASE [$importTestDb4] SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE [$importTestDb4]; END" "master"
     } catch {
         Write-Host "  Note: Could not drop existing test database (may not exist)" -ForegroundColor Gray
     }
-    
+
     # Import with StoredProcedures excluded - may have partial failures if other objects depend on procs
     Write-Host "  Running import with -ExcludeObjectTypes StoredProcedures..." -ForegroundColor Gray
     try {
@@ -675,10 +675,10 @@ WHERE type = 'R'
     } catch {
         Write-Host "  Import completed with possible errors" -ForegroundColor Yellow
     }
-    
+
     # Check if stored procedures were skipped
     $procCount = Invoke-SqlCommand "SELECT COUNT(*) FROM sys.procedures WHERE is_ms_shipped = 0" $importTestDb4
-    
+
     if ([int]$procCount.Trim() -eq 0) {
         Write-TestStep "PASS: StoredProcedures exclusion worked - no procs imported" -Type Success
         $testResults['Import_Exclude_StoredProcedures'] = $true
@@ -689,15 +689,15 @@ WHERE type = 'R'
 
     # Step 10: Inject Windows user script and test WindowsUsers exclusion
     Write-TestStep "Step 10: Testing import with WindowsUsers exclusion (injected)..." -Type Info
-    
+
     $importTestDb5 = "TestDb_ImportExclude5"
-    
+
     # First, inject a fake Windows user SQL file into the export
     $securityDir = Join-Path $fullExportDir "01_Security"
     if (-not (Test-Path $securityDir)) {
         New-Item -ItemType Directory -Path $securityDir -Force | Out-Null
     }
-    
+
     $windowsUserScript = @"
 -- Simulated Windows domain user (will fail to create but tests exclusion logic)
 -- File format matches Windows user naming pattern: DOMAIN.Username.user.sql
@@ -707,18 +707,18 @@ GO
     $windowsUserFile = Join-Path $securityDir "TESTDOMAIN.TestWinUser.user.sql"
     Set-Content -Path $windowsUserFile -Value $windowsUserScript
     Write-Host "  Injected Windows user script: $windowsUserFile" -ForegroundColor Gray
-    
+
     # Drop test database if exists
     try {
         Invoke-SqlCommand "IF EXISTS (SELECT 1 FROM sys.databases WHERE name = '$importTestDb5') BEGIN ALTER DATABASE [$importTestDb5] SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE [$importTestDb5]; END" "master"
     } catch {
         Write-Host "  Note: Could not drop existing test database (may not exist)" -ForegroundColor Gray
     }
-    
+
     # Import with WindowsUsers excluded - should skip the injected file
     Write-Host "  Running import with -ExcludeObjectTypes WindowsUsers..." -ForegroundColor Gray
     $importOutput = & $importScript -Server $TEST_SERVER -Database $importTestDb5 -SourcePath $fullExportDir -Credential $credential -CreateDatabase -ExcludeObjectTypes WindowsUsers 2>&1
-    
+
     # Check if the import succeeded without errors (would fail if Windows user script ran)
     # The exclusion should have skipped the Windows user file
     if ($LASTEXITCODE -eq 0 -or $LASTEXITCODE -eq $null) {
@@ -735,13 +735,13 @@ GO
         Write-TestStep "FAIL: Import failed with WindowsUsers exclusion" -Type Error
         $testResults['Import_Exclude_WindowsUsers'] = $false
     }
-    
+
     # Clean up injected file
     Remove-Item $windowsUserFile -Force -ErrorAction SilentlyContinue
 
     # Step 11: Cleanup test databases
     Write-TestStep "Step 11: Cleaning up test databases..." -Type Info
-    
+
     foreach ($dbName in @($importTestDb1, $importTestDb2, $importTestDb3, $importTestDb4, $importTestDb5)) {
         try {
             Invoke-SqlCommand "IF EXISTS (SELECT 1 FROM sys.databases WHERE name = '$dbName') BEGIN ALTER DATABASE [$dbName] SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE [$dbName]; END" "master"
@@ -751,39 +751,39 @@ GO
         }
     }
     Write-TestStep "Cleanup complete" -Type Success
-    
+
     # Step 12: Summary
     Write-Host "`n═══════════════════════════════════════════════" -ForegroundColor Cyan
     Write-Host "TEST SUMMARY" -ForegroundColor Cyan
     Write-Host "═══════════════════════════════════════════════`n" -ForegroundColor Cyan
-    
+
     $passCount = ($testResults.Values | Where-Object { $_ -eq $true }).Count
     $totalTests = $testResults.Count
-    
+
     # Separate export and import tests
     $exportTests = $testResults.GetEnumerator() | Where-Object { $_.Key -notlike "Import_*" }
     $importTests = $testResults.GetEnumerator() | Where-Object { $_.Key -like "Import_*" }
-    
+
     Write-Host "EXPORT EXCLUSION TESTS:" -ForegroundColor Yellow
     $exportPass = ($exportTests | Where-Object { $_.Value -eq $true }).Count
     $exportTotal = $exportTests.Count
     Write-Host "  Passed: $exportPass / $exportTotal" -ForegroundColor $(if ($exportPass -eq $exportTotal) { "Green" } else { "Yellow" })
-    
+
     Write-Host "`nIMPORT EXCLUSION TESTS:" -ForegroundColor Yellow
     $importPass = ($importTests | Where-Object { $_.Value -eq $true }).Count
     $importTotal = $importTests.Count
     Write-Host "  Passed: $importPass / $importTotal" -ForegroundColor $(if ($importPass -eq $importTotal) { "Green" } else { "Yellow" })
-    
+
     Write-Host "`nOVERALL:" -ForegroundColor Yellow
     Write-Host "Tests Passed: $passCount / $totalTests" -ForegroundColor $(if ($passCount -eq $totalTests) { "Green" } else { "Yellow" })
-    
+
     $failedTests = $testResults.GetEnumerator() | Where-Object { $_.Value -eq $false }
     if ($failedTests.Count -gt 0) {
         Write-Host "`nFailed Tests:" -ForegroundColor Red
         foreach ($test in $failedTests) {
             Write-Host "  - $($test.Key)" -ForegroundColor Red
         }
-        
+
         Write-Host "`n[ERROR] TESTS FAILED!" -ForegroundColor Red
         exit 1
     } else {
@@ -791,7 +791,7 @@ GO
         Write-Host "The exclusion features are working correctly across all tested settings." -ForegroundColor Cyan
         exit 0
     }
-    
+
 } catch {
     Write-Host "`n" -NoNewline
     Write-TestStep "TEST FAILED: $_" -Type Error
