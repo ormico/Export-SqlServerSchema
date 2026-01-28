@@ -1107,15 +1107,16 @@ function Invoke-SqlScript {
 
       # 1. Tables/Indexes: Replace ) ON [FileGroup] with ) ON [PRIMARY]
       #    Pattern: closing paren followed by ON [anything-except-PRIMARY]
-      $sql = $sql -replace '\)\s*ON\s*\[(?!PRIMARY\])[^\]]+\]', ') ON [PRIMARY]'
+      #    Uses (?i) for case-insensitive PRIMARY match (SQL identifiers are case-insensitive)
+      $sql = $sql -replace '\)\s*ON\s*\[(?!(?i)PRIMARY\])[^\]]+\]', ') ON [PRIMARY]'
 
       # 1b. TEXTIMAGE_ON [FileGroup] -> TEXTIMAGE_ON [PRIMARY]
       #     For LOB data (text, ntext, image, varchar(max), etc.)
-      $sql = $sql -replace 'TEXTIMAGE_ON\s*\[(?!PRIMARY\])[^\]]+\]', 'TEXTIMAGE_ON [PRIMARY]'
+      $sql = $sql -replace 'TEXTIMAGE_ON\s*\[(?!(?i)PRIMARY\])[^\]]+\]', 'TEXTIMAGE_ON [PRIMARY]'
 
       # 1c. FILESTREAM_ON [FileGroup] -> FILESTREAM_ON [PRIMARY]
       #     For FILESTREAM data columns
-      $sql = $sql -replace 'FILESTREAM_ON\s*\[(?!PRIMARY\])[^\]]+\]', 'FILESTREAM_ON [PRIMARY]'
+      $sql = $sql -replace 'FILESTREAM_ON\s*\[(?!(?i)PRIMARY\])[^\]]+\]', 'FILESTREAM_ON [PRIMARY]'
 
       # 2. Partition Schemes (TO ...): Replace TO ([FG1], [FG2], ...) with ALL TO ([PRIMARY])
       #    Pattern: TO ( followed by list of filegroups in brackets
@@ -2805,7 +2806,9 @@ try {
 
           foreach ($sqlBlock in $memoryOptimizedSql) {
             # Replace ALTER DATABASE CURRENT with actual database name
-            $sql = $sqlBlock -replace '\bALTER\s+DATABASE\s+CURRENT\b', "ALTER DATABASE [$Database]"
+            # Escape the database name to prevent SQL injection via ] characters
+            $escapedDbName = Get-EscapedSqlIdentifier -Name $Database
+            $sql = $sqlBlock -replace '\bALTER\s+DATABASE\s+CURRENT\b', "ALTER DATABASE [$escapedDbName]"
 
             try {
               $script:SharedConnection.ExecuteNonQuery($sql) | Out-Null

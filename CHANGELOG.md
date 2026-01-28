@@ -41,9 +41,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 **Import Error Reporting (Bug Fix #3)**
 - Errors now shown in RED immediately when they occur (not hidden in verbose output)
 - Shows actual SQL error message inline, not just script name
-- Creates `import-errors.log` file with full error details
+- Creates `import_errors_<timestamp>.log` file with full error details
 - Final summary lists all failed scripts with their error messages
 - Programmability dependency retry failures still use appropriate yellow warnings during retries
+- Fixed: Error log is now always written when import fails (even on structural failures or fatal errors)
+- Fixed: Structural script failures now properly record errors to the error log before aborting
+
+**SQL Injection Prevention (Bug Fix #7)**
+- Added `Get-EscapedSqlIdentifier` function to both Export and Import scripts
+- FileGroup names are now escaped when generating ALTER DATABASE statements
+- Database names are now escaped when replacing ALTER DATABASE CURRENT (memory-optimized FileGroups)
+- Prevents second-order SQL injection via malicious object names containing `]` characters
+
+**removeToPrimary Case Sensitivity (Bug Fix #8)**
+- FileGroup remapping regex patterns now use case-insensitive matching for `PRIMARY`
+- Handles scripts with `ON [primary]`, `ON [Primary]`, or any other case variant
+- SQL Server identifiers are case-insensitive, so the regex should be too
 
 ---
 
