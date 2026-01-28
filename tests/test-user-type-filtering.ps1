@@ -331,21 +331,16 @@ $importOutput3a = ""
 try {
     # Run the import script in a separate PowerShell process to isolate error handling
     # This ensures we capture all output including Write-Host and Write-Error
-    $importArgs = @(
-        "-NoProfile",
-        "-File", $importScript,
-        "-Server", $Server,
-        "-Database", $targetDb3a,
-        "-SourcePath", $importSourceDir.FullName,
-        "-ConfigFile", $configPath3a,
-        "-Credential", $credential
-    )
+    # Escape single quotes in password for safe embedding in command string
+    $escapedPassword = $Password -replace "'", "''"
+    $escapedSourcePath = $importSourceDir.FullName -replace "'", "''"
+    $escapedConfigPath = $configPath3a -replace "'", "''"
     
-    # Build command to run with credentials passed via environment or inline
+    # Build command to run with credentials passed inline
     $importCmd = @"
-`$securePassword = ConvertTo-SecureString '$Password' -AsPlainText -Force
+`$securePassword = ConvertTo-SecureString '$escapedPassword' -AsPlainText -Force
 `$cred = New-Object System.Management.Automation.PSCredential('$Username', `$securePassword)
-& '$importScript' -Server '$Server' -Database '$targetDb3a' -SourcePath '$($importSourceDir.FullName)' -ConfigFile '$configPath3a' -Credential `$cred
+& '$importScript' -Server '$Server' -Database '$targetDb3a' -SourcePath '$escapedSourcePath' -ConfigFile '$escapedConfigPath' -Credential `$cred
 "@
     
     $importOutput3a = pwsh -NoProfile -Command $importCmd 2>&1 | Out-String
