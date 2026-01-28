@@ -314,6 +314,14 @@
           },
           "uniqueItems": true
         },
+        "excludeSchemas": {
+          "type": "array",
+          "description": "Schemas to exclude from import (scripts with filenames starting with these schemas will be skipped)",
+          "items": {
+            "type": "string"
+          },
+          "examples": ["staging", "temp"]
+        },
         "dependencyRetries": {
           "type": "object",
           "description": "Retry settings for handling cross-object dependencies in programmability objects",

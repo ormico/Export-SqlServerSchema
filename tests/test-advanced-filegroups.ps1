@@ -108,9 +108,9 @@ function Invoke-SqlCommand {
 function Get-SqlScalarValue {
     # Extracts a single integer value from sqlcmd output (handles arrays)
     param([object]$Result)
-    
+
     if ($null -eq $Result) { return 0 }
-    
+
     # If it's an array, find the first non-empty numeric value
     if ($Result -is [array]) {
         foreach ($line in $Result) {
@@ -121,7 +121,7 @@ function Get-SqlScalarValue {
         }
         return 0
     }
-    
+
     # Single value
     $trimmed = "$Result".Trim()
     if ($trimmed -match '^\d+$') {

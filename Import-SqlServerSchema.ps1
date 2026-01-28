@@ -145,7 +145,10 @@ param(
     'Programmability', 'Views', 'Functions', 'StoredProcedures', 'Synonyms', 'SearchPropertyLists',
     'PlanGuides', 'DatabaseRoles', 'DatabaseUsers', 'WindowsUsers', 'SqlUsers', 'ExternalUsers',
     'CertificateMappedUsers', 'SecurityPolicies', 'Data')]
-  [string[]]$ExcludeObjectTypes
+  [string[]]$ExcludeObjectTypes,
+
+  [Parameter(HelpMessage = 'Exclude specific schemas from import. Example: cdc,staging')]
+  [string[]]$ExcludeSchemas
 )
 
 $ErrorActionPreference = if ($ContinueOnError) { 'Continue' } else { 'Stop' }
@@ -156,6 +159,9 @@ $script:IncludeObjectTypesFilter = $IncludeObjectTypes
 
 # Store ExcludeObjectTypes parameter at script level for use in Get-ScriptFiles
 $script:ExcludeObjectTypesFilter = $ExcludeObjectTypes
+
+# Store ExcludeSchemas parameter at script level for use in Test-ScriptExcluded
+$script:ExcludeSchemasFilter = $ExcludeSchemas
 
 # Error tracking for improved reporting (Bug 3 fix)
 # Stores final failures (not temporary retry failures) for summary display
@@ -1101,7 +1107,7 @@ function Invoke-SqlScript {
       $varValue = $SqlCmdVariables[$varName]
       $sql = $sql -replace [regex]::Escape("`$($varName)"), $varValue
     }
-    
+
     # Handle memory-optimized FileGroups - remove SIZE/FILEGROWTH clauses marked for removal
     # Memory-optimized containers don't support SIZE/FILEGROWTH
     if ($sql -match '__MEMORY_OPTIMIZED_REMOVE__') {
@@ -1513,6 +1519,44 @@ function Get-EscapedSqlIdentifier {
   return $Name -replace '\]', ']]'
 }
 
+function Test-SchemaExcluded {
+  <#
+    .SYNOPSIS
+        Checks if a script file belongs to an excluded schema.
+    .DESCRIPTION
+        Extracts schema from filename patterns like 'Schema.ObjectName.sql' or
+        'Schema.ObjectName.type.sql' and checks against excluded schemas list.
+    .PARAMETER ScriptPath
+        Full path to the script file.
+    .PARAMETER ExcludeSchemas
+        Array of schema names to exclude.
+    .OUTPUTS
+        $true if script's schema is excluded, $false otherwise.
+  #>
+  param(
+    [string]$ScriptPath,
+    [string[]]$ExcludeSchemas
+  )
+
+  if (-not $ExcludeSchemas -or $ExcludeSchemas.Count -eq 0) {
+    return $false
+  }
+
+  $fileName = Split-Path $ScriptPath -Leaf
+
+  # Pattern: Schema.ObjectName.sql or Schema.ObjectName.type.sql
+  # Examples: cdc.fn_cdc_get_all_changes.function.sql, dbo.MyTable.sql
+  # First segment before the first dot is typically the schema
+  if ($fileName -match '^([^.]+)\.') {
+    $schemaName = $matches[1]
+    if ($ExcludeSchemas -contains $schemaName) {
+      return $true
+    }
+  }
+
+  return $false
+}
+
 function Test-ScriptExcluded {
   <#
     .SYNOPSIS
@@ -1612,17 +1656,27 @@ function Test-ScriptExcluded {
       }
       'WindowsUsers' {
         # Exclude Windows domain user files based on file CONTENT (not filename pattern)
-        # Detection: File contains "FOR LOGIN [DOMAIN\Username]" where login name has a backslash
+        # Detection patterns for Windows users:
+        #   1. FOR LOGIN [DOMAIN\User] - explicit login mapping with backslash
+        #   2. CREATE USER [DOMAIN\User] - implicit (username = login name, contains backslash)
         # Example filenames: "dbo.DOMAIN.TestUser.user.sql", "dbo.NT SERVICE.SQLSERVERAGENT.user.sql"
-        # Filename patterns vary widely - we inspect the SQL content for reliable detection
+        # Windows principals: DOMAIN\User, NT SERVICE\name, NT AUTHORITY\SYSTEM, BUILTIN\Administrators
         if ($relativePath -match '01_Security' -and $fileName -match '\.user\.sql$') {
           $content = Get-Content $ScriptPath -Raw -ErrorAction SilentlyContinue
           if ($content) {
-            # Extract login name from: FOR LOGIN [loginname]
+            # Method 1: Check FOR LOGIN [name] for backslash
             if ($content -match 'FOR LOGIN\s*\[([^\]]+)\]') {
               $loginName = $matches[1]
-              # Windows logins contain backslash: DOMAIN\User, NT SERVICE\name, etc.
               if ($loginName -match '\\') {
+                return $true
+              }
+            }
+            # Method 2: Check CREATE USER [name] for backslash (implicit Windows login)
+            # This handles: CREATE USER [DOMAIN\User] WITH DEFAULT_SCHEMA=[dbo]
+            if ($content -match 'CREATE USER\s*\[([^\]]+)\]') {
+              $userName = $matches[1]
+              # Windows users have backslash AND no "WITHOUT LOGIN" or "FROM EXTERNAL PROVIDER"
+              if ($userName -match '\\' -and $content -notmatch 'WITHOUT LOGIN' -and $content -notmatch 'EXTERNAL PROVIDER') {
                 return $true
               }
             }
@@ -1638,6 +1692,7 @@ function Test-ScriptExcluded {
         if ($relativePath -match '01_Security' -and $fileName -match '\.user\.sql$') {
           $content = Get-Content $ScriptPath -Raw -ErrorAction SilentlyContinue
           if ($content) {
+            # Check for explicit FOR LOGIN without backslash (SQL login)
             if ($content -match 'FOR LOGIN\s*\[([^\]]+)\]') {
               $loginName = $matches[1]
               # SQL logins: no backslash (not Windows), not external provider (not Azure AD)
@@ -1648,6 +1703,16 @@ function Test-ScriptExcluded {
             # WITHOUT LOGIN users are SQL type (contained database users)
             if ($content -match 'WITHOUT LOGIN') {
               return $true
+            }
+            # Implicit SQL login: CREATE USER [name] where name has no backslash
+            # and no WITHOUT LOGIN, no EXTERNAL PROVIDER, no FOR LOGIN
+            # This handles: CREATE USER [AppUser] WITH DEFAULT_SCHEMA=[dbo]
+            if ($content -match 'CREATE USER\s*\[([^\]]+)\]') {
+              $userName = $matches[1]
+              if ($userName -notmatch '\\' -and $content -notmatch 'WITHOUT LOGIN' -and
+                  $content -notmatch 'EXTERNAL PROVIDER' -and $content -notmatch 'FOR LOGIN') {
+                return $true
+              }
             }
           }
         }
@@ -1955,6 +2020,19 @@ function Get-ScriptFiles {
     $excludedCount = $originalCount - $scripts.Count
     if ($excludedCount -gt 0) {
       Write-Output "  [INFO] Excluded $excludedCount script(s) based on ExcludeObjectTypes filter"
+    }
+  }
+
+  # Apply ExcludeSchemas filter if specified (command-line parameter)
+  if ($script:ExcludeSchemasFilter -and $script:ExcludeSchemasFilter.Count -gt 0) {
+    Write-Verbose "Applying ExcludeSchemas filter: $($script:ExcludeSchemasFilter -join ', ')"
+    $originalCount = $scripts.Count
+    $scripts = @($scripts | Where-Object {
+        -not (Test-SchemaExcluded -ScriptPath $_.FullName -ExcludeSchemas $script:ExcludeSchemasFilter)
+      })
+    $excludedCount = $originalCount - $scripts.Count
+    if ($excludedCount -gt 0) {
+      Write-Output "  [INFO] Excluded $excludedCount script(s) based on ExcludeSchemas filter"
     }
   }
 
@@ -2294,6 +2372,14 @@ try {
         if ($config.import.excludeObjectTypes -and $config.import.excludeObjectTypes.Count -gt 0) {
           $script:ExcludeObjectTypesFilter = $config.import.excludeObjectTypes
           Write-Verbose "[INFO] ExcludeObjectTypes set from config file: $($config.import.excludeObjectTypes -join ', ')"
+        }
+      }
+
+      # Override ExcludeSchemas from config ONLY if not explicitly set on command line
+      if (-not $PSBoundParameters.ContainsKey('ExcludeSchemas')) {
+        if ($config.import.excludeSchemas -and $config.import.excludeSchemas.Count -gt 0) {
+          $script:ExcludeSchemasFilter = $config.import.excludeSchemas
+          Write-Verbose "[INFO] ExcludeSchemas set from config file: $($config.import.excludeSchemas -join ', ')"
         }
       }
     }
@@ -2729,7 +2815,7 @@ try {
 
             # Build unique filename: DatabaseName_FileGroupName_OriginalName
             $uniqueFileName = "${sanitizedDbName}_${currentFG}_${originalFileName}"
-            
+
             # Memory-optimized FileGroups use directories (no extension)
             # Regular FileGroups use .ndf files
             if ($currentFGType -eq 'MemoryOptimized') {
@@ -2843,10 +2929,10 @@ try {
             Write-Warning "[WARNING] Could not detect default data path - memory-optimized FileGroup may fail"
             $memOptDataPath = 'C:\Data'  # Fallback
           }
-          
+
           # Determine path separator based on detected path format
           $memOptPathSep = if ($memOptDataPath -match '^/') { '/' } else { '\' }
-          
+
           # SECURITY: Sanitize database name for filesystem path
           $sanitizedDbName = $Database -replace '[^a-zA-Z0-9_-]', '_'
 
@@ -2855,7 +2941,7 @@ try {
             # Escape the database name to prevent SQL injection via ] characters
             $escapedDbName = Get-EscapedSqlIdentifier -Name $Database
             $sql = $sqlBlock -replace '\bALTER\s+DATABASE\s+CURRENT\b', "ALTER DATABASE [$escapedDbName]"
-            
+
             # Replace SQLCMD variables for memory-optimized FileGroups
             # Pattern: $(FG_NAME_PATH_FILE), $(FG_NAME_SIZE), $(FG_NAME_GROWTH)
             if ($sql -match '\$\(([A-Za-z0-9_]+)_PATH_FILE\)') {
@@ -2864,7 +2950,7 @@ try {
               $containerPath = "${memOptDataPath}${memOptPathSep}${sanitizedDbName}_${fgName}"
               $varPattern = [regex]::Escape("`$(" + $fgName + "_PATH_FILE)")
               $sql = $sql -replace $varPattern, $containerPath
-              
+
               # Memory-optimized containers don't use SIZE/FILEGROWTH - remove these clauses entirely
               # SIZE = value and , FILEGROWTH = value need to be removed
               $sql = $sql -replace ',?\s*SIZE\s*=\s*\$\([A-Za-z0-9_]+_SIZE\)', ''
