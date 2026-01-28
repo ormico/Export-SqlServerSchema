@@ -1101,6 +1101,14 @@ function Invoke-SqlScript {
       $varValue = $SqlCmdVariables[$varName]
       $sql = $sql -replace [regex]::Escape("`$($varName)"), $varValue
     }
+    
+    # Handle memory-optimized FileGroups - remove SIZE/FILEGROWTH clauses marked for removal
+    # Memory-optimized containers don't support SIZE/FILEGROWTH
+    if ($sql -match '__MEMORY_OPTIMIZED_REMOVE__') {
+      # Remove SIZE = __MEMORY_OPTIMIZED_REMOVE__ and , FILEGROWTH = __MEMORY_OPTIMIZED_REMOVE__
+      $sql = $sql -replace ',?\s*SIZE\s*=\s*__MEMORY_OPTIMIZED_REMOVE__', ''
+      $sql = $sql -replace ',?\s*FILEGROWTH\s*=\s*__MEMORY_OPTIMIZED_REMOVE__', ''
+    }
 
     # Transform FileGroup references to PRIMARY when using removeToPrimary strategy
     if ($SqlCmdVariables.ContainsKey('__RemapFileGroupsToPrimary__')) {
@@ -2679,6 +2687,7 @@ try {
         $currentFG = $null
         $currentFileName = $null
         $fileIndex = @{}  # Track file count per FileGroup for uniqueness
+        $currentFGType = 'Standard'  # Track FileGroup type (Standard vs MemoryOptimized)
 
         foreach ($line in (Get-Content $fileGroupScript)) {
           if ($line -match '-- FileGroup: (.+)') {
@@ -2697,6 +2706,13 @@ try {
 
             $currentFG = $fgName
             $fileIndex[$currentFG] = 0
+            $currentFGType = 'Standard'  # Reset for new FileGroup
+          }
+          elseif ($line -match '-- Type:\s*(MemoryOptimizedDataFileGroup)') {
+            $currentFGType = 'MemoryOptimized'
+          }
+          elseif ($line -match '-- Type:\s*(RowsFileGroup|FileStreamDataFileGroup)') {
+            $currentFGType = 'Standard'
           }
           elseif ($line -match '-- File: (.+)' -and $currentFG) {
             $originalFileName = $matches[1].Trim()
@@ -2711,9 +2727,16 @@ try {
             $fileIndex[$currentFG]++
             $currentFileName = $originalFileName
 
-            # Build unique filename: DatabaseName_FileGroupName_OriginalName.ndf
+            # Build unique filename: DatabaseName_FileGroupName_OriginalName
             $uniqueFileName = "${sanitizedDbName}_${currentFG}_${originalFileName}"
-            $fullPath = "${defaultDataPath}${pathSeparator}${uniqueFileName}.ndf"
+            
+            # Memory-optimized FileGroups use directories (no extension)
+            # Regular FileGroups use .ndf files
+            if ($currentFGType -eq 'MemoryOptimized') {
+              $fullPath = "${defaultDataPath}${pathSeparator}${uniqueFileName}"
+            } else {
+              $fullPath = "${defaultDataPath}${pathSeparator}${uniqueFileName}.ndf"
+            }
 
             # Set the SQLCMD variables (PATH, SIZE, GROWTH)
             # Preserve original behavior for first file, add numeric suffix for additional files
@@ -2731,17 +2754,25 @@ try {
             $sqlCmdVars[$pathVarName] = $fullPath
             Write-Verbose "  Auto-mapped: `$($pathVarName) = $fullPath"
 
-            # Get SIZE and GROWTH values from config or metadata using helper function
-            $fileSizeValues = Get-FileGroupFileSizeValues `
-              -FileGroupName $currentFG `
-              -FileName $originalFileName `
-              -FgSizeDefaults $fgSizeDefaults `
-              -ExportMetadata $exportMetadata
+            # Memory-optimized FileGroups don't use SIZE/GROWTH - use special marker
+            if ($currentFGType -eq 'MemoryOptimized') {
+              # Mark these for special handling in Invoke-SqlScript
+              $sqlCmdVars[$sizeVarName] = '__MEMORY_OPTIMIZED_REMOVE__'
+              $sqlCmdVars[$growthVarName] = '__MEMORY_OPTIMIZED_REMOVE__'
+              Write-Verbose "  Memory-optimized FileGroup - SIZE/GROWTH will be removed"
+            } else {
+              # Get SIZE and GROWTH values from config or metadata using helper function
+              $fileSizeValues = Get-FileGroupFileSizeValues `
+                -FileGroupName $currentFG `
+                -FileName $originalFileName `
+                -FgSizeDefaults $fgSizeDefaults `
+                -ExportMetadata $exportMetadata
 
-            $sqlCmdVars[$sizeVarName] = "$($fileSizeValues.SizeKB)KB"
-            $sqlCmdVars[$growthVarName] = $fileSizeValues.GrowthValue
-            Write-Verbose "  Auto-mapped: `$($sizeVarName) = $($fileSizeValues.SizeKB)KB"
-            Write-Verbose "  Auto-mapped: `$($growthVarName) = $($fileSizeValues.GrowthValue)"
+              $sqlCmdVars[$sizeVarName] = "$($fileSizeValues.SizeKB)KB"
+              $sqlCmdVars[$growthVarName] = $fileSizeValues.GrowthValue
+              Write-Verbose "  Auto-mapped: `$($sizeVarName) = $($fileSizeValues.SizeKB)KB"
+              Write-Verbose "  Auto-mapped: `$($growthVarName) = $($fileSizeValues.GrowthValue)"
+            }
           }
         }
       }
@@ -2765,7 +2796,7 @@ try {
             $escapedDbName = Get-EscapedSqlIdentifier -Name $Database
             $sql = $sqlBlock -replace '\bALTER\s+DATABASE\s+CURRENT\b', "ALTER DATABASE [$escapedDbName]"
             try {
-              $script:SharedConnection.ExecuteNonQuery($sql) | Out-Null
+              $script:SharedConnection.ConnectionContext.ExecuteNonQuery($sql) | Out-Null
               Write-Verbose "  Executed memory-optimized FileGroup SQL block"
             }
             catch {
@@ -2806,14 +2837,42 @@ try {
           Write-Output "[INFO] Found $($memoryOptimizedSql.Count) memory-optimized FileGroup block(s) - these cannot be remapped to PRIMARY"
           Write-Output "[INFO] Creating required memory-optimized FileGroups..."
 
+          # Get default data path for memory-optimized container
+          $memOptDataPath = Get-DefaultDataPath -Connection $script:SharedConnection
+          if (-not $memOptDataPath) {
+            Write-Warning "[WARNING] Could not detect default data path - memory-optimized FileGroup may fail"
+            $memOptDataPath = 'C:\Data'  # Fallback
+          }
+          
+          # Determine path separator based on detected path format
+          $memOptPathSep = if ($memOptDataPath -match '^/') { '/' } else { '\' }
+          
+          # SECURITY: Sanitize database name for filesystem path
+          $sanitizedDbName = $Database -replace '[^a-zA-Z0-9_-]', '_'
+
           foreach ($sqlBlock in $memoryOptimizedSql) {
             # Replace ALTER DATABASE CURRENT with actual database name
             # Escape the database name to prevent SQL injection via ] characters
             $escapedDbName = Get-EscapedSqlIdentifier -Name $Database
             $sql = $sqlBlock -replace '\bALTER\s+DATABASE\s+CURRENT\b', "ALTER DATABASE [$escapedDbName]"
+            
+            # Replace SQLCMD variables for memory-optimized FileGroups
+            # Pattern: $(FG_NAME_PATH_FILE), $(FG_NAME_SIZE), $(FG_NAME_GROWTH)
+            if ($sql -match '\$\(([A-Za-z0-9_]+)_PATH_FILE\)') {
+              $fgName = $matches[1]
+              # Memory-optimized uses a folder, not a file (no extension)
+              $containerPath = "${memOptDataPath}${memOptPathSep}${sanitizedDbName}_${fgName}"
+              $varPattern = [regex]::Escape("`$(" + $fgName + "_PATH_FILE)")
+              $sql = $sql -replace $varPattern, $containerPath
+              
+              # Memory-optimized containers don't use SIZE/FILEGROWTH - remove these clauses entirely
+              # SIZE = value and , FILEGROWTH = value need to be removed
+              $sql = $sql -replace ',?\s*SIZE\s*=\s*\$\([A-Za-z0-9_]+_SIZE\)', ''
+              $sql = $sql -replace ',?\s*FILEGROWTH\s*=\s*\$\([A-Za-z0-9_]+_GROWTH\)', ''
+            }
 
             try {
-              $script:SharedConnection.ExecuteNonQuery($sql) | Out-Null
+              $script:SharedConnection.ConnectionContext.ExecuteNonQuery($sql) | Out-Null
               Write-Verbose "  Executed memory-optimized FileGroup SQL block"
             }
             catch {
