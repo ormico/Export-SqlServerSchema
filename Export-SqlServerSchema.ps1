@@ -5459,8 +5459,9 @@ function Export-DatabaseObjects {
   <#
     .SYNOPSIS
         Exports all database objects in dependency order.
-    .OUTPUTS
-        Returns a hashtable with TotalObjects, SuccessCount, and FailCount for metrics.
+    .DESCRIPTION
+        Metrics are stored in $script:ExportFunctionMetrics instead of being returned,
+        to allow Write-Host progress messages to display during execution.
     #>
   param(
     $Database,  # Don't type-constrain SMO objects
@@ -5469,18 +5470,18 @@ function Export-DatabaseObjects {
     $TargetVersion  # Don't type-constrain SMO enums
   )
 
-  # Initialize metrics tracking for this function
-  $functionMetrics = @{
+  # Initialize metrics tracking in script scope (allows progress messages to display)
+  $script:ExportFunctionMetrics = @{
     TotalObjects    = 0
     SuccessCount    = 0
     FailCount       = 0
     CategoryTimings = [ordered]@{}
   }
 
-  Write-Output ''
-  Write-Output '═══════════════════════════════════════════════'
-  Write-Output 'EXPORTING DATABASE OBJECTS'
-  Write-Output '═══════════════════════════════════════════════'
+  Write-Host ''
+  Write-Host '═══════════════════════════════════════════════' -ForegroundColor Cyan
+  Write-Host 'EXPORTING DATABASE OBJECTS' -ForegroundColor Cyan
+  Write-Host '═══════════════════════════════════════════════' -ForegroundColor Cyan
 
   #region Parallel Export Branch
   # If parallel mode is enabled, use the parallel export workflow instead of sequential
@@ -5494,12 +5495,12 @@ function Export-DatabaseObjects {
         -OutputDir $OutputDir `
         -TargetVersion $TargetVersion
 
-      # Convert parallel summary to metrics format
-      $functionMetrics.TotalObjects = $parallelSummary.TotalItems
-      $functionMetrics.SuccessCount = $parallelSummary.SuccessCount
-      $functionMetrics.FailCount = $parallelSummary.ErrorCount
+      # Store parallel summary in script-scoped metrics
+      $script:ExportFunctionMetrics.TotalObjects = $parallelSummary.TotalItems
+      $script:ExportFunctionMetrics.SuccessCount = $parallelSummary.SuccessCount
+      $script:ExportFunctionMetrics.FailCount = $parallelSummary.ErrorCount
 
-      return $functionMetrics
+      return  # Metrics stored in $script:ExportFunctionMetrics
     }
     catch {
       Write-Host "[ERROR] Parallel export failed: $_" -ForegroundColor Red
@@ -5511,42 +5512,42 @@ function Export-DatabaseObjects {
 
   # Non-parallelizable objects: FileGroups, DatabaseScopedConfigurations, DatabaseScopedCredentials
   # These use StringBuilder for SQLCMD variable support and require special handling
-  Write-Output ''
-  Write-Output 'Exporting non-parallelizable objects...'
+  Write-Host ''
+  Write-Host 'Exporting non-parallelizable objects...' -ForegroundColor White
   Write-ProgressHeader 'FileGroups'
   Write-ProgressHeader 'DatabaseConfiguration'
   $nonParallelResults = Export-NonParallelizableObjects -Database $Database -OutputDir $OutputDir
   if ($nonParallelResults.FileGroups -gt 0) {
-    Write-Output "  [SUCCESS] Exported $($nonParallelResults.FileGroups) filegroup(s)"
-    Write-Output "  [WARNING] FileGroups contain environment-specific file paths - manual adjustment required"
+    Write-Host "  [SUCCESS] Exported $($nonParallelResults.FileGroups) filegroup(s)" -ForegroundColor Green
+    Write-Host "  [WARNING] FileGroups contain environment-specific file paths - manual adjustment required" -ForegroundColor Yellow
   }
   else {
-    Write-Output "  [INFO] No user-defined filegroups found"
+    Write-Host "  [INFO] No user-defined filegroups found" -ForegroundColor Gray
   }
   if ($nonParallelResults.DatabaseScopedConfigurations -gt 0) {
-    Write-Output "  [SUCCESS] Exported $($nonParallelResults.DatabaseScopedConfigurations) database scoped configuration(s)"
-    Write-Output "  [INFO] Configurations are hardware-specific - review before applying"
+    Write-Host "  [SUCCESS] Exported $($nonParallelResults.DatabaseScopedConfigurations) database scoped configuration(s)" -ForegroundColor Green
+    Write-Host "  [INFO] Configurations are hardware-specific - review before applying" -ForegroundColor Gray
   }
   if ($nonParallelResults.DatabaseScopedCredentials -gt 0) {
-    Write-Output "  [SUCCESS] Documented $($nonParallelResults.DatabaseScopedCredentials) database scoped credential(s)"
-    Write-Output "  [WARNING] Credentials exported as documentation only - secrets must be provided manually"
+    Write-Host "  [SUCCESS] Documented $($nonParallelResults.DatabaseScopedCredentials) database scoped credential(s)" -ForegroundColor Green
+    Write-Host "  [WARNING] Credentials exported as documentation only - secrets must be provided manually" -ForegroundColor Yellow
   }
 
   #region Sequential Export via Work Items (Hybrid Approach)
   # Build work items using same infrastructure as parallel mode
   # This ensures identical scripting logic regardless of export mode
-  Write-Output ''
-  Write-Output 'Building work items for export...'
+  Write-Host ''
+  Write-Host 'Building work items for export...' -ForegroundColor White
   $allWorkItems = @(Build-ParallelWorkQueue -Database $Database -OutputDir $OutputDir)
 
   # Filter out TableData items - they are handled separately by Export-TableData
   $workItems = @($allWorkItems | Where-Object { $_.ObjectType -ne 'TableData' })
 
   if ($workItems.Count -eq 0) {
-    Write-Output '  [INFO] No objects to export (all may be excluded by configuration)'
+    Write-Host '  [INFO] No objects to export (all may be excluded by configuration)' -ForegroundColor Gray
   }
   else {
-    Write-Output "  [INFO] Generated $($workItems.Count) work items for export"
+    Write-Host "  [INFO] Generated $($workItems.Count) work items for export" -ForegroundColor Gray
 
     # Define object type display order for consistent output
     $objectTypeOrder = @(
@@ -5615,9 +5616,9 @@ function Export-DatabaseObjects {
         default { $objectType }
       }
 
-      Write-Output ''
-      Write-Output "Exporting $displayName..."
-      Write-Output "  Found $($items.Count) work item(s) to export"
+      Write-Host ''
+      Write-Host "Exporting $displayName..." -ForegroundColor White
+      Write-Host "  Found $($items.Count) work item(s) to export" -ForegroundColor Gray
       Write-ProgressHeader $objectType
 
       $successCount = 0
@@ -5669,22 +5670,22 @@ function Export-DatabaseObjects {
           if ($result.Success) {
             Write-ObjectProgress -ObjectName $objName -Current $currentItem -Total $items.Count -Success
             $successCount++
-            $functionMetrics.SuccessCount++
+            $script:ExportFunctionMetrics.SuccessCount++
           }
           else {
             Write-ObjectProgress -ObjectName $objName -Current $currentItem -Total $items.Count -Failed
             Write-Host "  [ERROR] $($result.Error)" -ForegroundColor Red
             $failCount++
-            $functionMetrics.FailCount++
+            $script:ExportFunctionMetrics.FailCount++
           }
-          $functionMetrics.TotalObjects++
+          $script:ExportFunctionMetrics.TotalObjects++
         }
         catch {
           Write-ObjectProgress -ObjectName $objName -Current $currentItem -Total $items.Count -Failed
           Write-ExportError -ObjectType $objectType -ObjectName $objName -ErrorRecord $_ -FilePath $workItem.OutputPath
           $failCount++
-          $functionMetrics.TotalObjects++
-          $functionMetrics.FailCount++
+          $script:ExportFunctionMetrics.TotalObjects++
+          $script:ExportFunctionMetrics.FailCount++
         }
       }
       $script:CurrentProgressLabel = $null
@@ -5694,18 +5695,17 @@ function Export-DatabaseObjects {
       if ($failCount -gt 0) {
         $summaryMsg += " ($failCount failed)"
       }
-      Write-Output $summaryMsg
+      Write-Host $summaryMsg -ForegroundColor $(if ($failCount -gt 0) { 'Yellow' } else { 'Green' })
 
       # Special notes for certain object types
       if ($objectType -eq 'SecurityPolicy') {
-        Write-Output "  [INFO] Row-Level Security policies require predicate functions to exist first"
+        Write-Host "  [INFO] Row-Level Security policies require predicate functions to exist first" -ForegroundColor Gray
       }
     }
   }
   #endregion Sequential Export via Work Items
 
-  # Return metrics summary
-  return $functionMetrics
+  # Metrics stored in $script:ExportFunctionMetrics - no return needed
 }
 
 function Export-TableData {
@@ -6445,15 +6445,15 @@ For more details, see: https://go.microsoft.com/fwlink/?linkid=2226722
 
   # Export schema objects with timing
   $schemaTimer = Start-MetricsTimer -Category 'SchemaExport'
-  Write-Output "═══════════════════════════════════════════════════════════════"
-  $schemaResult = Export-DatabaseObjects -Database $smDatabase -OutputDir $exportDir -Scripter $scripter -TargetVersion $sqlVersion
+  Write-Host "═══════════════════════════════════════════════════════════════" -ForegroundColor Cyan
+  Export-DatabaseObjects -Database $smDatabase -OutputDir $exportDir -Scripter $scripter -TargetVersion $sqlVersion
   if ($schemaTimer) {
     $schemaTimer.Stop()
     $script:Metrics.Categories['SchemaExport'] = @{
       DurationMs     = $schemaTimer.ElapsedMilliseconds
-      ObjectCount    = if ($schemaResult) { $schemaResult.TotalObjects } else { 0 }
-      SuccessCount   = if ($schemaResult) { $schemaResult.SuccessCount } else { 0 }
-      FailCount      = if ($schemaResult) { $schemaResult.FailCount } else { 0 }
+      ObjectCount    = if ($script:ExportFunctionMetrics) { $script:ExportFunctionMetrics.TotalObjects } else { 0 }
+      SuccessCount   = if ($script:ExportFunctionMetrics) { $script:ExportFunctionMetrics.SuccessCount } else { 0 }
+      FailCount      = if ($script:ExportFunctionMetrics) { $script:ExportFunctionMetrics.FailCount } else { 0 }
       AvgMsPerObject = 0
     }
   }

@@ -1,0 +1,15 @@
+# Test config with quoted string boolean
+$schema: "../export-import-config.schema.json"
+
+connectionTimeout: 30
+commandTimeout: 300
+trustServerCertificate: true
+
+import:
+  defaultMode: Dev
+  createDatabase: true
+  
+  developerMode:
+    fileGroupStrategy: autoRemap
+    stripFilestream: "true"  # Quoted string instead of boolean
+    includeConfigurations: false

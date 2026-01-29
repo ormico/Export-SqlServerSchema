@@ -1,0 +1,15 @@
+# Test config with 4-space indentation (non-standard)
+$schema: "../export-import-config.schema.json"
+
+connectionTimeout: 30
+commandTimeout: 300
+trustServerCertificate: true
+
+import:
+    defaultMode: Dev
+    createDatabase: true
+    
+    developerMode:
+        fileGroupStrategy: autoRemap
+        stripFilestream: true
+        includeConfigurations: false
