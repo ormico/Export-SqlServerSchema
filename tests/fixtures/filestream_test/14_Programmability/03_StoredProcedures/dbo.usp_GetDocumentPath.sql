@@ -9,8 +9,8 @@ CREATE PROCEDURE [dbo].[usp_GetDocumentPath]
 AS
 BEGIN
     SET NOCOUNT ON;
-    
-    SELECT 
+
+    SELECT
         DocumentId,
         FileName,
         Content.PathName() AS FilePath

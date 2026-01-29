@@ -8,8 +8,8 @@ CREATE PROCEDURE [dbo].[usp_ListDocuments]
 AS
 BEGIN
     SET NOCOUNT ON;
-    
-    SELECT 
+
+    SELECT
         DocumentId,
         FileName,
         CreatedDate,

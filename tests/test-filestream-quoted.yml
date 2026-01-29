@@ -8,7 +8,7 @@ trustServerCertificate: true
 import:
   defaultMode: Dev
   createDatabase: true
-  
+
   developerMode:
     fileGroupStrategy: autoRemap
     stripFilestream: "true"  # Quoted string instead of boolean

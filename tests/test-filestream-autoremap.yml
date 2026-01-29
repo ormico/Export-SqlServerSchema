@@ -8,13 +8,13 @@ trustServerCertificate: true
 import:
   defaultMode: Dev
   createDatabase: true
-  
+
   developerMode:
     fileGroupStrategy: autoRemap
     stripFilestream: true
     includeConfigurations: false
     enableSecurityPolicies: false
-    
+
     fileGroupFileSizeDefaults:
       sizeKB: 1024
       fileGrowthKB: 65536

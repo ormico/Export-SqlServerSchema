@@ -803,14 +803,12 @@ function Get-RequiredEncryptionSecrets {
   $symKeyFiles = Get-ChildItem -Path $securityDir -Filter '*SymmetricKey*.sql' -ErrorAction SilentlyContinue
   foreach ($file in $symKeyFiles) {
     $content = Get-Content -Path $file.FullName -Raw -ErrorAction SilentlyContinue
-    if ($content -match 'CREATE\s+SYMMETRIC\s+KEY\s+\[?([^\]\s]+)\]?') {
-      $matches | ForEach-Object {
-        if ($_ -match 'CREATE\s+SYMMETRIC\s+KEY\s+\[?([^\]\s]+)\]?') {
-          $keyName = $Matches[1]
-          if ($keyName -notin $encryptionObjects.symmetricKeys) {
-            $encryptionObjects.symmetricKeys += $keyName
-          }
-        }
+    # Use Select-String with -AllMatches to find all symmetric keys in each file
+    $keyMatches = [regex]::Matches($content, 'CREATE\s+SYMMETRIC\s+KEY\s+\[?([^\]\s]+)\]?', 'IgnoreCase')
+    foreach ($match in $keyMatches) {
+      $keyName = $match.Groups[1].Value
+      if ($keyName -notin $encryptionObjects.symmetricKeys) {
+        $encryptionObjects.symmetricKeys += $keyName
       }
     }
   }

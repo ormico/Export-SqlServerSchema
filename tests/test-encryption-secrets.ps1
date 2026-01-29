@@ -18,7 +18,7 @@
 
 .EXAMPLE
     ./test-encryption-secrets.ps1
-    
+
 .EXAMPLE
     ./test-encryption-secrets.ps1 -Server "localhost,1433"
 #>
@@ -61,14 +61,14 @@ function Write-TestStep {
         [ValidateSet('Info', 'Success', 'Warning', 'Error')]
         [string]$Type = 'Info'
     )
-    
+
     $prefix = switch ($Type) {
         'Info'    { "[INFO]"; $color = "Cyan" }
         'Success' { "[SUCCESS]"; $color = "Green" }
         'Warning' { "[WARNING]"; $color = "Yellow" }
         'Error'   { "[ERROR]"; $color = "Red" }
     }
-    
+
     Write-Host "$prefix $Message" -ForegroundColor $color
 }
 
@@ -77,7 +77,7 @@ function Invoke-SqlCommand {
         [string]$Query,
         [string]$Database = "master"
     )
-    
+
     $result = Invoke-Sqlcmd -ServerInstance $Server -Database $Database `
         -Credential $script:Credential -TrustServerCertificate -Query $Query -ErrorAction Stop
     return $result
@@ -85,14 +85,14 @@ function Invoke-SqlCommand {
 
 function Test-DatabaseExists {
     param([string]$DatabaseName)
-    
+
     $result = Invoke-SqlCommand "SELECT DB_ID('$DatabaseName') AS DbId"
     return $null -ne $result.DbId
 }
 
 function Remove-TestDatabase {
     param([string]$DatabaseName)
-    
+
     if (Test-DatabaseExists $DatabaseName) {
         Write-TestStep "Dropping database $DatabaseName..." -Type Info
         try {
@@ -153,7 +153,7 @@ function Assert-Test {
         [string]$Name,
         [scriptblock]$Test
     )
-    
+
     try {
         $result = & $Test
         if ($result) {
@@ -202,7 +202,7 @@ Invoke-SqlCommand @"
 
 # Create Certificate (protected by DMK)
 Invoke-SqlCommand @"
-    CREATE CERTIFICATE TestSigningCert 
+    CREATE CERTIFICATE TestSigningCert
         WITH SUBJECT = 'Test Signing Certificate',
         EXPIRY_DATE = '2030-12-31';
 "@ -Database $TestDbSource
@@ -233,7 +233,7 @@ Write-TestStep "Source database created with encryption objects" -Type Success
 
 # Verify source objects
 $sourceObjects = Invoke-SqlCommand @"
-    SELECT 
+    SELECT
         (SELECT COUNT(*) FROM sys.symmetric_keys WHERE name != '##MS_DatabaseMasterKey##') AS SymmetricKeys,
         (SELECT COUNT(*) FROM sys.certificates WHERE name NOT LIKE '##%') AS Certificates,
         (SELECT COUNT(*) FROM sys.database_principals WHERE type = 'A') AS AppRoles,

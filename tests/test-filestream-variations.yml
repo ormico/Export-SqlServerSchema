@@ -9,6 +9,6 @@ trustServerCertificate: true
 import:
   defaultMode: Dev
   createDatabase: true
-  
+
   # Using flow style for developerMode
   developerMode: {fileGroupStrategy: autoRemap, stripFilestream: true, includeConfigurations: false}

@@ -3,3 +3,5 @@ DbScripts/**
 .env
 *.log
 .local/
+
+tests/fixtures/filestream_test/import-log.txt

@@ -6320,8 +6320,8 @@ try {
 
   # Load configuration if provided - include ALL properties that might be accessed
   # to avoid strict mode errors when properties don't exist
-  $config = @{ 
-    export = @{ 
+  $config = @{
+    export = @{
       includeObjectTypes = @()
       excludeObjectTypes = @()
       includeData = $false
@@ -6329,7 +6329,7 @@ try {
       excludeSchemas = @()
       groupByObjectTypes = @{}
       stripFilestream = $false
-    } 
+    }
   }
   $configSource = "None (using defaults)"
 
@@ -6452,7 +6452,7 @@ try {
       $hasParallelConfig = $null -ne $exportConfig.parallel
     }
   }
-  
+
   if ($hasParallelConfig) {
     $parallelConfig = $exportConfig.parallel
     if ($parallelConfig.enabled -eq $true) {
