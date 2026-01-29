@@ -159,6 +159,17 @@ export:
   # Path to previous export for incremental export - only changed objects re-exported
   # deltaFrom: "./exports/localhost_MyDb_20260125_100000"
 
+  # Strip FILESTREAM features from exported scripts (default: false)
+  # FILESTREAM is Windows-only (requires NTFS filesystem integration)
+  # When enabled, the exported scripts are pre-processed to remove:
+  #   - FILESTREAM_ON clauses from table definitions
+  #   - FILESTREAM keyword from VARBINARY(MAX) column definitions
+  #   - FILESTREAM FileGroup definitions and related ADD FILE batches
+  # Use this when targeting SQL Server on Linux (Docker containers, etc.)
+  # This is an alternative to import-time stripping (import.*.stripFilestream)
+  # Can also use command-line: -StripFilestream
+  # stripFilestream: false
+
 # ═══════════════════════════════════════════════════════════════
 # IMPORT CONFIGURATION
 # ═══════════════════════════════════════════════════════════════

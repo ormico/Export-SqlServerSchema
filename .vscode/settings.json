@@ -129,6 +129,26 @@
         "/^pwsh -NoProfile -File D:\\\\Export-SqlServerSchema\\\\tests\\\\run-integration-test\\.ps1$/": {
             "approve": true,
             "matchCommandLine": true
+        },
+        "/^pwsh -NoProfile -File \\./test-export-strip-filestream\\.ps1$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^pwsh -NoProfile -File \\./run-integration-test\\.ps1$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^pwsh -NoProfile -File \\.\\\\test-strip-filestream\\.ps1$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^pwsh -NoProfile -File \\.\\\\test-strip-filestream\\.ps1 2>&1 \\| Select-Object -Last 50$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^pwsh -NoProfile -File \\.\\\\run-integration-test\\.ps1 2>&1 \\| Select-Object -Last 100$/": {
+            "approve": true,
+            "matchCommandLine": true
         }
     }
 }

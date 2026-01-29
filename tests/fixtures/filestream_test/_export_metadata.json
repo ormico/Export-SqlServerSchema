@@ -1,0 +1,24 @@
+{
+  "exportVersion": "1.0",
+  "exportDate": "2026-01-28T21:00:00Z",
+  "sourceServer": "WINDOWS-SERVER",
+  "sourceDatabase": "FileStreamTestDb",
+  "objectCount": 8,
+  "includeData": false,
+  "targetSqlVersion": "Sql2022",
+  "features": {
+    "hasFilestream": true,
+    "hasMemoryOptimized": false,
+    "hasPartitions": false
+  },
+  "fileGroups": {
+    "FG_DATA": {
+      "type": "RowsFileGroup",
+      "files": ["TestDb_Data.ndf"]
+    },
+    "FG_FILESTREAM": {
+      "type": "FileStreamDataFileGroup",
+      "files": ["TestDb_FileStream"]
+    }
+  }
+}

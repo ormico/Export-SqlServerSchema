@@ -247,6 +247,11 @@
         "deltaFrom": {
           "type": "string",
           "description": "Path to previous export for delta/incremental export. Only changed objects will be re-exported."
+        },
+        "stripFilestream": {
+          "type": "boolean",
+          "description": "Strip FILESTREAM features from exported scripts for Linux/container compatibility. Removes FILESTREAM_ON clauses, converts VARBINARY(MAX) FILESTREAM columns to regular VARBINARY(MAX), and removes FILESTREAM FileGroup definitions. Use this when targeting SQL Server on Linux (which does not support FILESTREAM).",
+          "default": false
         }
       },
       "additionalProperties": false

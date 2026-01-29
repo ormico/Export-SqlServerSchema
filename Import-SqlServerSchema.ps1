@@ -1187,29 +1187,76 @@ function Invoke-SqlScript {
 
       # 3. For FileGroup scripts, remove entire FILESTREAM FileGroup blocks
       #    FileGroup scripts have multiple GO-separated blocks; we need to filter out FILESTREAM blocks
+      #    Two-pass approach: first collect FILESTREAM filegroup names, then filter batches referencing them
       if ($scriptName -match '(?i)filegroup' -and $sql -match 'CONTAINS\s+FILESTREAM') {
-        # Split by GO statements and filter out FILESTREAM blocks
+        # Split by GO statements
         $goPattern = '(?m)^\s*GO\s*$'
         $batches = [regex]::Split($sql, $goPattern)
+
+        # Pass 1: Collect FILESTREAM filegroup names
+        $filestreamFileGroups = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+
+        foreach ($batch in $batches) {
+          $trimmedBatch = $batch.Trim()
+          if ([string]::IsNullOrWhiteSpace($trimmedBatch)) { continue }
+
+          # Match: ADD FILEGROUP [Name] CONTAINS FILESTREAM
+          if ($trimmedBatch -match 'CONTAINS\s+FILESTREAM') {
+            if ($trimmedBatch -match 'ADD\s+FILEGROUP\s+\[([^\]]+)\]') {
+              [void]$filestreamFileGroups.Add($matches[1])
+              Write-Verbose "  [TRANSFORM] Found FILESTREAM FileGroup: $($matches[1])"
+            }
+          }
+          elseif ($trimmedBatch -match '--\s*Type:\s*FileStreamDataFileGroup') {
+            # Extract from comment like "-- FileGroup: FG_FILESTREAM"
+            if ($trimmedBatch -match '--\s*FileGroup:\s*(\S+)') {
+              [void]$filestreamFileGroups.Add($matches[1])
+              Write-Verbose "  [TRANSFORM] Found FILESTREAM FileGroup (from comment): $($matches[1])"
+            }
+          }
+        }
+
+        # Pass 2: Filter out FILESTREAM-related batches
         $filteredBatches = @()
         $skippedCount = 0
 
         foreach ($batch in $batches) {
           $trimmedBatch = $batch.Trim()
-          if ([string]::IsNullOrWhiteSpace($trimmedBatch)) {
-            continue
+          if ([string]::IsNullOrWhiteSpace($trimmedBatch)) { continue }
+
+          $skipBatch = $false
+
+          # Skip batches that create FILESTREAM FileGroups
+          if ($trimmedBatch -match '--\s*Type:\s*FileStreamDataFileGroup' -or
+              $trimmedBatch -match 'CONTAINS\s+FILESTREAM') {
+            $skipBatch = $true
           }
 
-          # Skip batches that create FILESTREAM FileGroups or add files to FILESTREAM FileGroups
-          if ($trimmedBatch -match '--\s*Type:\s*FileStreamDataFileGroup' -or
-              $trimmedBatch -match 'CONTAINS\s+FILESTREAM' -or
-              $trimmedBatch -match 'TO\s+FILEGROUP\s*\[\s*FG_FILESTREAM\s*\]') {
+          # Skip batches that ADD FILE to a FILESTREAM FileGroup
+          if (-not $skipBatch -and $trimmedBatch -match 'TO\s+FILEGROUP\s+\[([^\]]+)\]') {
+            $targetFG = $matches[1]
+            if ($filestreamFileGroups.Contains($targetFG)) {
+              $skipBatch = $true
+              Write-Verbose "  [TRANSFORM] Skipping ADD FILE to FILESTREAM FileGroup [$targetFG]"
+            }
+          }
+
+          # Skip batches that MODIFY FILEGROUP for a FILESTREAM FileGroup
+          if (-not $skipBatch -and $trimmedBatch -match 'MODIFY\s+FILEGROUP\s+\[([^\]]+)\]') {
+            $targetFG = $matches[1]
+            if ($filestreamFileGroups.Contains($targetFG)) {
+              $skipBatch = $true
+              Write-Verbose "  [TRANSFORM] Skipping MODIFY FILEGROUP for FILESTREAM FileGroup [$targetFG]"
+            }
+          }
+
+          if ($skipBatch) {
             $skippedCount++
             Write-Verbose "  [TRANSFORM] Skipping FILESTREAM FileGroup block in: $scriptName"
-            continue
           }
-
-          $filteredBatches += $trimmedBatch
+          else {
+            $filteredBatches += $trimmedBatch
+          }
         }
 
         if ($skippedCount -gt 0) {

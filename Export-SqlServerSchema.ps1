@@ -4797,28 +4797,80 @@ function Apply-FilestreamStripping {
     $originalContent = $content
     $modified = $false
 
-    # Special handling for FileGroups - remove FILESTREAM FileGroup blocks entirely
+    # Special handling for FileGroups - remove FILESTREAM FileGroup blocks AND related file batches
     if ($file.Directory.Name -eq '00_FileGroups' -and $content -match 'CONTAINS\s+FILESTREAM') {
-      # Split by GO statements and filter out FILESTREAM blocks
+      # Split by GO statements
       $goPattern = '(?m)^\s*GO\s*$'
       $batches = [regex]::Split($content, $goPattern)
+
+      # Two-pass approach:
+      # Pass 1: Collect FILESTREAM filegroup names
+      $filestreamFileGroups = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+
+      foreach ($batch in $batches) {
+        $trimmedBatch = $batch.Trim()
+        if ([string]::IsNullOrWhiteSpace($trimmedBatch)) { continue }
+
+        # Match: ADD FILEGROUP [Name] CONTAINS FILESTREAM
+        # or: -- Type: FileStreamDataFileGroup followed by filegroup name
+        if ($trimmedBatch -match 'CONTAINS\s+FILESTREAM') {
+          # Extract filegroup name from ADD FILEGROUP [Name] pattern
+          if ($trimmedBatch -match 'ADD\s+FILEGROUP\s+\[([^\]]+)\]') {
+            [void]$filestreamFileGroups.Add($matches[1])
+            Write-Verbose "  [STRIP] Found FILESTREAM FileGroup: $($matches[1])"
+          }
+        }
+        elseif ($trimmedBatch -match '--\s*Type:\s*FileStreamDataFileGroup') {
+          # Extract from comment like "-- FileGroup: FG_FILESTREAM"
+          if ($trimmedBatch -match '--\s*FileGroup:\s*(\S+)') {
+            [void]$filestreamFileGroups.Add($matches[1])
+            Write-Verbose "  [STRIP] Found FILESTREAM FileGroup (from comment): $($matches[1])"
+          }
+        }
+      }
+
+      # Pass 2: Filter out FILESTREAM-related batches
       $filteredBatches = @()
 
       foreach ($batch in $batches) {
         $trimmedBatch = $batch.Trim()
-        if ([string]::IsNullOrWhiteSpace($trimmedBatch)) {
-          continue
-        }
+        if ([string]::IsNullOrWhiteSpace($trimmedBatch)) { continue }
+
+        $skipBatch = $false
 
         # Skip batches that create FILESTREAM FileGroups
         if ($trimmedBatch -match '--\s*Type:\s*FileStreamDataFileGroup' -or
             $trimmedBatch -match 'CONTAINS\s+FILESTREAM') {
+          $skipBatch = $true
           $skippedFileGroups++
-          Write-Verbose "  [STRIP] Removed FILESTREAM FileGroup block from: $($file.Name)"
-          continue
+          Write-Verbose "  [STRIP] Removed FILESTREAM FileGroup creation block"
         }
 
-        $filteredBatches += $trimmedBatch
+        # Skip batches that ADD FILE to a FILESTREAM FileGroup
+        # Pattern: TO FILEGROUP [<name>]
+        if (-not $skipBatch -and $trimmedBatch -match 'TO\s+FILEGROUP\s+\[([^\]]+)\]') {
+          $targetFG = $matches[1]
+          if ($filestreamFileGroups.Contains($targetFG)) {
+            $skipBatch = $true
+            $skippedFileGroups++
+            Write-Verbose "  [STRIP] Removed ADD FILE to FILESTREAM FileGroup [$targetFG]"
+          }
+        }
+
+        # Skip batches that MODIFY FILEGROUP for a FILESTREAM FileGroup
+        # Pattern: MODIFY FILEGROUP [<name>]
+        if (-not $skipBatch -and $trimmedBatch -match 'MODIFY\s+FILEGROUP\s+\[([^\]]+)\]') {
+          $targetFG = $matches[1]
+          if ($filestreamFileGroups.Contains($targetFG)) {
+            $skipBatch = $true
+            $skippedFileGroups++
+            Write-Verbose "  [STRIP] Removed MODIFY FILEGROUP for FILESTREAM FileGroup [$targetFG]"
+          }
+        }
+
+        if (-not $skipBatch) {
+          $filteredBatches += $trimmedBatch
+        }
       }
 
       if ($filteredBatches.Count -gt 0) {
@@ -4826,7 +4878,7 @@ function Apply-FilestreamStripping {
         $modified = $true
       }
       else {
-        # All blocks were FILESTREAM - delete the file entirely
+        # All blocks were FILESTREAM-related - delete the file entirely
         Remove-Item -Path $file.FullName -Force
         Write-Verbose "  [STRIP] Deleted FILESTREAM-only file: $($file.Name)"
         $modifiedCount++
@@ -6597,15 +6649,8 @@ For more details, see: https://go.microsoft.com/fwlink/?linkid=2226722
     }
   }
 
-  # Save export metadata (required for delta exports)
-  Save-ExportMetadata -OutputDir $exportDir
-
-  # Apply FILESTREAM stripping if enabled (post-process all exported SQL files)
-  if ($script:StripFilestreamEnabled) {
-    Apply-FilestreamStripping -OutputDir $exportDir | Out-Null
-  }
-
   # Copy unchanged files from previous export if delta mode is active
+  # This must happen BEFORE stripping so copied files also get stripped
   if ($script:DeltaExportEnabled -and $script:DeltaChangeResults -and $script:DeltaChangeResults.ToCopy.Count -gt 0) {
     Write-Output ''
     Write-Output 'Copying unchanged objects from previous export...'
@@ -6620,6 +6665,16 @@ For more details, see: https://go.microsoft.com/fwlink/?linkid=2226722
     Write-Log "Delta export copied $($copyResult.CopiedCount) unchanged files" -Severity INFO
   }
 
+  # Apply FILESTREAM stripping if enabled (post-process ALL SQL files including copied ones)
+  # This runs after delta copy to ensure both newly exported AND copied files are stripped
+  if ($script:StripFilestreamEnabled) {
+    Apply-FilestreamStripping -OutputDir $exportDir | Out-Null
+  }
+
+  # Save export metadata AFTER stripping so it reflects the final state
+  # (required for delta exports - describes what's actually in the output)
+  Save-ExportMetadata -OutputDir $exportDir
+
   # Create deployment manifest
   New-DeploymentManifest -OutputDir $exportDir -DatabaseName $Database -ServerName $Server
 
@@ -6631,8 +6686,8 @@ For more details, see: https://go.microsoft.com/fwlink/?linkid=2226722
 
   # Check for export failures and exit with error if any occurred
   $totalFailures = 0
-  if ($schemaResult -and $schemaResult.FailCount -gt 0) {
-    $totalFailures += $schemaResult.FailCount
+  if ($script:ExportFunctionMetrics -and $script:ExportFunctionMetrics.FailCount -gt 0) {
+    $totalFailures += $script:ExportFunctionMetrics.FailCount
   }
   if ($dataResult -and $dataResult.FailCount -gt 0) {
     $totalFailures += $dataResult.FailCount
