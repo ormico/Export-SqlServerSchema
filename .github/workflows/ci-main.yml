@@ -172,6 +172,13 @@ jobs:
           Write-Host "Running error handling tests..."
           ./test-error-handling.ps1
 
+      - name: Run encryption secrets tests
+        shell: pwsh
+        working-directory: ./tests
+        run: |
+          Write-Host "Running encryption secrets tests..."
+          ./test-encryption-secrets.ps1
+
       - name: Cleanup
         if: always()
         working-directory: ./tests
