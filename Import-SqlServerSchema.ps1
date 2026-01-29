@@ -151,7 +151,10 @@ param(
   [string[]]$ExcludeSchemas,
 
   [Parameter(HelpMessage = 'Strip FILESTREAM features (removes FILESTREAM_ON clauses, converts FILESTREAM columns to VARBINARY(MAX)). Required for Linux/container targets.')]
-  [switch]$StripFilestream
+  [switch]$StripFilestream,
+
+  [Parameter(HelpMessage = 'Show required encryption secrets for this export and generate suggested YAML config, then exit without importing')]
+  [switch]$ShowRequiredSecrets
 )
 
 $ErrorActionPreference = if ($ContinueOnError) { 'Continue' } else { 'Stop' }
@@ -206,6 +209,46 @@ $script:ScriptStopwatch = $null
 $script:FKStopwatch = $null
 
 #region Helper Functions
+
+function Get-SafeProperty {
+  <#
+    .SYNOPSIS
+        Safely gets a property value from an object (hashtable or PSCustomObject).
+    .DESCRIPTION
+        Works around PowerShell 7.5+ behavior where accessing non-existent properties
+        on hashtables via dot notation throws PropertyNotFoundException.
+        This function safely returns $null if the property doesn't exist or if the object is null.
+    .PARAMETER Object
+        The object to get the property from. Can be null.
+    .PARAMETER PropertyName
+        The name of the property to retrieve.
+    .OUTPUTS
+        The property value, or $null if the property doesn't exist or object is null.
+  #>
+  param(
+    [Parameter()]
+    $Object,
+
+    [Parameter(Mandatory)]
+    [string]$PropertyName
+  )
+
+  if ($null -eq $Object) { return $null }
+
+  if ($Object -is [hashtable]) {
+    if ($Object.ContainsKey($PropertyName)) {
+      return $Object[$PropertyName]
+    }
+    return $null
+  }
+
+  # PSCustomObject or other object types
+  if ($Object.PSObject.Properties.Name -contains $PropertyName) {
+    return $Object.$PropertyName
+  }
+
+  return $null
+}
 
 function Export-Metrics {
   <#
@@ -532,6 +575,458 @@ function Get-TargetServerOS {
       $tempConnection.ConnectionContext.Disconnect()
     }
   }
+}
+
+function Resolve-SecretValue {
+  <#
+    .SYNOPSIS
+        Resolves a secret value from various sources (env, file, or inline value).
+    .DESCRIPTION
+        Supports three secret sources:
+        - env: Read from environment variable
+        - file: Read from file (first line, trailing newline stripped)
+        - value: Inline value (development only)
+    .PARAMETER SecretConfig
+        Hashtable with one of: env, file, or value key
+    .PARAMETER SecretName
+        Name/identifier of the secret for error messages
+    .PARAMETER ImportMode
+        Current import mode (Dev or Prod) - warns about inline secrets in Prod
+    .OUTPUTS
+        The resolved secret string, or $null if resolution fails
+  #>
+  param(
+    [Parameter(Mandatory)]
+    [hashtable]$SecretConfig,
+
+    [Parameter(Mandatory)]
+    [string]$SecretName,
+
+    [Parameter()]
+    [string]$ImportMode = 'Dev'
+  )
+
+  # Resolve from environment variable
+  if ($SecretConfig.ContainsKey('env')) {
+    $envVar = $SecretConfig.env
+    $value = [Environment]::GetEnvironmentVariable($envVar)
+    if ([string]::IsNullOrEmpty($value)) {
+      Write-Warning "[WARNING] Environment variable '$envVar' for secret '$SecretName' is not set or empty"
+      return $null
+    }
+    Write-Verbose "  [SECRET] Resolved '$SecretName' from environment variable: $envVar"
+    return $value
+  }
+
+  # Resolve from file
+  if ($SecretConfig.ContainsKey('file')) {
+    $filePath = $SecretConfig.file
+    if (-not (Test-Path $filePath)) {
+      Write-Warning "[WARNING] Secret file not found for '$SecretName': $filePath"
+      return $null
+    }
+    try {
+      # Read first line only, trim trailing newline
+      $value = (Get-Content -Path $filePath -First 1 -Raw).TrimEnd("`r`n")
+      if ([string]::IsNullOrEmpty($value)) {
+        Write-Warning "[WARNING] Secret file is empty for '$SecretName': $filePath"
+        return $null
+      }
+      Write-Verbose "  [SECRET] Resolved '$SecretName' from file: $filePath"
+      return $value
+    }
+    catch {
+      Write-Warning "[WARNING] Failed to read secret file for '$SecretName': $_"
+      return $null
+    }
+  }
+
+  # Resolve from inline value
+  if ($SecretConfig.ContainsKey('value')) {
+    if ($ImportMode -eq 'Prod') {
+      Write-Warning "[SECURITY WARNING] Using inline secret value for '$SecretName' in PRODUCTION mode!"
+      Write-Warning "  -> Inline secrets should only be used for development/testing"
+      Write-Warning "  -> Use 'env:' or 'file:' for production deployments"
+    }
+    $value = $SecretConfig.value
+    if ([string]::IsNullOrEmpty($value)) {
+      Write-Warning "[WARNING] Inline secret value is empty for '$SecretName'"
+      return $null
+    }
+    Write-Verbose "  [SECRET] Resolved '$SecretName' from inline value"
+    return $value
+  }
+
+  Write-Warning "[WARNING] Invalid secret configuration for '$SecretName' - must have 'env', 'file', or 'value' key"
+  return $null
+}
+
+function Get-EncryptionSecrets {
+  <#
+    .SYNOPSIS
+        Retrieves and resolves all encryption secrets from config.
+    .DESCRIPTION
+        Resolves encryption secrets for Database Master Key, Symmetric Keys,
+        Certificates, and Application Roles from the configuration.
+    .PARAMETER ModeSettings
+        The mode-specific settings (developerMode or productionMode)
+    .PARAMETER ImportMode
+        Current import mode (Dev or Prod)
+    .OUTPUTS
+        Hashtable with resolved secrets, or $null if no secrets configured
+  #>
+  param(
+    [Parameter()]
+    [hashtable]$ModeSettings,
+
+    [Parameter()]
+    [string]$ImportMode = 'Dev'
+  )
+
+  if (-not $ModeSettings -or -not $ModeSettings.ContainsKey('encryptionSecrets')) {
+    return $null
+  }
+
+  $encryptionConfig = $ModeSettings.encryptionSecrets
+  if (-not $encryptionConfig -or $encryptionConfig.Count -eq 0) {
+    return $null
+  }
+
+  $resolvedSecrets = @{
+    databaseMasterKey = $null
+    symmetricKeys     = @{}
+    certificates      = @{}
+    applicationRoles  = @{}
+  }
+
+  # Resolve Database Master Key
+  if ($encryptionConfig.ContainsKey('databaseMasterKey') -and $encryptionConfig.databaseMasterKey) {
+    $resolvedSecrets.databaseMasterKey = Resolve-SecretValue `
+      -SecretConfig $encryptionConfig.databaseMasterKey `
+      -SecretName 'databaseMasterKey' `
+      -ImportMode $ImportMode
+  }
+
+  # Resolve Symmetric Keys
+  if ($encryptionConfig.ContainsKey('symmetricKeys') -and $encryptionConfig.symmetricKeys) {
+    foreach ($keyName in $encryptionConfig.symmetricKeys.Keys) {
+      $secretValue = Resolve-SecretValue `
+        -SecretConfig $encryptionConfig.symmetricKeys[$keyName] `
+        -SecretName "symmetricKey:$keyName" `
+        -ImportMode $ImportMode
+      if ($secretValue) {
+        $resolvedSecrets.symmetricKeys[$keyName] = $secretValue
+      }
+    }
+  }
+
+  # Resolve Certificates
+  if ($encryptionConfig.ContainsKey('certificates') -and $encryptionConfig.certificates) {
+    foreach ($certName in $encryptionConfig.certificates.Keys) {
+      $secretValue = Resolve-SecretValue `
+        -SecretConfig $encryptionConfig.certificates[$certName] `
+        -SecretName "certificate:$certName" `
+        -ImportMode $ImportMode
+      if ($secretValue) {
+        $resolvedSecrets.certificates[$certName] = $secretValue
+      }
+    }
+  }
+
+  # Resolve Application Roles
+  if ($encryptionConfig.ContainsKey('applicationRoles') -and $encryptionConfig.applicationRoles) {
+    foreach ($roleName in $encryptionConfig.applicationRoles.Keys) {
+      $secretValue = Resolve-SecretValue `
+        -SecretConfig $encryptionConfig.applicationRoles[$roleName] `
+        -SecretName "applicationRole:$roleName" `
+        -ImportMode $ImportMode
+      if ($secretValue) {
+        $resolvedSecrets.applicationRoles[$roleName] = $secretValue
+      }
+    }
+  }
+
+  return $resolvedSecrets
+}
+
+function Get-RequiredEncryptionSecrets {
+  <#
+    .SYNOPSIS
+        Discovers encryption objects requiring secrets for import.
+    .DESCRIPTION
+        Reads encryption object information from export metadata file if available,
+        otherwise falls back to scanning SQL files for encryption patterns.
+        Returns a structured list of objects that require passwords during import.
+    .PARAMETER SourcePath
+        Path to the export directory.
+    .OUTPUTS
+        Hashtable with encryption objects found, or $null if none.
+  #>
+  param(
+    [Parameter(Mandatory)]
+    [string]$SourcePath
+  )
+
+  # Try to read from metadata first (fast path)
+  $metadata = Read-ExportMetadata -SourcePath $SourcePath
+  if ($metadata -and $metadata.ContainsKey('encryptionObjects') -and $metadata.encryptionObjects) {
+    Write-Verbose "Reading encryption objects from export metadata"
+    return $metadata.encryptionObjects
+  }
+
+  # Fallback: scan SQL files for encryption patterns
+  Write-Verbose "No encryption metadata found, scanning SQL files..."
+  $encryptionObjects = [ordered]@{
+    hasDatabaseMasterKey = $false
+    symmetricKeys        = @()
+    certificates         = @()
+    asymmetricKeys       = @()
+    applicationRoles     = @()
+  }
+
+  $securityDir = Join-Path $SourcePath '01_Security'
+  if (-not (Test-Path $securityDir)) {
+    return $null
+  }
+
+  # Scan for Database Master Key
+  $dmkFiles = Get-ChildItem -Path $securityDir -Filter '*MasterKey*.sql' -ErrorAction SilentlyContinue
+  foreach ($file in $dmkFiles) {
+    $content = Get-Content -Path $file.FullName -Raw -ErrorAction SilentlyContinue
+    if ($content -match 'CREATE\s+MASTER\s+KEY') {
+      $encryptionObjects.hasDatabaseMasterKey = $true
+      break
+    }
+  }
+
+  # Scan for Symmetric Keys
+  $symKeyFiles = Get-ChildItem -Path $securityDir -Filter '*SymmetricKey*.sql' -ErrorAction SilentlyContinue
+  foreach ($file in $symKeyFiles) {
+    $content = Get-Content -Path $file.FullName -Raw -ErrorAction SilentlyContinue
+    # Use Select-String with -AllMatches to find all symmetric keys in each file
+    $keyMatches = [regex]::Matches($content, 'CREATE\s+SYMMETRIC\s+KEY\s+\[?([^\]\s]+)\]?', 'IgnoreCase')
+    foreach ($match in $keyMatches) {
+      $keyName = $match.Groups[1].Value
+      if ($keyName -notin $encryptionObjects.symmetricKeys) {
+        $encryptionObjects.symmetricKeys += $keyName
+      }
+    }
+  }
+
+  # Scan for Application Roles
+  $roleFiles = Get-ChildItem -Path $securityDir -Filter '*.approle.sql' -ErrorAction SilentlyContinue
+  foreach ($file in $roleFiles) {
+    $content = Get-Content -Path $file.FullName -Raw -ErrorAction SilentlyContinue
+    if ($content -match 'CREATE\s+APPLICATION\s+ROLE\s+\[?([^\]\s]+)\]?') {
+      $roleName = $Matches[1]
+      if ($roleName -notin $encryptionObjects.applicationRoles) {
+        $encryptionObjects.applicationRoles += $roleName
+      }
+    }
+  }
+
+  # Scan for Certificates
+  $certFiles = Get-ChildItem -Path $securityDir -Filter '*Certificate*.sql' -ErrorAction SilentlyContinue
+  foreach ($file in $certFiles) {
+    $content = Get-Content -Path $file.FullName -Raw -ErrorAction SilentlyContinue
+    if ($content -match 'CREATE\s+CERTIFICATE\s+\[?([^\]\s]+)\]?') {
+      $certName = $Matches[1]
+      if ($certName -notin $encryptionObjects.certificates) {
+        $encryptionObjects.certificates += $certName
+      }
+    }
+  }
+
+  # Scan for Asymmetric Keys
+  $asymKeyFiles = Get-ChildItem -Path $securityDir -Filter '*AsymmetricKey*.sql' -ErrorAction SilentlyContinue
+  foreach ($file in $asymKeyFiles) {
+    $content = Get-Content -Path $file.FullName -Raw -ErrorAction SilentlyContinue
+    if ($content -match 'CREATE\s+ASYMMETRIC\s+KEY\s+\[?([^\]\s]+)\]?') {
+      $keyName = $Matches[1]
+      if ($keyName -notin $encryptionObjects.asymmetricKeys) {
+        $encryptionObjects.asymmetricKeys += $keyName
+      }
+    }
+  }
+
+  # Check if any encryption objects were found
+  $hasAny = $encryptionObjects.hasDatabaseMasterKey -or
+  $encryptionObjects.symmetricKeys.Count -gt 0 -or
+  $encryptionObjects.certificates.Count -gt 0 -or
+  $encryptionObjects.asymmetricKeys.Count -gt 0 -or
+  $encryptionObjects.applicationRoles.Count -gt 0
+
+  if ($hasAny) {
+    return $encryptionObjects
+  }
+  return $null
+}
+
+function Show-EncryptionSecretsTemplate {
+  <#
+    .SYNOPSIS
+        Displays required encryption secrets and generates suggested YAML config.
+    .DESCRIPTION
+        Shows which encryption objects were found in the export and generates
+        a ready-to-use YAML configuration template for encryptionSecrets.
+    .PARAMETER SourcePath
+        Path to the export directory.
+    .PARAMETER EncryptionObjects
+        Hashtable of encryption objects (from Get-RequiredEncryptionSecrets).
+  #>
+  param(
+    [Parameter(Mandatory)]
+    [string]$SourcePath,
+
+    [Parameter(Mandatory)]
+    $EncryptionObjects
+  )
+
+  $metadata = Read-ExportMetadata -SourcePath $SourcePath
+
+  Write-Host ""
+  Write-Host "=" * 70 -ForegroundColor Cyan
+  Write-Host "  ENCRYPTION SECRETS REQUIRED FOR IMPORT" -ForegroundColor Cyan
+  Write-Host "=" * 70 -ForegroundColor Cyan
+  Write-Host ""
+
+  if ($metadata) {
+    Write-Host "Export Information:" -ForegroundColor Yellow
+    Write-Host "  Source: $($metadata.serverName)\$($metadata.databaseName)"
+    Write-Host "  Date:   $($metadata.exportStartTimeUtc)"
+    Write-Host ""
+  }
+
+  Write-Host "Encryption Objects Found:" -ForegroundColor Yellow
+
+  # Database Master Key
+  if ($EncryptionObjects.hasDatabaseMasterKey) {
+    Write-Host "  [*] Database Master Key" -ForegroundColor Green
+  }
+
+  # Symmetric Keys
+  if ($EncryptionObjects.symmetricKeys.Count -gt 0) {
+    Write-Host "  [*] Symmetric Keys ($($EncryptionObjects.symmetricKeys.Count)):" -ForegroundColor Green
+    foreach ($key in $EncryptionObjects.symmetricKeys) {
+      Write-Host "      - $key"
+    }
+  }
+
+  # Certificates
+  if ($EncryptionObjects.certificates.Count -gt 0) {
+    Write-Host "  [*] Certificates ($($EncryptionObjects.certificates.Count)):" -ForegroundColor Green
+    foreach ($cert in $EncryptionObjects.certificates) {
+      Write-Host "      - $cert"
+    }
+  }
+
+  # Asymmetric Keys
+  if ($EncryptionObjects.asymmetricKeys.Count -gt 0) {
+    Write-Host "  [*] Asymmetric Keys ($($EncryptionObjects.asymmetricKeys.Count)):" -ForegroundColor Green
+    foreach ($key in $EncryptionObjects.asymmetricKeys) {
+      Write-Host "      - $key"
+    }
+  }
+
+  # Application Roles
+  if ($EncryptionObjects.applicationRoles.Count -gt 0) {
+    Write-Host "  [*] Application Roles ($($EncryptionObjects.applicationRoles.Count)):" -ForegroundColor Green
+    foreach ($role in $EncryptionObjects.applicationRoles) {
+      Write-Host "      - $role"
+    }
+  }
+
+  Write-Host ""
+  Write-Host "-" * 70 -ForegroundColor Gray
+  Write-Host "  SUGGESTED YAML CONFIGURATION" -ForegroundColor Cyan
+  Write-Host "-" * 70 -ForegroundColor Gray
+  Write-Host ""
+  Write-Host "Add the following to your config file under 'import.developerMode'" -ForegroundColor Yellow
+  Write-Host "or 'import.productionMode' section:" -ForegroundColor Yellow
+  Write-Host ""
+
+  # Generate YAML template
+  $yamlLines = @()
+  $yamlLines += "    encryptionSecrets:"
+
+  if ($EncryptionObjects.hasDatabaseMasterKey) {
+    $yamlLines += "      # Database Master Key password"
+    $yamlLines += "      databaseMasterKey:"
+    $yamlLines += "        env: SQL_DMK_PASSWORD  # Set this environment variable"
+    $yamlLines += "        # OR file: /path/to/dmk-secret.txt"
+    $yamlLines += "        # OR value: 'DevPassword' (development only!)"
+  }
+
+  if ($EncryptionObjects.symmetricKeys.Count -gt 0) {
+    $yamlLines += "      "
+    $yamlLines += "      # Symmetric Key passwords"
+    $yamlLines += "      symmetricKeys:"
+    foreach ($key in $EncryptionObjects.symmetricKeys) {
+      $envVar = "SQL_SYMKEY_$($key.ToUpper() -replace '[^A-Z0-9]', '_')"
+      $yamlLines += "        $($key):"
+      $yamlLines += "          env: $envVar"
+    }
+  }
+
+  if ($EncryptionObjects.certificates.Count -gt 0) {
+    $yamlLines += "      "
+    $yamlLines += "      # Certificate private key passwords"
+    $yamlLines += "      certificates:"
+    foreach ($cert in $EncryptionObjects.certificates) {
+      $envVar = "SQL_CERT_$($cert.ToUpper() -replace '[^A-Z0-9]', '_')"
+      $yamlLines += "        $($cert):"
+      $yamlLines += "          env: $envVar"
+    }
+  }
+
+  if ($EncryptionObjects.asymmetricKeys.Count -gt 0) {
+    $yamlLines += "      "
+    $yamlLines += "      # Asymmetric Key passwords"
+    $yamlLines += "      asymmetricKeys:"
+    foreach ($key in $EncryptionObjects.asymmetricKeys) {
+      $envVar = "SQL_ASYMKEY_$($key.ToUpper() -replace '[^A-Z0-9]', '_')"
+      $yamlLines += "        $($key):"
+      $yamlLines += "          env: $envVar"
+    }
+  }
+
+  if ($EncryptionObjects.applicationRoles.Count -gt 0) {
+    $yamlLines += "      "
+    $yamlLines += "      # Application Role passwords"
+    $yamlLines += "      applicationRoles:"
+    foreach ($role in $EncryptionObjects.applicationRoles) {
+      $envVar = "SQL_APPROLE_$($role.ToUpper() -replace '[^A-Z0-9]', '_')"
+      $yamlLines += "        $($role):"
+      $yamlLines += "          env: $envVar"
+    }
+  }
+
+  # Output YAML with syntax highlighting
+  foreach ($line in $yamlLines) {
+    if ($line -match '^\s*#') {
+      Write-Host $line -ForegroundColor DarkGray
+    }
+    elseif ($line -match ':\s*$') {
+      Write-Host $line -ForegroundColor White
+    }
+    elseif ($line -match 'env:|file:|value:') {
+      Write-Host $line -ForegroundColor Cyan
+    }
+    else {
+      Write-Host $line
+    }
+  }
+
+  Write-Host ""
+  Write-Host "-" * 70 -ForegroundColor Gray
+  Write-Host ""
+  Write-Host "Secret Source Options:" -ForegroundColor Yellow
+  Write-Host "  env:   Environment variable (recommended for CI/CD)" -ForegroundColor Gray
+  Write-Host "  file:  File path (recommended for Kubernetes/Docker)" -ForegroundColor Gray
+  Write-Host "  value: Inline value (development only, never commit!)" -ForegroundColor Gray
+  Write-Host ""
+  Write-Host "For more information, see: docs/ENCRYPTION_SECRETS_DESIGN.md" -ForegroundColor DarkGray
+  Write-Host ""
 }
 
 function Read-ExportMetadata {
@@ -1277,6 +1772,104 @@ function Invoke-SqlScript {
       # Log transformation if changes were made
       if ($sql -ne $originalSql) {
         Write-Verbose "  [TRANSFORM] Stripped FILESTREAM features: $scriptName"
+      }
+    }
+
+    # Apply encryption secrets for security objects
+    # This injects passwords for Database Master Key, Symmetric Keys, Certificates, and Application Roles
+    if ($SqlCmdVariables.ContainsKey('__EncryptionSecrets__')) {
+      $secrets = $SqlCmdVariables['__EncryptionSecrets__']
+      $originalSql = $sql
+
+      # 1. Application Roles: Handle SMO's dynamic SQL password generation
+      #    SMO generates scripts that use sp_executesql with @placeholderPwd variable
+      #    We replace the entire dynamic SQL block with a simple CREATE statement
+      if ($scriptName -match '\.(approle|role)\.sql$' -and $sql -match 'CREATE\s+APPLICATION\s+ROLE') {
+        # Extract role name from the dynamic SQL statement builder
+        # Pattern: N'CREATE APPLICATION ROLE [name] WITH ... PASSWORD = N'
+        if ($sql -match "CREATE\s+APPLICATION\s+ROLE\s+\[([^\]]+)\]") {
+          $roleName = $matches[1]
+          if ($secrets.applicationRoles -and $secrets.applicationRoles.ContainsKey($roleName)) {
+            $secretPwd = $secrets.applicationRoles[$roleName]
+            # Escape single quotes in password for T-SQL string literal
+            $escapedPwd = $secretPwd -replace "'", "''"
+
+            # SMO generates dynamic SQL like:
+            #   declare @statement nvarchar(4000)
+            #   select @statement = N'CREATE APPLICATION ROLE [name] WITH ... PASSWORD = N' + QUOTENAME(@placeholderPwd,'''')
+            #   EXEC dbo.sp_executesql @statement
+            #
+            # We replace the entire script with a simple direct CREATE statement
+            # Extract default schema if present
+            $defaultSchema = 'dbo'
+            if ($sql -match "DEFAULT_SCHEMA\s*=\s*\[([^\]]+)\]") {
+              $defaultSchema = $matches[1]
+            }
+
+            # Build clean CREATE APPLICATION ROLE statement
+            $sql = "CREATE APPLICATION ROLE [$roleName] WITH DEFAULT_SCHEMA = [$defaultSchema], PASSWORD = N'$escapedPwd'`r`nGO"
+            Write-Verbose "  [TRANSFORM] Replaced SMO dynamic SQL with direct CREATE for application role: $roleName"
+          }
+          else {
+            Write-Warning "[WARNING] No secret configured for application role: $roleName"
+            Write-Warning "  To fix, add to your config file:"
+            Write-Warning "    encryptionSecrets:"
+            Write-Warning "      applicationRoles:"
+            Write-Warning "        $($roleName):"
+            Write-Warning "          env: SQL_APPROLE_$($roleName.ToUpper() -replace '[^A-Z0-9]', '_')"
+            Write-Warning "  Or run: Import-SqlServerSchema.ps1 -ShowRequiredSecrets ..."
+          }
+        }
+      }
+
+      # 2. Symmetric Keys: CREATE SYMMETRIC KEY [name] ... ENCRYPTION BY PASSWORD = N'...'
+      if ($sql -match 'CREATE\s+SYMMETRIC\s+KEY') {
+        if ($sql -match 'CREATE\s+SYMMETRIC\s+KEY\s+\[([^\]]+)\]') {
+          $keyName = $matches[1]
+          if ($secrets.symmetricKeys -and $secrets.symmetricKeys.ContainsKey($keyName)) {
+            $secretPwd = $secrets.symmetricKeys[$keyName]
+            $escapedPwd = $secretPwd -replace "'", "''"
+            # Replace ENCRYPTION BY PASSWORD = N'...' pattern
+            $sql = $sql -replace "(ENCRYPTION\s+BY\s+PASSWORD\s*=\s*N?)'[^']*'", "`$1'$escapedPwd'"
+            Write-Verbose "  [TRANSFORM] Applied secret for symmetric key: $keyName"
+          }
+          else {
+            Write-Warning "[WARNING] No secret configured for symmetric key: $keyName"
+            Write-Warning "  To fix, add to your config file:"
+            Write-Warning "    encryptionSecrets:"
+            Write-Warning "      symmetricKeys:"
+            Write-Warning "        $($keyName):"
+            Write-Warning "          env: SQL_SYMKEY_$($keyName.ToUpper() -replace '[^A-Z0-9]', '_')"
+            Write-Warning "  Or run: Import-SqlServerSchema.ps1 -ShowRequiredSecrets ..."
+          }
+        }
+      }
+
+      # 3. Certificates with private key password: ENCRYPTION BY PASSWORD = N'...'
+      #    Only for certificate scripts (001_Certificates.sql or similar)
+      if ($sql -match 'CREATE\s+CERTIFICATE' -and $sql -match 'ENCRYPTION\s+BY\s+PASSWORD') {
+        if ($sql -match 'CREATE\s+CERTIFICATE\s+\[([^\]]+)\]') {
+          $certName = $matches[1]
+          if ($secrets.certificates -and $secrets.certificates.ContainsKey($certName)) {
+            $secretPwd = $secrets.certificates[$certName]
+            $escapedPwd = $secretPwd -replace "'", "''"
+            $sql = $sql -replace "(ENCRYPTION\s+BY\s+PASSWORD\s*=\s*N?)'[^']*'", "`$1'$escapedPwd'"
+            Write-Verbose "  [TRANSFORM] Applied secret for certificate: $certName"
+          }
+          else {
+            Write-Warning "[WARNING] No secret configured for certificate private key: $certName"
+            Write-Warning "  To fix, add to your config file:"
+            Write-Warning "    encryptionSecrets:"
+            Write-Warning "      certificates:"
+            Write-Warning "        $($certName):"
+            Write-Warning "          env: SQL_CERT_$($certName.ToUpper() -replace '[^A-Z0-9]', '_')"
+            Write-Warning "  Or run: Import-SqlServerSchema.ps1 -ShowRequiredSecrets ..."
+          }
+        }
+      }
+
+      if ($sql -ne $originalSql) {
+        Write-Verbose "  [TRANSFORM] Applied encryption secrets: $scriptName"
       }
     }
 
@@ -2483,18 +3076,21 @@ try {
 
       # Override IncludeData from config ONLY if not explicitly set on command line
       # Support both simplified config (includeData at root) and full config (nested mode settings)
-      Write-Verbose "Config includeData value: $($config.includeData), Parameter IncludeData: $IncludeData"
+      # Use safe property access for strict mode compatibility
+      $configIncludeData = if ($config -is [hashtable]) { $config['includeData'] } elseif ($config.PSObject.Properties.Name -contains 'includeData') { $config.includeData } else { $null }
+      Write-Verbose "Config includeData value: $configIncludeData, Parameter IncludeData: $IncludeData"
       if (-not $PSBoundParameters.ContainsKey('IncludeData')) {
         # Check root-level includeData first
-        if ($config.includeData) {
-          $IncludeData = $config.includeData
+        if ($configIncludeData) {
+          $IncludeData = $configIncludeData
           Write-Output "[INFO] Data import enabled from config file"
         }
         # Then check mode-specific settings
         elseif ($config.import) {
           $modeSettings = if ($ImportMode -eq 'Dev') { $config.import.developerMode } else { $config.import.productionMode }
-          if ($modeSettings -and $modeSettings.includeData) {
-            $IncludeData = $modeSettings.includeData
+          $modeIncludeData = if ($modeSettings -and $modeSettings -is [hashtable]) { $modeSettings['includeData'] } elseif ($modeSettings -and $modeSettings.PSObject.Properties.Name -contains 'includeData') { $modeSettings.includeData } else { $null }
+          if ($modeIncludeData) {
+            $IncludeData = $modeIncludeData
             Write-Output "[INFO] Data import enabled from config file ($ImportMode mode)"
           }
         }
@@ -2573,6 +3169,32 @@ try {
       Write-Warning "Config file not found: $ConfigFile"
       Write-Warning "Continuing with default settings..."
     }
+  }
+
+  # Handle -ShowRequiredSecrets mode (display and exit without importing)
+  if ($ShowRequiredSecrets) {
+    Write-Output ""
+    Write-Output "Scanning export for encryption objects..."
+    $encryptionObjects = Get-RequiredEncryptionSecrets -SourcePath $SourcePath
+
+    if ($encryptionObjects) {
+      Show-EncryptionSecretsTemplate -SourcePath $SourcePath -EncryptionObjects $encryptionObjects
+    }
+    else {
+      Write-Host ""
+      Write-Host "No encryption objects requiring passwords found in this export." -ForegroundColor Green
+      Write-Host ""
+      Write-Host "This export does not contain:" -ForegroundColor Gray
+      Write-Host "  - Database Master Key"
+      Write-Host "  - Symmetric Keys"
+      Write-Host "  - Certificates"
+      Write-Host "  - Asymmetric Keys"
+      Write-Host "  - Application Roles"
+      Write-Host ""
+      Write-Host "No encryptionSecrets configuration is needed for import." -ForegroundColor Green
+      Write-Host ""
+    }
+    exit 0
   }
 
   # Apply timeout settings from config or use defaults
@@ -2778,15 +3400,22 @@ try {
   $exportMetadata = Read-ExportMetadata -SourcePath $SourcePath
 
   # Get FileGroup file size defaults from config (if specified)
+  # Use safe property access patterns for PowerShell 7.5+ compatibility
   $fgSizeDefaults = $null
   if ($config) {
-    if ($config.fileGroupFileSizeDefaults) {
-      $fgSizeDefaults = $config.fileGroupFileSizeDefaults
+    # Check if config is a hashtable or PSCustomObject and access property safely
+    $rootFgDefaults = if ($config -is [hashtable]) { $config['fileGroupFileSizeDefaults'] } elseif ($config.PSObject.Properties.Name -contains 'fileGroupFileSizeDefaults') { $config.fileGroupFileSizeDefaults } else { $null }
+    if ($rootFgDefaults) {
+      $fgSizeDefaults = $rootFgDefaults
     }
     elseif ($config.import) {
       $modeConfigForSize = if ($ImportMode -eq 'Prod') { $config.import.productionMode } else { $config.import.developerMode }
-      if ($modeConfigForSize -and $modeConfigForSize.fileGroupFileSizeDefaults) {
-        $fgSizeDefaults = $modeConfigForSize.fileGroupFileSizeDefaults
+      if ($modeConfigForSize) {
+        # Safe property access for mode config (may be hashtable from defaults or PSCustomObject from YAML)
+        $modeFgDefaults = if ($modeConfigForSize -is [hashtable]) { $modeConfigForSize['fileGroupFileSizeDefaults'] } elseif ($modeConfigForSize.PSObject.Properties.Name -contains 'fileGroupFileSizeDefaults') { $modeConfigForSize.fileGroupFileSizeDefaults } else { $null }
+        if ($modeFgDefaults) {
+          $fgSizeDefaults = $modeFgDefaults
+        }
       }
     }
   }
@@ -2842,8 +3471,10 @@ try {
 
   if ($config) {
     # Support both simplified config (fileGroupPathMapping at root) and full config (nested)
+    # Use Get-SafeProperty to handle hashtable/PSCustomObject differences in PowerShell 7.5+
     $modeConfig = $null
-    if ($config.fileGroupPathMapping) {
+    $rootPathMapping = Get-SafeProperty -Object $config -PropertyName 'fileGroupPathMapping'
+    if ($rootPathMapping) {
       # Simplified config format (root-level fileGroupPathMapping)
       $modeConfig = $config
     }
@@ -2852,7 +3483,8 @@ try {
       $modeConfig = if ($ImportMode -eq 'Prod') { $config.import.productionMode } else { $config.import.developerMode }
     }
 
-    if ($modeConfig -and $modeConfig.fileGroupPathMapping) {
+    $modePathMapping = Get-SafeProperty -Object $modeConfig -PropertyName 'fileGroupPathMapping'
+    if ($modeConfig -and $modePathMapping) {
       # SECURITY: Sanitize database name for use in filesystem paths
       $sanitizedDbName = $Database -replace '[^a-zA-Z0-9_-]', '_'
 
@@ -3090,15 +3722,15 @@ try {
       @{ fileGroupStrategy = 'autoRemap' }
     }
 
-    $fileGroupStrategy = if ($devSettings.ContainsKey('fileGroupStrategy')) {
-      $devSettings.fileGroupStrategy
-    }
-    else {
-      'autoRemap'
+    # Use Get-SafeProperty for compatibility with both hashtables and PSCustomObjects from YAML
+    $fileGroupStrategy = Get-SafeProperty -Object $devSettings -PropertyName 'fileGroupStrategy'
+    if (-not $fileGroupStrategy) {
+      $fileGroupStrategy = 'autoRemap'
     }
 
     # Check for convertLoginsToContained setting
-    if ($devSettings.ContainsKey('convertLoginsToContained') -and $devSettings.convertLoginsToContained -eq $true) {
+    $convertLoginsToContained = Get-SafeProperty -Object $devSettings -PropertyName 'convertLoginsToContained'
+    if ($convertLoginsToContained -eq $true) {
       $sqlCmdVars['__ConvertLoginsToContained__'] = $true
       Write-Output "[INFO] Login conversion: enabled - FOR LOGIN users will be converted to WITHOUT LOGIN (contained)"
     }
@@ -3197,6 +3829,27 @@ try {
     $sqlCmdVars['__StripFilestream__'] = $true
     Write-Output "[INFO] FILESTREAM stripping: enabled - FILESTREAM features will be removed (Linux/container compatibility)"
     Write-Output "       FILESTREAM_ON clauses will be removed, VARBINARY(MAX) FILESTREAM -> VARBINARY(MAX)"
+  }
+
+  # Resolve encryption secrets from config (for Database Master Key, Symmetric Keys, etc.)
+  # This allows importing databases with encryption objects by providing passwords from secure sources
+  $modeSettingsForSecrets = if ($ImportMode -eq 'Dev') {
+    if ($config -and $config.import -and $config.import.developerMode) { $config.import.developerMode } else { @{} }
+  }
+  else {
+    if ($config -and $config.import -and $config.import.productionMode) { $config.import.productionMode } else { @{} }
+  }
+  $encryptionSecrets = Get-EncryptionSecrets -ModeSettings $modeSettingsForSecrets -ImportMode $ImportMode
+  if ($encryptionSecrets) {
+    $sqlCmdVars['__EncryptionSecrets__'] = $encryptionSecrets
+    $secretsInfo = @()
+    if ($encryptionSecrets.databaseMasterKey) { $secretsInfo += "DMK" }
+    if ($encryptionSecrets.symmetricKeys.Count -gt 0) { $secretsInfo += "$($encryptionSecrets.symmetricKeys.Count) symmetric key(s)" }
+    if ($encryptionSecrets.certificates.Count -gt 0) { $secretsInfo += "$($encryptionSecrets.certificates.Count) certificate(s)" }
+    if ($encryptionSecrets.applicationRoles.Count -gt 0) { $secretsInfo += "$($encryptionSecrets.applicationRoles.Count) app role(s)" }
+    if ($secretsInfo.Count -gt 0) {
+      Write-Output "[INFO] Encryption secrets: loaded ($($secretsInfo -join ', '))"
+    }
   }
 
   # Report skipped folders if any

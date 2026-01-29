@@ -3146,10 +3146,14 @@ $script:ParallelProgressInterval = 50
 $script:ConnectionInfo = $null
 $script:Config = @{}  # Will be set after config file is loaded
 
+# Progress tracking for Write-ProgressHeader
+$script:LastProgressLabel = $null
+$script:CurrentProgressLabel = $null
+
 # Export metadata tracking for delta export feature
 # This tracks all objects exported for use in incremental/delta exports
 $script:ExportMetadata = @{
-  Version               = '1.0'
+  Version               = '1.1'
   ExportStartTimeUtc    = $null
   ExportStartTimeServer = $null
   ServerName            = $null
@@ -3159,6 +3163,7 @@ $script:ExportMetadata = @{
   ObjectTypes           = @{}
   Objects               = [System.Collections.ArrayList]::new()
   FileGroups            = [System.Collections.ArrayList]::new()  # Original file size/growth values
+  EncryptionObjects     = $null  # Will be populated during export
 }
 
 # Delta export state (set when -DeltaFrom is used)
@@ -3430,6 +3435,11 @@ function Save-ExportMetadata {
     $metadata.fileGroups = $script:ExportMetadata.FileGroups
   }
 
+  # Add encryption objects metadata if any were detected
+  if ($script:ExportMetadata.EncryptionObjects) {
+    $metadata.encryptionObjects = $script:ExportMetadata.EncryptionObjects
+  }
+
   # Convert to JSON with proper formatting
   $json = $metadata | ConvertTo-Json -Depth 10
 
@@ -3472,6 +3482,108 @@ function Read-ExportMetadata {
     Write-Warning "Failed to parse metadata file: $_"
     return $null
   }
+}
+
+function Get-EncryptionObjectsMetadata {
+  <#
+    .SYNOPSIS
+        Detects encryption objects in the database for metadata export.
+    .DESCRIPTION
+        Queries the database for encryption objects that will require passwords
+        during import: Database Master Key, Symmetric Keys, Certificates with
+        private keys, Asymmetric Keys with private keys, and Application Roles.
+        This information is stored in export metadata to help configure imports.
+    .PARAMETER Database
+        The SMO Database object to scan.
+    .OUTPUTS
+        Hashtable with encryption object names, or $null if none found.
+  #>
+  param(
+    [Parameter(Mandatory)]
+    [Microsoft.SqlServer.Management.Smo.Database]$Database
+  )
+
+  $encryptionObjects = [ordered]@{
+    hasDatabaseMasterKey = $false
+    symmetricKeys        = @()
+    certificates         = @()
+    asymmetricKeys       = @()
+    applicationRoles     = @()
+  }
+
+  $hasAny = $false
+
+  try {
+    # Check for Database Master Key
+    if ($Database.MasterKey) {
+      $encryptionObjects.hasDatabaseMasterKey = $true
+      $hasAny = $true
+      Write-Verbose "  [ENCRYPTION] Database Master Key detected"
+    }
+  }
+  catch {
+    Write-Verbose "  [ENCRYPTION] Could not check Database Master Key: $_"
+  }
+
+  try {
+    # Check for Symmetric Keys (user-created only - filter out system keys by name pattern)
+    # Note: SymmetricKey SMO objects don't have IsSystemObject property
+    $symKeys = @($Database.SymmetricKeys | Where-Object { $_.Name -notlike '##*' } | ForEach-Object { $_.Name })
+    if ($symKeys.Count -gt 0) {
+      $encryptionObjects.symmetricKeys = $symKeys
+      $hasAny = $true
+      Write-Verbose "  [ENCRYPTION] Symmetric Keys detected: $($symKeys -join ', ')"
+    }
+  }
+  catch {
+    Write-Verbose "  [ENCRYPTION] Could not enumerate Symmetric Keys: $_"
+  }
+
+  try {
+    # Check for Certificates (user-created only - filter out system certs by name pattern)
+    # Note: Certificate SMO objects don't have IsSystemObject property
+    $certs = @($Database.Certificates | Where-Object { $_.Name -notlike '##*' } | ForEach-Object { $_.Name })
+    if ($certs.Count -gt 0) {
+      $encryptionObjects.certificates = $certs
+      $hasAny = $true
+      Write-Verbose "  [ENCRYPTION] Certificates detected: $($certs -join ', ')"
+    }
+  }
+  catch {
+    Write-Verbose "  [ENCRYPTION] Could not enumerate Certificates: $_"
+  }
+
+  try {
+    # Check for Asymmetric Keys (user-created only)
+    # Note: AsymmetricKey SMO objects don't have IsSystemObject property
+    $asymKeys = @($Database.AsymmetricKeys | Where-Object { $_.Name -notlike '##*' } | ForEach-Object { $_.Name })
+    if ($asymKeys.Count -gt 0) {
+      $encryptionObjects.asymmetricKeys = $asymKeys
+      $hasAny = $true
+      Write-Verbose "  [ENCRYPTION] Asymmetric Keys detected: $($asymKeys -join ', ')"
+    }
+  }
+  catch {
+    Write-Verbose "  [ENCRYPTION] Could not enumerate Asymmetric Keys: $_"
+  }
+
+  try {
+    # Check for Application Roles (require passwords)
+    $appRoles = @($Database.ApplicationRoles | ForEach-Object { $_.Name })
+    if ($appRoles.Count -gt 0) {
+      $encryptionObjects.applicationRoles = $appRoles
+      $hasAny = $true
+      Write-Verbose "  [ENCRYPTION] Application Roles detected: $($appRoles -join ', ')"
+    }
+  }
+  catch {
+    Write-Verbose "  [ENCRYPTION] Could not enumerate Application Roles: $_"
+  }
+
+  if ($hasAny) {
+    return $encryptionObjects
+  }
+  return $null
 }
 
 function Test-DeltaExportCompatibility {
@@ -6206,8 +6318,19 @@ try {
   # Initialize metrics collection (CLI switch or config file)
   $script:CollectMetrics = $CollectMetrics.IsPresent
 
-  # Load configuration if provided
-  $config = @{ export = @{ includeObjectTypes = @(); excludeObjectTypes = @(); includeData = $false; excludeObjects = @() } }
+  # Load configuration if provided - include ALL properties that might be accessed
+  # to avoid strict mode errors when properties don't exist
+  $config = @{
+    export = @{
+      includeObjectTypes = @()
+      excludeObjectTypes = @()
+      includeData = $false
+      excludeObjects = @()
+      excludeSchemas = @()
+      groupByObjectTypes = @{}
+      stripFilestream = $false
+    }
+  }
   $configSource = "None (using defaults)"
 
   if ($ConfigFile) {
@@ -6318,19 +6441,31 @@ try {
   $script:ParallelMaxWorkers = 5
   $script:ParallelProgressInterval = 50
 
-  # Apply config file settings
-  if ($config.export.parallel) {
-    if ($config.export.parallel.enabled -eq $true) {
+  # Apply config file settings (safely check for null/missing properties)
+  # Handle both hashtables and PSCustomObjects from YAML parsing
+  $exportConfig = $config.export
+  $hasParallelConfig = $false
+  if ($exportConfig) {
+    if ($exportConfig -is [hashtable]) {
+      $hasParallelConfig = $exportConfig.ContainsKey('parallel') -and $null -ne $exportConfig.parallel
+    } elseif ($exportConfig.PSObject.Properties.Name -contains 'parallel') {
+      $hasParallelConfig = $null -ne $exportConfig.parallel
+    }
+  }
+
+  if ($hasParallelConfig) {
+    $parallelConfig = $exportConfig.parallel
+    if ($parallelConfig.enabled -eq $true) {
       $script:ParallelEnabled = $true
     }
-    elseif ($config.export.parallel.enabled -eq $false) {
+    elseif ($parallelConfig.enabled -eq $false) {
       $script:ParallelEnabled = $false
     }
-    if ($config.export.parallel.maxWorkers) {
-      $script:ParallelMaxWorkers = [Math]::Max(1, [Math]::Min(20, [int]$config.export.parallel.maxWorkers))
+    if ($parallelConfig.maxWorkers) {
+      $script:ParallelMaxWorkers = [Math]::Max(1, [Math]::Min(20, [int]$parallelConfig.maxWorkers))
     }
-    if ($config.export.parallel.progressInterval) {
-      $script:ParallelProgressInterval = [Math]::Max(1, [int]$config.export.parallel.progressInterval)
+    if ($parallelConfig.progressInterval) {
+      $script:ParallelProgressInterval = [Math]::Max(1, [int]$parallelConfig.progressInterval)
     }
   }
 
@@ -6498,6 +6633,24 @@ For more details, see: https://go.microsoft.com/fwlink/?linkid=2226722
   # Initialize export metadata for delta export support
   Initialize-ExportMetadata -Database $smDatabase -ServerName $Server -DatabaseName $Database -IncludeData $IncludeData
 
+  # Detect encryption objects for metadata (helps with import configuration)
+  Write-Output "Checking for encryption objects..."
+  $script:ExportMetadata.EncryptionObjects = Get-EncryptionObjectsMetadata -Database $smDatabase
+  if ($script:ExportMetadata.EncryptionObjects) {
+    $encObj = $script:ExportMetadata.EncryptionObjects
+    $encSummary = @()
+    if ($encObj.hasDatabaseMasterKey) { $encSummary += "DMK" }
+    if ($encObj.symmetricKeys.Count -gt 0) { $encSummary += "$($encObj.symmetricKeys.Count) symmetric key(s)" }
+    if ($encObj.certificates.Count -gt 0) { $encSummary += "$($encObj.certificates.Count) certificate(s)" }
+    if ($encObj.asymmetricKeys.Count -gt 0) { $encSummary += "$($encObj.asymmetricKeys.Count) asymmetric key(s)" }
+    if ($encObj.applicationRoles.Count -gt 0) { $encSummary += "$($encObj.applicationRoles.Count) application role(s)" }
+    Write-Output "[INFO] Encryption objects detected: $($encSummary -join ', ')"
+    Write-Output "[INFO] Import will require encryptionSecrets configuration for these objects"
+  }
+  else {
+    Write-Output "[INFO] No encryption objects requiring passwords detected"
+  }
+
   # Log delta export settings if enabled (validation was done earlier before connection)
   if ($script:DeltaExportEnabled) {
     Write-Log "Delta export enabled from $script:DeltaFromPath with $($script:DeltaMetadata.objectCount) objects" -Severity INFO
@@ -6634,6 +6787,7 @@ For more details, see: https://go.microsoft.com/fwlink/?linkid=2226722
   }
 
   # Export data if requested with timing (skip if parallel mode - data already exported)
+  $dataResult = $null  # Initialize for strict mode
   if ($IncludeData -and -not $script:ParallelEnabled) {
     $dataTimer = Start-MetricsTimer -Category 'DataExport'
     $dataResult = Export-TableData -Database $smDatabase -OutputDir $exportDir -Scripter $scripter -TargetVersion $sqlVersion

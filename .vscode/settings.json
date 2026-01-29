@@ -149,6 +149,78 @@
         "/^pwsh -NoProfile -File \\.\\\\run-integration-test\\.ps1 2>&1 \\| Select-Object -Last 100$/": {
             "approve": true,
             "matchCommandLine": true
+        },
+        "/^pwsh -NoProfile -File \\.\\\\test-exclude-feature\\.ps1 2>&1$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^pwsh -NoProfile -File \\.\\\\test-encryption-secrets\\.ps1 2>&1$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^cd D:\\\\Export-SqlServerSchema\\\\tests; pwsh -NoProfile -File \\.\\\\test-encryption-secrets\\.ps1$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^pwsh -NoProfile -File \\.\\\\test-encryption-secrets\\.ps1$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^pwsh -NoProfile -File \\.\\\\test-encryption-secrets\\.ps1 2>&1 \\| Select-Object -Last 80$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^pwsh -NoProfile -File \\.\\\\test-encryption-secrets\\.ps1 2>&1 \\| Select-Object -Last 30$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^pwsh -NoProfile -File \\.\\\\test-exclude-feature\\.ps1 2>&1 \\| Select-Object -Last 30$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^pwsh -NoProfile -File \\.\\\\test-strip-filestream\\.ps1 2>&1 \\| Select-Object -Last 20$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^pwsh -NoProfile -File \\.\\\\test-selective-object-types\\.ps1 2>&1 \\| Select-Object -Last 15$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^pwsh -NoProfile -File \\.\\\\test-parallel-export\\.ps1 2>&1 \\| Select-Object -Last 15$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^pwsh -NoProfile -File \\.\\\\test-encryption-secrets\\.ps1 2>&1 \\| Select-Object -Last 20$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^pwsh -NoProfile -File \\.\\\\test-minimal-config\\.ps1 2>&1 \\| Select-Object -Last 15$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^pwsh -NoProfile -File \\.\\\\test-minimal-config\\.ps1 2>&1 \\| Select-String -Pattern \"FAIL\\|ERROR\\|Test \\\\d\"$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^pwsh -NoProfile -File \\.\\\\test-minimal-config\\.ps1 2>&1 \\| Select-Object -Last 20$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^pwsh -NoProfile -File \\.\\\\test-minimal-filegroups\\.ps1 2>&1 \\| Select-Object -Last 15$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^pwsh -NoProfile -File \\.\\\\test-user-type-filtering\\.ps1 2>&1 \\| Select-Object -Last 15$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^pwsh -NoProfile -File \\.\\\\test-error-handling\\.ps1 2>&1 \\| Select-Object -Last 15$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^pwsh -NoProfile -File \\.\\\\run-integration-test\\.ps1 2>&1 \\| Select-Object -Last 20$/": {
+            "approve": true,
+            "matchCommandLine": true
         }
     }
 }
