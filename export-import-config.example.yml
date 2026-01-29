@@ -281,6 +281,41 @@ import:
       sizeKB: 1024         # Initial file size in KB (1 MB)
       fileGrowthKB: 65536  # File growth increment in KB (64 MB)
 
+    # ─────────────────────────────────────────────────────────────
+    # ENCRYPTION SECRETS (Dev Mode)
+    # ─────────────────────────────────────────────────────────────
+    # Passwords for encryption objects (Database Master Key, Symmetric Keys, etc.)
+    # Required when importing databases that use encryption features.
+    #
+    # Secret sources (in order of security):
+    #   1. env: Read from environment variable (recommended)
+    #   2. file: Read from file (good for containers/Kubernetes)
+    #   3. value: Inline value (DEVELOPMENT ONLY - never commit to git!)
+    #
+    # WARNING: Inline 'value' secrets are for development only.
+    # Never use inline secrets in production or commit them to version control.
+    encryptionSecrets:
+      # Database Master Key - required if database uses any encryption
+      databaseMasterKey:
+        value: "DevMasterKeyPwd!123"    # DEV ONLY - use env: in production
+
+      # Symmetric key passwords (key name -> secret)
+      symmetricKeys:
+        DataEncryptionKey:
+          value: "DevSymKeyPwd!123"     # DEV ONLY
+        # BackupKey:
+        #   env: SQL_BACKUP_KEY_PWD     # Read from environment variable
+
+      # Certificate private key passwords (for certs with private keys)
+      # certificates:
+      #   DataCert:
+      #     env: SQL_DATACERT_PASSWORD
+
+      # Application role passwords
+      applicationRoles:
+        TestAppRole:
+          value: "TestAppRolePwd!123"   # DEV ONLY
+
   # ─────────────────────────────────────────────────────────────
   # PRODUCTION MODE SETTINGS (Production Deployment)
   # ─────────────────────────────────────────────────────────────
@@ -336,6 +371,47 @@ import:
     fileGroupFileSizeDefaults:
       sizeKB: 1048576       # Initial file size in KB (1 GB)
       fileGrowthKB: 262144  # File growth increment in KB (256 MB)
+
+    # ─────────────────────────────────────────────────────────────
+    # ENCRYPTION SECRETS (Production Mode)
+    # ─────────────────────────────────────────────────────────────
+    # SECURITY: Production secrets should ALWAYS use env: or file: sources.
+    # NEVER use inline 'value' secrets in production configs!
+    #
+    # For Kubernetes/containers, use mounted secrets as files:
+    #   - Mount secret as volume at /secrets/
+    #   - Reference with file: "/secrets/dbmasterkey.txt"
+    #
+    # For traditional deployments, use environment variables:
+    #   - Set SQL_MASTER_KEY_PWD in system/service environment
+    #   - Reference with env: "SQL_MASTER_KEY_PWD"
+    encryptionSecrets:
+      # Database Master Key
+      databaseMasterKey:
+        env: SQL_MASTER_KEY_PWD         # From environment variable
+        # Or for containers:
+        # file: "/secrets/dbmasterkey.txt"
+
+      # Symmetric key passwords
+      symmetricKeys:
+        DataEncryptionKey:
+          env: SQL_DATA_KEY_PWD
+        BackupEncryptionKey:
+          file: "/secrets/backup-key.txt"   # For Kubernetes secrets
+
+      # Certificate private key passwords
+      certificates:
+        DataCert:
+          env: SQL_DATACERT_PASSWORD
+        SigningCert:
+          file: "/secrets/signing-cert-pwd.txt"
+
+      # Application role passwords
+      applicationRoles:
+        App_ReadOnly:
+          env: SQL_APPROLE_READONLY_PWD
+        App_Admin:
+          env: SQL_APPROLE_ADMIN_PWD
 
 # ═══════════════════════════════════════════════════════════════
 # USAGE EXAMPLES

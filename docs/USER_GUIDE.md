@@ -243,6 +243,7 @@ This section provides complete documentation of all configuration options. Setti
 | `fileGroupFileSizeDefaults.sizeKB` | int | 1024 | Initial file size in KB |
 | `fileGroupFileSizeDefaults.fileGrowthKB` | int | 65536 | File growth increment in KB |
 | `externalConnectionStrings` | object | {} | Map external data source names to URLs |
+| `encryptionSecrets` | object | {} | Encryption key passwords (see Section 4.4) |
 
 ### 3.3 Example Configuration Files
 
@@ -367,6 +368,92 @@ import:
 -   64 MB = 65536 KB
 -   1 GB = 1048576 KB
 
+### 4.4 Encryption Secrets
+
+When importing databases that use encryption features (Database Master Key, Symmetric Keys, Certificates with private keys, Application Roles), you must provide the encryption passwords. SQL Server cannot export these passwords, so they must be supplied during import.
+
+#### Secret Sources
+
+Secrets can be provided from three sources (in order of security):
+
+| Source | Syntax | Use Case |
+|--------|--------|----------|
+| Environment Variable | `env: VAR_NAME` | **Recommended** for CI/CD and production |
+| File | `file: /path/to/secret.txt` | **Recommended** for Kubernetes/containers |
+| Inline Value | `value: "password"` | **Development only** - never commit to git! |
+
+#### Configuration Examples
+
+**Developer Mode (with inline secrets for local testing):**
+```yaml
+import:
+  developerMode:
+    encryptionSecrets:
+      # Database Master Key - required if database uses encryption
+      databaseMasterKey:
+        value: "DevMasterKeyPwd!123"  # DEV ONLY!
+
+      # Symmetric key passwords
+      symmetricKeys:
+        DataEncryptionKey:
+          value: "DevSymKeyPwd!123"
+
+      # Application role passwords
+      applicationRoles:
+        TestAppRole:
+          value: "TestAppRolePwd!123"
+```
+
+**Production Mode (with environment variables):**
+```yaml
+import:
+  productionMode:
+    encryptionSecrets:
+      databaseMasterKey:
+        env: SQL_MASTER_KEY_PWD
+
+      symmetricKeys:
+        DataEncryptionKey:
+          env: SQL_DATA_KEY_PWD
+        BackupEncryptionKey:
+          file: "/secrets/backup-key.txt"
+
+      certificates:
+        SigningCert:
+          env: SQL_SIGNING_CERT_PWD
+
+      applicationRoles:
+        App_ReadOnly:
+          env: SQL_APPROLE_READONLY_PWD
+```
+
+**Kubernetes Deployment (with mounted secrets):**
+```yaml
+import:
+  productionMode:
+    encryptionSecrets:
+      databaseMasterKey:
+        file: "/mnt/secrets/db-master-key"
+      symmetricKeys:
+        DataEncryptionKey:
+          file: "/mnt/secrets/data-key"
+```
+
+#### Security Best Practices
+
+1. **Never use inline `value:` in production** - The import script will warn if inline secrets are used in Prod mode.
+2. **Never commit secrets to version control** - Use `.gitignore` or separate secret files.
+3. **Use environment variables for CI/CD** - Set secrets in your pipeline's secure variables.
+4. **Use file-based secrets for Kubernetes** - Mount secrets as volumes.
+5. **Rotate secrets regularly** - Update passwords periodically.
+
+#### How It Works
+
+1. The import script reads `encryptionSecrets` from the config for the current mode (Dev/Prod).
+2. Each secret is resolved from its source (env var, file, or inline value).
+3. When processing security scripts (symmetric keys, application roles, etc.), the script replaces placeholder passwords with the resolved secrets.
+4. If a required secret is missing, a warning is displayed with guidance on how to configure it.
+
 ## 5. Troubleshooting
 
 ### Common Issues
@@ -387,6 +474,14 @@ import:
 -   **"Cannot create file"**: Check disk space and permissions on target path.
 -   **Large file sizes**: Production databases may have large FileGroup sizes. Use config to override.
 -   **Path variables not substituted**: Ensure config has `fileGroupPathMapping` for Prod mode.
+
+### Encryption Issues
+
+-   **"No secret configured for symmetric key"**: Add the key name to `encryptionSecrets.symmetricKeys` in your config.
+-   **"Environment variable not set"**: Set the environment variable before running the import script.
+-   **"Secret file not found"**: Verify the file path is correct and accessible.
+-   **"SECURITY WARNING in Prod mode"**: You're using inline `value:` secrets in production - switch to `env:` or `file:`.
+-   **"Script failed for 'KeyName'"**: SMO cannot export encryption key definitions - this is expected. Configure secrets in the import config instead.
 
 ## 6. Further Reading
 

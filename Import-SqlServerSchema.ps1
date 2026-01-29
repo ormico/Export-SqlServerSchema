@@ -534,6 +534,178 @@ function Get-TargetServerOS {
   }
 }
 
+function Resolve-SecretValue {
+  <#
+    .SYNOPSIS
+        Resolves a secret value from various sources (env, file, or inline value).
+    .DESCRIPTION
+        Supports three secret sources:
+        - env: Read from environment variable
+        - file: Read from file (first line, trailing newline stripped)
+        - value: Inline value (development only)
+    .PARAMETER SecretConfig
+        Hashtable with one of: env, file, or value key
+    .PARAMETER SecretName
+        Name/identifier of the secret for error messages
+    .PARAMETER ImportMode
+        Current import mode (Dev or Prod) - warns about inline secrets in Prod
+    .OUTPUTS
+        The resolved secret string, or $null if resolution fails
+  #>
+  param(
+    [Parameter(Mandatory)]
+    [hashtable]$SecretConfig,
+
+    [Parameter(Mandatory)]
+    [string]$SecretName,
+
+    [Parameter()]
+    [string]$ImportMode = 'Dev'
+  )
+
+  # Resolve from environment variable
+  if ($SecretConfig.ContainsKey('env')) {
+    $envVar = $SecretConfig.env
+    $value = [Environment]::GetEnvironmentVariable($envVar)
+    if ([string]::IsNullOrEmpty($value)) {
+      Write-Warning "[WARNING] Environment variable '$envVar' for secret '$SecretName' is not set or empty"
+      return $null
+    }
+    Write-Verbose "  [SECRET] Resolved '$SecretName' from environment variable: $envVar"
+    return $value
+  }
+
+  # Resolve from file
+  if ($SecretConfig.ContainsKey('file')) {
+    $filePath = $SecretConfig.file
+    if (-not (Test-Path $filePath)) {
+      Write-Warning "[WARNING] Secret file not found for '$SecretName': $filePath"
+      return $null
+    }
+    try {
+      # Read first line only, trim trailing newline
+      $value = (Get-Content -Path $filePath -First 1 -Raw).TrimEnd("`r`n")
+      if ([string]::IsNullOrEmpty($value)) {
+        Write-Warning "[WARNING] Secret file is empty for '$SecretName': $filePath"
+        return $null
+      }
+      Write-Verbose "  [SECRET] Resolved '$SecretName' from file: $filePath"
+      return $value
+    }
+    catch {
+      Write-Warning "[WARNING] Failed to read secret file for '$SecretName': $_"
+      return $null
+    }
+  }
+
+  # Resolve from inline value
+  if ($SecretConfig.ContainsKey('value')) {
+    if ($ImportMode -eq 'Prod') {
+      Write-Warning "[SECURITY WARNING] Using inline secret value for '$SecretName' in PRODUCTION mode!"
+      Write-Warning "  -> Inline secrets should only be used for development/testing"
+      Write-Warning "  -> Use 'env:' or 'file:' for production deployments"
+    }
+    $value = $SecretConfig.value
+    if ([string]::IsNullOrEmpty($value)) {
+      Write-Warning "[WARNING] Inline secret value is empty for '$SecretName'"
+      return $null
+    }
+    Write-Verbose "  [SECRET] Resolved '$SecretName' from inline value"
+    return $value
+  }
+
+  Write-Warning "[WARNING] Invalid secret configuration for '$SecretName' - must have 'env', 'file', or 'value' key"
+  return $null
+}
+
+function Get-EncryptionSecrets {
+  <#
+    .SYNOPSIS
+        Retrieves and resolves all encryption secrets from config.
+    .DESCRIPTION
+        Resolves encryption secrets for Database Master Key, Symmetric Keys,
+        Certificates, and Application Roles from the configuration.
+    .PARAMETER ModeSettings
+        The mode-specific settings (developerMode or productionMode)
+    .PARAMETER ImportMode
+        Current import mode (Dev or Prod)
+    .OUTPUTS
+        Hashtable with resolved secrets, or $null if no secrets configured
+  #>
+  param(
+    [Parameter()]
+    [hashtable]$ModeSettings,
+
+    [Parameter()]
+    [string]$ImportMode = 'Dev'
+  )
+
+  if (-not $ModeSettings -or -not $ModeSettings.ContainsKey('encryptionSecrets')) {
+    return $null
+  }
+
+  $encryptionConfig = $ModeSettings.encryptionSecrets
+  if (-not $encryptionConfig -or $encryptionConfig.Count -eq 0) {
+    return $null
+  }
+
+  $resolvedSecrets = @{
+    databaseMasterKey = $null
+    symmetricKeys     = @{}
+    certificates      = @{}
+    applicationRoles  = @{}
+  }
+
+  # Resolve Database Master Key
+  if ($encryptionConfig.ContainsKey('databaseMasterKey') -and $encryptionConfig.databaseMasterKey) {
+    $resolvedSecrets.databaseMasterKey = Resolve-SecretValue `
+      -SecretConfig $encryptionConfig.databaseMasterKey `
+      -SecretName 'databaseMasterKey' `
+      -ImportMode $ImportMode
+  }
+
+  # Resolve Symmetric Keys
+  if ($encryptionConfig.ContainsKey('symmetricKeys') -and $encryptionConfig.symmetricKeys) {
+    foreach ($keyName in $encryptionConfig.symmetricKeys.Keys) {
+      $secretValue = Resolve-SecretValue `
+        -SecretConfig $encryptionConfig.symmetricKeys[$keyName] `
+        -SecretName "symmetricKey:$keyName" `
+        -ImportMode $ImportMode
+      if ($secretValue) {
+        $resolvedSecrets.symmetricKeys[$keyName] = $secretValue
+      }
+    }
+  }
+
+  # Resolve Certificates
+  if ($encryptionConfig.ContainsKey('certificates') -and $encryptionConfig.certificates) {
+    foreach ($certName in $encryptionConfig.certificates.Keys) {
+      $secretValue = Resolve-SecretValue `
+        -SecretConfig $encryptionConfig.certificates[$certName] `
+        -SecretName "certificate:$certName" `
+        -ImportMode $ImportMode
+      if ($secretValue) {
+        $resolvedSecrets.certificates[$certName] = $secretValue
+      }
+    }
+  }
+
+  # Resolve Application Roles
+  if ($encryptionConfig.ContainsKey('applicationRoles') -and $encryptionConfig.applicationRoles) {
+    foreach ($roleName in $encryptionConfig.applicationRoles.Keys) {
+      $secretValue = Resolve-SecretValue `
+        -SecretConfig $encryptionConfig.applicationRoles[$roleName] `
+        -SecretName "applicationRole:$roleName" `
+        -ImportMode $ImportMode
+      if ($secretValue) {
+        $resolvedSecrets.applicationRoles[$roleName] = $secretValue
+      }
+    }
+  }
+
+  return $resolvedSecrets
+}
+
 function Read-ExportMetadata {
   <#
     .SYNOPSIS
@@ -1277,6 +1449,74 @@ function Invoke-SqlScript {
       # Log transformation if changes were made
       if ($sql -ne $originalSql) {
         Write-Verbose "  [TRANSFORM] Stripped FILESTREAM features: $scriptName"
+      }
+    }
+
+    # Apply encryption secrets for security objects
+    # This injects passwords for Database Master Key, Symmetric Keys, Certificates, and Application Roles
+    if ($SqlCmdVariables.ContainsKey('__EncryptionSecrets__')) {
+      $secrets = $SqlCmdVariables['__EncryptionSecrets__']
+      $originalSql = $sql
+
+      # 1. Application Roles: CREATE APPLICATION ROLE [name] WITH PASSWORD = N'...'
+      #    Only for .role.sql files to avoid false positives
+      if ($scriptName -match '\.role\.sql$' -and $sql -match 'CREATE\s+APPLICATION\s+ROLE') {
+        # Extract role name from CREATE APPLICATION ROLE [name]
+        if ($sql -match 'CREATE\s+APPLICATION\s+ROLE\s+\[([^\]]+)\]') {
+          $roleName = $matches[1]
+          if ($secrets.applicationRoles -and $secrets.applicationRoles.ContainsKey($roleName)) {
+            $secretPwd = $secrets.applicationRoles[$roleName]
+            # Escape single quotes in password for T-SQL string literal
+            $escapedPwd = $secretPwd -replace "'", "''"
+            # Replace PASSWORD = N'...' with new password
+            $sql = $sql -replace "(CREATE\s+APPLICATION\s+ROLE\s+\[${roleName}\]\s+WITH\s+PASSWORD\s*=\s*N?)'[^']*'", "`$1'$escapedPwd'"
+            Write-Verbose "  [TRANSFORM] Applied secret for application role: $roleName"
+          }
+          else {
+            Write-Warning "[WARNING] No secret configured for application role: $roleName"
+            Write-Warning "  Add to config: encryptionSecrets.applicationRoles.$roleName"
+          }
+        }
+      }
+
+      # 2. Symmetric Keys: CREATE SYMMETRIC KEY [name] ... ENCRYPTION BY PASSWORD = N'...'
+      if ($sql -match 'CREATE\s+SYMMETRIC\s+KEY') {
+        if ($sql -match 'CREATE\s+SYMMETRIC\s+KEY\s+\[([^\]]+)\]') {
+          $keyName = $matches[1]
+          if ($secrets.symmetricKeys -and $secrets.symmetricKeys.ContainsKey($keyName)) {
+            $secretPwd = $secrets.symmetricKeys[$keyName]
+            $escapedPwd = $secretPwd -replace "'", "''"
+            # Replace ENCRYPTION BY PASSWORD = N'...' pattern
+            $sql = $sql -replace "(ENCRYPTION\s+BY\s+PASSWORD\s*=\s*N?)'[^']*'", "`$1'$escapedPwd'"
+            Write-Verbose "  [TRANSFORM] Applied secret for symmetric key: $keyName"
+          }
+          else {
+            Write-Warning "[WARNING] No secret configured for symmetric key: $keyName"
+            Write-Warning "  Add to config: encryptionSecrets.symmetricKeys.$keyName"
+          }
+        }
+      }
+
+      # 3. Certificates with private key password: ENCRYPTION BY PASSWORD = N'...'
+      #    Only for certificate scripts (001_Certificates.sql or similar)
+      if ($sql -match 'CREATE\s+CERTIFICATE' -and $sql -match 'ENCRYPTION\s+BY\s+PASSWORD') {
+        if ($sql -match 'CREATE\s+CERTIFICATE\s+\[([^\]]+)\]') {
+          $certName = $matches[1]
+          if ($secrets.certificates -and $secrets.certificates.ContainsKey($certName)) {
+            $secretPwd = $secrets.certificates[$certName]
+            $escapedPwd = $secretPwd -replace "'", "''"
+            $sql = $sql -replace "(ENCRYPTION\s+BY\s+PASSWORD\s*=\s*N?)'[^']*'", "`$1'$escapedPwd'"
+            Write-Verbose "  [TRANSFORM] Applied secret for certificate: $certName"
+          }
+          else {
+            Write-Warning "[WARNING] No secret configured for certificate private key: $certName"
+            Write-Warning "  Add to config: encryptionSecrets.certificates.$certName"
+          }
+        }
+      }
+
+      if ($sql -ne $originalSql) {
+        Write-Verbose "  [TRANSFORM] Applied encryption secrets: $scriptName"
       }
     }
 
@@ -3197,6 +3437,27 @@ try {
     $sqlCmdVars['__StripFilestream__'] = $true
     Write-Output "[INFO] FILESTREAM stripping: enabled - FILESTREAM features will be removed (Linux/container compatibility)"
     Write-Output "       FILESTREAM_ON clauses will be removed, VARBINARY(MAX) FILESTREAM -> VARBINARY(MAX)"
+  }
+
+  # Resolve encryption secrets from config (for Database Master Key, Symmetric Keys, etc.)
+  # This allows importing databases with encryption objects by providing passwords from secure sources
+  $modeSettingsForSecrets = if ($ImportMode -eq 'Dev') {
+    if ($config -and $config.import -and $config.import.developerMode) { $config.import.developerMode } else { @{} }
+  }
+  else {
+    if ($config -and $config.import -and $config.import.productionMode) { $config.import.productionMode } else { @{} }
+  }
+  $encryptionSecrets = Get-EncryptionSecrets -ModeSettings $modeSettingsForSecrets -ImportMode $ImportMode
+  if ($encryptionSecrets) {
+    $sqlCmdVars['__EncryptionSecrets__'] = $encryptionSecrets
+    $secretsInfo = @()
+    if ($encryptionSecrets.databaseMasterKey) { $secretsInfo += "DMK" }
+    if ($encryptionSecrets.symmetricKeys.Count -gt 0) { $secretsInfo += "$($encryptionSecrets.symmetricKeys.Count) symmetric key(s)" }
+    if ($encryptionSecrets.certificates.Count -gt 0) { $secretsInfo += "$($encryptionSecrets.certificates.Count) certificate(s)" }
+    if ($encryptionSecrets.applicationRoles.Count -gt 0) { $secretsInfo += "$($encryptionSecrets.applicationRoles.Count) app role(s)" }
+    if ($secretsInfo.Count -gt 0) {
+      Write-Output "[INFO] Encryption secrets: loaded ($($secretsInfo -join ', '))"
+    }
   }
 
   # Report skipped folders if any

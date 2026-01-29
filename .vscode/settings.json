@@ -149,6 +149,10 @@
         "/^pwsh -NoProfile -File \\.\\\\run-integration-test\\.ps1 2>&1 \\| Select-Object -Last 100$/": {
             "approve": true,
             "matchCommandLine": true
+        },
+        "/^pwsh -NoProfile -File \\.\\\\test-exclude-feature\\.ps1 2>&1$/": {
+            "approve": true,
+            "matchCommandLine": true
         }
     }
 }

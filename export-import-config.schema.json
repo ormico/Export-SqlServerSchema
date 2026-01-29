@@ -491,9 +491,104 @@
               "AzureBackup": "https://prodbackup.blob.core.windows.net/backup"
             }
           ]
+        },
+        "encryptionSecrets": {
+          "$ref": "#/definitions/encryptionSecretsConfig",
+          "description": "Encryption key secrets for database master keys, symmetric keys, certificates, and application roles. Required when importing databases with encryption objects."
         }
       },
       "additionalProperties": false
+    },
+    "encryptionSecretsConfig": {
+      "type": "object",
+      "description": "Configuration for encryption key secrets. Secrets can be provided inline (dev only), via environment variables, or from files.",
+      "properties": {
+        "databaseMasterKey": {
+          "$ref": "#/definitions/secretValue",
+          "description": "Password for creating/opening the Database Master Key (DMK). Required if database uses encryption features."
+        },
+        "symmetricKeys": {
+          "type": "object",
+          "description": "Map symmetric key names to their encryption passwords",
+          "additionalProperties": {
+            "$ref": "#/definitions/secretValue"
+          },
+          "examples": [
+            {
+              "DataEncryptionKey": { "env": "SQL_DATA_KEY_PASSWORD" },
+              "BackupEncryptionKey": { "file": "/secrets/backup-key.txt" }
+            }
+          ]
+        },
+        "certificates": {
+          "type": "object",
+          "description": "Map certificate names to their private key passwords (for certificates with private keys)",
+          "additionalProperties": {
+            "$ref": "#/definitions/secretValue"
+          },
+          "examples": [
+            {
+              "DataCert": { "env": "SQL_DATACERT_PASSWORD" },
+              "SigningCert": { "file": "/secrets/signing-cert.txt" }
+            }
+          ]
+        },
+        "applicationRoles": {
+          "type": "object",
+          "description": "Map application role names to their passwords",
+          "additionalProperties": {
+            "$ref": "#/definitions/secretValue"
+          },
+          "examples": [
+            {
+              "AppRole_ReadOnly": { "env": "SQL_APPROLE_READONLY_PWD" },
+              "AppRole_Admin": { "env": "SQL_APPROLE_ADMIN_PWD" }
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "secretValue": {
+      "oneOf": [
+        {
+          "type": "object",
+          "description": "Secret from environment variable (recommended for production)",
+          "properties": {
+            "env": {
+              "type": "string",
+              "description": "Name of environment variable containing the secret",
+              "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+            }
+          },
+          "required": ["env"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "description": "Secret from file (recommended for container/Kubernetes deployments)",
+          "properties": {
+            "file": {
+              "type": "string",
+              "description": "Path to file containing the secret (first line is used, trailing newline stripped)"
+            }
+          },
+          "required": ["file"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "description": "Inline secret value (DEVELOPMENT ONLY - never use in production)",
+          "properties": {
+            "value": {
+              "type": "string",
+              "description": "Plain text secret value. WARNING: Only for development/testing. Never commit to version control."
+            }
+          },
+          "required": ["value"],
+          "additionalProperties": false
+        }
+      ]
     }
   }
 }
