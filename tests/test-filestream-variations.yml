@@ -1,0 +1,14 @@
+# Test config variations for stripFilestream parsing
+# Tests: flow style, different boolean values, comments
+$schema: "../export-import-config.schema.json"
+
+connectionTimeout: 30
+commandTimeout: 300
+trustServerCertificate: true
+
+import:
+  defaultMode: Dev
+  createDatabase: true
+  
+  # Using flow style for developerMode
+  developerMode: {fileGroupStrategy: autoRemap, stripFilestream: true, includeConfigurations: false}

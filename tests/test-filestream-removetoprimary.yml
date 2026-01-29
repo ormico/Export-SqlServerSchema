@@ -1,0 +1,16 @@
+# Test config for stripFilestream with removeToPrimary strategy
+$schema: "../export-import-config.schema.json"
+
+connectionTimeout: 30
+commandTimeout: 300
+trustServerCertificate: true
+
+import:
+  defaultMode: Dev
+  createDatabase: true
+  
+  developerMode:
+    fileGroupStrategy: removeToPrimary
+    stripFilestream: true
+    includeConfigurations: false
+    enableSecurityPolicies: false

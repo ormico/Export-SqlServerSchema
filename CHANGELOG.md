@@ -5,6 +5,58 @@ All notable changes to Export-SqlServerSchema will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.7.3] - 2026-01-28
+
+### Added
+
+**Strip FILESTREAM for Linux/Container Targets (Export)**
+- New `export.stripFilestream` config option for Export-SqlServerSchema.ps1
+- Removes FILESTREAM features at export time for Linux/container deployment targets
+- When enabled, transformations applied to exported SQL files:
+  - Removes `FILESTREAM_ON [FileGroupName]` clauses entirely
+  - Converts `VARBINARY(MAX) FILESTREAM` columns to regular `VARBINARY(MAX)`
+  - Removes FILESTREAM FileGroup blocks from FileGroup scripts
+- Example config:
+  ```yaml
+  export:
+    stripFilestream: true
+  ```
+- Display shows `[ENABLED] FILESTREAM stripping` during export when active
+- Complementary to import-time stripping - use one or the other
+
+**Strip FILESTREAM for Linux/Container Targets (Import)**
+- New `-StripFilestream` parameter for Import-SqlServerSchema.ps1
+- New `stripFilestream` config option in developerMode/productionMode settings
+- FILESTREAM is Windows-only (requires NTFS filesystem integration)
+- When enabled, transformations applied during import:
+  - Removes `FILESTREAM_ON [FileGroupName]` clauses entirely
+  - Converts `VARBINARY(MAX) FILESTREAM` columns to regular `VARBINARY(MAX)`
+  - Skips FILESTREAM FileGroup creation
+- Example usage:
+  ```powershell
+  # Command-line
+  ./Import-SqlServerSchema.ps1 -Server localhost -Database MyDb -SourcePath ./export -StripFilestream
+  ```
+  ```yaml
+  # Config file
+  import:
+    developerMode:
+      stripFilestream: true
+  ```
+- Command-line parameter overrides config file setting
+- Default: `false` (FILESTREAM features preserved)
+
+### Fixed
+
+**Export Progress Messages Now Visible**
+- Fixed issue where `Export-DatabaseObjects` progress messages were hidden during export
+- Messages like "Exporting Tables...", "Found X table(s)", and summary counts now display correctly
+- Root cause: `Write-Output` was captured when function return value was assigned to a variable
+- Solution: Use script-scoped metrics (`$script:ExportFunctionMetrics`) and convert to `Write-Host` for user-facing output
+- Colorized output: SUCCESS (green), WARNING (yellow), INFO (gray), errors (red)
+
+---
+
 ## [1.7.2] - 2026-01-28
 
 ### Added

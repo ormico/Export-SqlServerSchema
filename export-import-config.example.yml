@@ -159,6 +159,17 @@ export:
   # Path to previous export for incremental export - only changed objects re-exported
   # deltaFrom: "./exports/localhost_MyDb_20260125_100000"
 
+  # Strip FILESTREAM features from exported scripts (default: false)
+  # FILESTREAM is Windows-only (requires NTFS filesystem integration)
+  # When enabled, the exported scripts are pre-processed to remove:
+  #   - FILESTREAM_ON clauses from table definitions
+  #   - FILESTREAM keyword from VARBINARY(MAX) column definitions
+  #   - FILESTREAM FileGroup definitions and related ADD FILE batches
+  # Use this when targeting SQL Server on Linux (Docker containers, etc.)
+  # This is an alternative to import-time stripping (import.*.stripFilestream)
+  # Can also use command-line: -StripFilestream
+  # stripFilestream: false
+
 # ═══════════════════════════════════════════════════════════════
 # IMPORT CONFIGURATION
 # ═══════════════════════════════════════════════════════════════
@@ -243,6 +254,20 @@ import:
     # Skip data import by default (can override with -IncludeData)
     includeData: false
 
+    # Strip FILESTREAM features for Linux/container targets (default: false)
+    # FILESTREAM is Windows-only (requires NTFS filesystem integration)
+    # When enabled:
+    #   - FILESTREAM_ON clauses are removed entirely
+    #   - VARBINARY(MAX) FILESTREAM columns become regular VARBINARY(MAX)
+    #   - FILESTREAM FileGroups are skipped
+    # Required when target is SQL Server on Linux (Docker containers, etc.)
+    # Can also use command-line: -StripFilestream
+    stripFilestream: false
+
+    # Convert login-mapped users to contained users (WITHOUT LOGIN)
+    # Useful when importing to a different server without the same logins
+    # convertLoginsToContained: false
+
     # Object types to exclude in developer mode
     excludeObjectTypes: []
       # - PlanGuides                   # Environment-specific query hints
@@ -277,6 +302,15 @@ import:
 
     # Skip data import by default (can override with -IncludeData)
     includeData: false
+
+    # Strip FILESTREAM features (default: false)
+    # Usually false for production - FILESTREAM is typically supported on Windows servers
+    # Set to true only if production target is SQL Server on Linux
+    stripFilestream: false
+
+    # Convert login-mapped users to contained users (default: false)
+    # Usually false for production - logins should exist on production servers
+    # convertLoginsToContained: false
 
     # No object types excluded in production mode
     excludeObjectTypes: []

@@ -148,7 +148,10 @@ param(
   [string[]]$ExcludeObjectTypes,
 
   [Parameter(HelpMessage = 'Exclude specific schemas from import. Example: cdc,staging')]
-  [string[]]$ExcludeSchemas
+  [string[]]$ExcludeSchemas,
+
+  [Parameter(HelpMessage = 'Strip FILESTREAM features (removes FILESTREAM_ON clauses, converts FILESTREAM columns to VARBINARY(MAX)). Required for Linux/container targets.')]
+  [switch]$StripFilestream
 )
 
 $ErrorActionPreference = if ($ContinueOnError) { 'Continue' } else { 'Stop' }
@@ -162,6 +165,9 @@ $script:ExcludeObjectTypesFilter = $ExcludeObjectTypes
 
 # Store ExcludeSchemas parameter at script level for use in Test-ScriptExcluded
 $script:ExcludeSchemasFilter = $ExcludeSchemas
+
+# Store StripFilestream parameter at script level for use in transformations
+$script:StripFilestreamEnabled = $StripFilestream.IsPresent
 
 # Error tracking for improved reporting (Bug 3 fix)
 # Stores final failures (not temporary retry failures) for summary display
@@ -1161,6 +1167,116 @@ function Invoke-SqlScript {
           $sql = $sql -replace '(CREATE USER\s*\[[^\]]+\])', '$1 WITHOUT LOGIN'
           Write-Verbose "  [TRANSFORM] Converted implicit Windows user to contained user: $scriptName"
         }
+      }
+    }
+
+    # Strip FILESTREAM features for Linux/container targets
+    # FILESTREAM is Windows-only (requires NTFS integration)
+    if ($SqlCmdVariables.ContainsKey('__StripFilestream__')) {
+      $originalSql = $sql
+
+      # 1. Remove FILESTREAM_ON clause entirely (can't remap to PRIMARY on Linux - no FILESTREAM support)
+      #    Pattern: FILESTREAM_ON [FileGroupName] or FILESTREAM_ON "DEFAULT"
+      $sql = $sql -replace '\s*FILESTREAM_ON\s*(\[[^\]]+\]|"DEFAULT")', ''
+
+      # 2. Remove FILESTREAM keyword from column definitions
+      #    VARBINARY(MAX) FILESTREAM -> VARBINARY(MAX)
+      #    [varbinary](max) FILESTREAM -> [varbinary](max)
+      #    Handle with optional brackets and whitespace, preserve rest of column definition
+      $sql = $sql -replace '(\[?VARBINARY\]?\s*\(\s*MAX\s*\))\s+FILESTREAM\b', '$1'
+
+      # 3. For FileGroup scripts, remove entire FILESTREAM FileGroup blocks
+      #    FileGroup scripts have multiple GO-separated blocks; we need to filter out FILESTREAM blocks
+      #    Two-pass approach: first collect FILESTREAM filegroup names, then filter batches referencing them
+      if ($scriptName -match '(?i)filegroup' -and $sql -match 'CONTAINS\s+FILESTREAM') {
+        # Split by GO statements
+        $goPattern = '(?m)^\s*GO\s*$'
+        $batches = [regex]::Split($sql, $goPattern)
+
+        # Pass 1: Collect FILESTREAM filegroup names
+        $filestreamFileGroups = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+
+        foreach ($batch in $batches) {
+          $trimmedBatch = $batch.Trim()
+          if ([string]::IsNullOrWhiteSpace($trimmedBatch)) { continue }
+
+          # Match: ADD FILEGROUP [Name] CONTAINS FILESTREAM
+          if ($trimmedBatch -match 'CONTAINS\s+FILESTREAM') {
+            if ($trimmedBatch -match 'ADD\s+FILEGROUP\s+\[([^\]]+)\]') {
+              [void]$filestreamFileGroups.Add($matches[1])
+              Write-Verbose "  [TRANSFORM] Found FILESTREAM FileGroup: $($matches[1])"
+            }
+          }
+          elseif ($trimmedBatch -match '--\s*Type:\s*FileStreamDataFileGroup') {
+            # Extract from comment like "-- FileGroup: FG_FILESTREAM"
+            if ($trimmedBatch -match '--\s*FileGroup:\s*(\S+)') {
+              [void]$filestreamFileGroups.Add($matches[1])
+              Write-Verbose "  [TRANSFORM] Found FILESTREAM FileGroup (from comment): $($matches[1])"
+            }
+          }
+        }
+
+        # Pass 2: Filter out FILESTREAM-related batches
+        $filteredBatches = @()
+        $skippedCount = 0
+
+        foreach ($batch in $batches) {
+          $trimmedBatch = $batch.Trim()
+          if ([string]::IsNullOrWhiteSpace($trimmedBatch)) { continue }
+
+          $skipBatch = $false
+
+          # Skip batches that create FILESTREAM FileGroups
+          if ($trimmedBatch -match '--\s*Type:\s*FileStreamDataFileGroup' -or
+              $trimmedBatch -match 'CONTAINS\s+FILESTREAM') {
+            $skipBatch = $true
+          }
+
+          # Skip batches that ADD FILE to a FILESTREAM FileGroup
+          if (-not $skipBatch -and $trimmedBatch -match 'TO\s+FILEGROUP\s+\[([^\]]+)\]') {
+            $targetFG = $matches[1]
+            if ($filestreamFileGroups.Contains($targetFG)) {
+              $skipBatch = $true
+              Write-Verbose "  [TRANSFORM] Skipping ADD FILE to FILESTREAM FileGroup [$targetFG]"
+            }
+          }
+
+          # Skip batches that MODIFY FILEGROUP for a FILESTREAM FileGroup
+          if (-not $skipBatch -and $trimmedBatch -match 'MODIFY\s+FILEGROUP\s+\[([^\]]+)\]') {
+            $targetFG = $matches[1]
+            if ($filestreamFileGroups.Contains($targetFG)) {
+              $skipBatch = $true
+              Write-Verbose "  [TRANSFORM] Skipping MODIFY FILEGROUP for FILESTREAM FileGroup [$targetFG]"
+            }
+          }
+
+          if ($skipBatch) {
+            $skippedCount++
+            Write-Verbose "  [TRANSFORM] Skipping FILESTREAM FileGroup block in: $scriptName"
+          }
+          else {
+            $filteredBatches += $trimmedBatch
+          }
+        }
+
+        if ($skippedCount -gt 0) {
+          Write-Verbose "  [TRANSFORM] Filtered out $skippedCount FILESTREAM block(s) from: $scriptName"
+        }
+
+        # Rejoin non-FILESTREAM batches
+        if ($filteredBatches.Count -gt 0) {
+          $sql = ($filteredBatches -join "`nGO`n") + "`nGO"
+        }
+        else {
+          # All batches were FILESTREAM - skip entire script
+          Write-Verbose "  [TRANSFORM] Skipping entire FILESTREAM FileGroup script (no regular FileGroups): $scriptName"
+          return $true
+        }
+      }
+
+      # Log transformation if changes were made
+      if ($sql -ne $originalSql) {
+        Write-Verbose "  [TRANSFORM] Stripped FILESTREAM features: $scriptName"
       }
     }
 
@@ -2301,6 +2417,15 @@ function Show-ImportConfiguration {
     Write-Host "[DISABLED] Row-Level Security Policies (dev convenience)" -ForegroundColor Yellow
   }
 
+  # Check stripFilestream from config or command-line parameter
+  $displayStripFilestream = $script:StripFilestreamEnabled
+  if (-not $displayStripFilestream -and $modeSettings.ContainsKey('stripFilestream') -and $modeSettings.stripFilestream -eq $true) {
+    $displayStripFilestream = $true
+  }
+  if ($displayStripFilestream) {
+    Write-Host "[ENABLED] Strip FILESTREAM (Linux/container compatibility)" -ForegroundColor Magenta
+  }
+
   Write-Host ""
   Write-Host "═══════════════════════════════════════════════════════════════" -ForegroundColor Cyan
   Write-Host "Starting import..." -ForegroundColor Cyan
@@ -3051,6 +3176,27 @@ try {
       $sqlCmdVars['__ConvertLoginsToContained__'] = $true
       Write-Output "[INFO] Login conversion: enabled - FOR LOGIN users will be converted to WITHOUT LOGIN (contained)"
     }
+  }
+
+  # Check for stripFilestream setting (command-line parameter takes priority over config)
+  # FILESTREAM is Windows-only feature - stripping allows imports to Linux/container targets
+  $stripFilestreamEnabled = $script:StripFilestreamEnabled
+  if (-not $stripFilestreamEnabled) {
+    # Check config file for mode-specific setting
+    $modeSettings = if ($ImportMode -eq 'Dev') {
+      if ($config -and $config.import -and $config.import.developerMode) { $config.import.developerMode } else { @{} }
+    }
+    else {
+      if ($config -and $config.import -and $config.import.productionMode) { $config.import.productionMode } else { @{} }
+    }
+    if ($modeSettings.ContainsKey('stripFilestream') -and $modeSettings.stripFilestream -eq $true) {
+      $stripFilestreamEnabled = $true
+    }
+  }
+  if ($stripFilestreamEnabled) {
+    $sqlCmdVars['__StripFilestream__'] = $true
+    Write-Output "[INFO] FILESTREAM stripping: enabled - FILESTREAM features will be removed (Linux/container compatibility)"
+    Write-Output "       FILESTREAM_ON clauses will be removed, VARBINARY(MAX) FILESTREAM -> VARBINARY(MAX)"
   }
 
   # Report skipped folders if any

@@ -3136,6 +3136,9 @@ function Invoke-ParallelExport {
 $script:LogFile = $null  # Will be set after output directory is created
 $script:VerboseOutput = $PSBoundParameters.ContainsKey('Verbose')  # Default is quiet; -Verbose shows per-object progress
 
+# Strip FILESTREAM feature - removes FILESTREAM from exported scripts for Linux/container targets
+$script:StripFilestreamEnabled = $false
+
 # Parallel export settings
 $script:ParallelEnabled = $false
 $script:ParallelMaxWorkers = 5
@@ -4758,6 +4761,167 @@ function Get-SqlServerVersion {
   }
 }
 
+function Apply-FilestreamStripping {
+  <#
+    .SYNOPSIS
+        Post-processes exported SQL files to remove FILESTREAM features.
+    .DESCRIPTION
+        Applies the same transformations as Import-SqlServerSchema.ps1 -StripFilestream
+        but at export time. This allows creating FILESTREAM-free scripts for
+        Linux/container deployments directly from export.
+    .PARAMETER OutputDir
+        The export output directory containing SQL files.
+    .OUTPUTS
+        Returns count of files modified.
+    #>
+  param(
+    [Parameter(Mandatory)]
+    [string]$OutputDir
+  )
+
+  if (-not $script:StripFilestreamEnabled) {
+    return 0
+  }
+
+  Write-Host ''
+  Write-Host 'Applying FILESTREAM stripping to exported scripts...' -ForegroundColor Yellow
+
+  $modifiedCount = 0
+  $skippedFileGroups = 0
+
+  # Process all SQL files in the output directory
+  $sqlFiles = Get-ChildItem -Path $OutputDir -Filter '*.sql' -Recurse
+
+  foreach ($file in $sqlFiles) {
+    $content = Get-Content -Path $file.FullName -Raw
+    $originalContent = $content
+    $modified = $false
+
+    # Special handling for FileGroups - remove FILESTREAM FileGroup blocks AND related file batches
+    if ($file.Directory.Name -eq '00_FileGroups' -and $content -match 'CONTAINS\s+FILESTREAM') {
+      # Split by GO statements
+      $goPattern = '(?m)^\s*GO\s*$'
+      $batches = [regex]::Split($content, $goPattern)
+
+      # Two-pass approach:
+      # Pass 1: Collect FILESTREAM filegroup names
+      $filestreamFileGroups = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+
+      foreach ($batch in $batches) {
+        $trimmedBatch = $batch.Trim()
+        if ([string]::IsNullOrWhiteSpace($trimmedBatch)) { continue }
+
+        # Match: ADD FILEGROUP [Name] CONTAINS FILESTREAM
+        # or: -- Type: FileStreamDataFileGroup followed by filegroup name
+        if ($trimmedBatch -match 'CONTAINS\s+FILESTREAM') {
+          # Extract filegroup name from ADD FILEGROUP [Name] pattern
+          if ($trimmedBatch -match 'ADD\s+FILEGROUP\s+\[([^\]]+)\]') {
+            [void]$filestreamFileGroups.Add($matches[1])
+            Write-Verbose "  [STRIP] Found FILESTREAM FileGroup: $($matches[1])"
+          }
+        }
+        elseif ($trimmedBatch -match '--\s*Type:\s*FileStreamDataFileGroup') {
+          # Extract from comment like "-- FileGroup: FG_FILESTREAM"
+          if ($trimmedBatch -match '--\s*FileGroup:\s*(\S+)') {
+            [void]$filestreamFileGroups.Add($matches[1])
+            Write-Verbose "  [STRIP] Found FILESTREAM FileGroup (from comment): $($matches[1])"
+          }
+        }
+      }
+
+      # Pass 2: Filter out FILESTREAM-related batches
+      $filteredBatches = @()
+
+      foreach ($batch in $batches) {
+        $trimmedBatch = $batch.Trim()
+        if ([string]::IsNullOrWhiteSpace($trimmedBatch)) { continue }
+
+        $skipBatch = $false
+
+        # Skip batches that create FILESTREAM FileGroups
+        if ($trimmedBatch -match '--\s*Type:\s*FileStreamDataFileGroup' -or
+            $trimmedBatch -match 'CONTAINS\s+FILESTREAM') {
+          $skipBatch = $true
+          $skippedFileGroups++
+          Write-Verbose "  [STRIP] Removed FILESTREAM FileGroup creation block"
+        }
+
+        # Skip batches that ADD FILE to a FILESTREAM FileGroup
+        # Pattern: TO FILEGROUP [<name>]
+        if (-not $skipBatch -and $trimmedBatch -match 'TO\s+FILEGROUP\s+\[([^\]]+)\]') {
+          $targetFG = $matches[1]
+          if ($filestreamFileGroups.Contains($targetFG)) {
+            $skipBatch = $true
+            $skippedFileGroups++
+            Write-Verbose "  [STRIP] Removed ADD FILE to FILESTREAM FileGroup [$targetFG]"
+          }
+        }
+
+        # Skip batches that MODIFY FILEGROUP for a FILESTREAM FileGroup
+        # Pattern: MODIFY FILEGROUP [<name>]
+        if (-not $skipBatch -and $trimmedBatch -match 'MODIFY\s+FILEGROUP\s+\[([^\]]+)\]') {
+          $targetFG = $matches[1]
+          if ($filestreamFileGroups.Contains($targetFG)) {
+            $skipBatch = $true
+            $skippedFileGroups++
+            Write-Verbose "  [STRIP] Removed MODIFY FILEGROUP for FILESTREAM FileGroup [$targetFG]"
+          }
+        }
+
+        if (-not $skipBatch) {
+          $filteredBatches += $trimmedBatch
+        }
+      }
+
+      if ($filteredBatches.Count -gt 0) {
+        $content = ($filteredBatches -join "`nGO`n") + "`nGO"
+        $modified = $true
+      }
+      else {
+        # All blocks were FILESTREAM-related - delete the file entirely
+        Remove-Item -Path $file.FullName -Force
+        Write-Verbose "  [STRIP] Deleted FILESTREAM-only file: $($file.Name)"
+        $modifiedCount++
+        continue
+      }
+    }
+
+    # 1. Remove FILESTREAM_ON clause entirely
+    #    Pattern: FILESTREAM_ON [FileGroupName] or FILESTREAM_ON "DEFAULT"
+    if ($content -match 'FILESTREAM_ON') {
+      $content = $content -replace '\s*FILESTREAM_ON\s*(\[[^\]]+\]|"DEFAULT")', ''
+      $modified = $true
+    }
+
+    # 2. Remove FILESTREAM keyword from column definitions
+    #    VARBINARY(MAX) FILESTREAM -> VARBINARY(MAX)
+    #    [varbinary](max) FILESTREAM -> [varbinary](max)
+    if ($content -match 'FILESTREAM\b') {
+      $content = $content -replace '(\[?VARBINARY\]?\s*\(\s*MAX\s*\))\s+FILESTREAM\b', '$1'
+      $modified = $true
+    }
+
+    # Write back if modified
+    if ($modified -and $content -ne $originalContent) {
+      $content | Set-Content -Path $file.FullName -Encoding UTF8 -NoNewline
+      $modifiedCount++
+      Write-Verbose "  [STRIP] Modified: $($file.Name)"
+    }
+  }
+
+  if ($modifiedCount -gt 0 -or $skippedFileGroups -gt 0) {
+    Write-Host "  [SUCCESS] Stripped FILESTREAM from $modifiedCount file(s)" -ForegroundColor Green
+    if ($skippedFileGroups -gt 0) {
+      Write-Host "  [INFO] Removed $skippedFileGroups FILESTREAM FileGroup block(s)" -ForegroundColor Gray
+    }
+  }
+  else {
+    Write-Host "  [INFO] No FILESTREAM features found to strip" -ForegroundColor Gray
+  }
+
+  return $modifiedCount
+}
+
 function Import-YamlConfig {
   <#
     .SYNOPSIS
@@ -4902,6 +5066,11 @@ function Show-ExportConfiguration {
   }
   else {
     Write-Host "[DISABLED] Data export" -ForegroundColor Gray
+  }
+
+  # Show stripFilestream if enabled
+  if ($script:StripFilestreamEnabled) {
+    Write-Host "[ENABLED] FILESTREAM stripping (Linux/container target)" -ForegroundColor Yellow
   }
 
   Write-Host ""
@@ -5459,8 +5628,9 @@ function Export-DatabaseObjects {
   <#
     .SYNOPSIS
         Exports all database objects in dependency order.
-    .OUTPUTS
-        Returns a hashtable with TotalObjects, SuccessCount, and FailCount for metrics.
+    .DESCRIPTION
+        Metrics are stored in $script:ExportFunctionMetrics instead of being returned,
+        to allow Write-Host progress messages to display during execution.
     #>
   param(
     $Database,  # Don't type-constrain SMO objects
@@ -5469,18 +5639,18 @@ function Export-DatabaseObjects {
     $TargetVersion  # Don't type-constrain SMO enums
   )
 
-  # Initialize metrics tracking for this function
-  $functionMetrics = @{
+  # Initialize metrics tracking in script scope (allows progress messages to display)
+  $script:ExportFunctionMetrics = @{
     TotalObjects    = 0
     SuccessCount    = 0
     FailCount       = 0
     CategoryTimings = [ordered]@{}
   }
 
-  Write-Output ''
-  Write-Output '═══════════════════════════════════════════════'
-  Write-Output 'EXPORTING DATABASE OBJECTS'
-  Write-Output '═══════════════════════════════════════════════'
+  Write-Host ''
+  Write-Host '═══════════════════════════════════════════════' -ForegroundColor Cyan
+  Write-Host 'EXPORTING DATABASE OBJECTS' -ForegroundColor Cyan
+  Write-Host '═══════════════════════════════════════════════' -ForegroundColor Cyan
 
   #region Parallel Export Branch
   # If parallel mode is enabled, use the parallel export workflow instead of sequential
@@ -5494,12 +5664,12 @@ function Export-DatabaseObjects {
         -OutputDir $OutputDir `
         -TargetVersion $TargetVersion
 
-      # Convert parallel summary to metrics format
-      $functionMetrics.TotalObjects = $parallelSummary.TotalItems
-      $functionMetrics.SuccessCount = $parallelSummary.SuccessCount
-      $functionMetrics.FailCount = $parallelSummary.ErrorCount
+      # Store parallel summary in script-scoped metrics
+      $script:ExportFunctionMetrics.TotalObjects = $parallelSummary.TotalItems
+      $script:ExportFunctionMetrics.SuccessCount = $parallelSummary.SuccessCount
+      $script:ExportFunctionMetrics.FailCount = $parallelSummary.ErrorCount
 
-      return $functionMetrics
+      return  # Metrics stored in $script:ExportFunctionMetrics
     }
     catch {
       Write-Host "[ERROR] Parallel export failed: $_" -ForegroundColor Red
@@ -5511,42 +5681,42 @@ function Export-DatabaseObjects {
 
   # Non-parallelizable objects: FileGroups, DatabaseScopedConfigurations, DatabaseScopedCredentials
   # These use StringBuilder for SQLCMD variable support and require special handling
-  Write-Output ''
-  Write-Output 'Exporting non-parallelizable objects...'
+  Write-Host ''
+  Write-Host 'Exporting non-parallelizable objects...' -ForegroundColor White
   Write-ProgressHeader 'FileGroups'
   Write-ProgressHeader 'DatabaseConfiguration'
   $nonParallelResults = Export-NonParallelizableObjects -Database $Database -OutputDir $OutputDir
   if ($nonParallelResults.FileGroups -gt 0) {
-    Write-Output "  [SUCCESS] Exported $($nonParallelResults.FileGroups) filegroup(s)"
-    Write-Output "  [WARNING] FileGroups contain environment-specific file paths - manual adjustment required"
+    Write-Host "  [SUCCESS] Exported $($nonParallelResults.FileGroups) filegroup(s)" -ForegroundColor Green
+    Write-Host "  [WARNING] FileGroups contain environment-specific file paths - manual adjustment required" -ForegroundColor Yellow
   }
   else {
-    Write-Output "  [INFO] No user-defined filegroups found"
+    Write-Host "  [INFO] No user-defined filegroups found" -ForegroundColor Gray
   }
   if ($nonParallelResults.DatabaseScopedConfigurations -gt 0) {
-    Write-Output "  [SUCCESS] Exported $($nonParallelResults.DatabaseScopedConfigurations) database scoped configuration(s)"
-    Write-Output "  [INFO] Configurations are hardware-specific - review before applying"
+    Write-Host "  [SUCCESS] Exported $($nonParallelResults.DatabaseScopedConfigurations) database scoped configuration(s)" -ForegroundColor Green
+    Write-Host "  [INFO] Configurations are hardware-specific - review before applying" -ForegroundColor Gray
   }
   if ($nonParallelResults.DatabaseScopedCredentials -gt 0) {
-    Write-Output "  [SUCCESS] Documented $($nonParallelResults.DatabaseScopedCredentials) database scoped credential(s)"
-    Write-Output "  [WARNING] Credentials exported as documentation only - secrets must be provided manually"
+    Write-Host "  [SUCCESS] Documented $($nonParallelResults.DatabaseScopedCredentials) database scoped credential(s)" -ForegroundColor Green
+    Write-Host "  [WARNING] Credentials exported as documentation only - secrets must be provided manually" -ForegroundColor Yellow
   }
 
   #region Sequential Export via Work Items (Hybrid Approach)
   # Build work items using same infrastructure as parallel mode
   # This ensures identical scripting logic regardless of export mode
-  Write-Output ''
-  Write-Output 'Building work items for export...'
+  Write-Host ''
+  Write-Host 'Building work items for export...' -ForegroundColor White
   $allWorkItems = @(Build-ParallelWorkQueue -Database $Database -OutputDir $OutputDir)
 
   # Filter out TableData items - they are handled separately by Export-TableData
   $workItems = @($allWorkItems | Where-Object { $_.ObjectType -ne 'TableData' })
 
   if ($workItems.Count -eq 0) {
-    Write-Output '  [INFO] No objects to export (all may be excluded by configuration)'
+    Write-Host '  [INFO] No objects to export (all may be excluded by configuration)' -ForegroundColor Gray
   }
   else {
-    Write-Output "  [INFO] Generated $($workItems.Count) work items for export"
+    Write-Host "  [INFO] Generated $($workItems.Count) work items for export" -ForegroundColor Gray
 
     # Define object type display order for consistent output
     $objectTypeOrder = @(
@@ -5615,9 +5785,9 @@ function Export-DatabaseObjects {
         default { $objectType }
       }
 
-      Write-Output ''
-      Write-Output "Exporting $displayName..."
-      Write-Output "  Found $($items.Count) work item(s) to export"
+      Write-Host ''
+      Write-Host "Exporting $displayName..." -ForegroundColor White
+      Write-Host "  Found $($items.Count) work item(s) to export" -ForegroundColor Gray
       Write-ProgressHeader $objectType
 
       $successCount = 0
@@ -5669,22 +5839,22 @@ function Export-DatabaseObjects {
           if ($result.Success) {
             Write-ObjectProgress -ObjectName $objName -Current $currentItem -Total $items.Count -Success
             $successCount++
-            $functionMetrics.SuccessCount++
+            $script:ExportFunctionMetrics.SuccessCount++
           }
           else {
             Write-ObjectProgress -ObjectName $objName -Current $currentItem -Total $items.Count -Failed
             Write-Host "  [ERROR] $($result.Error)" -ForegroundColor Red
             $failCount++
-            $functionMetrics.FailCount++
+            $script:ExportFunctionMetrics.FailCount++
           }
-          $functionMetrics.TotalObjects++
+          $script:ExportFunctionMetrics.TotalObjects++
         }
         catch {
           Write-ObjectProgress -ObjectName $objName -Current $currentItem -Total $items.Count -Failed
           Write-ExportError -ObjectType $objectType -ObjectName $objName -ErrorRecord $_ -FilePath $workItem.OutputPath
           $failCount++
-          $functionMetrics.TotalObjects++
-          $functionMetrics.FailCount++
+          $script:ExportFunctionMetrics.TotalObjects++
+          $script:ExportFunctionMetrics.FailCount++
         }
       }
       $script:CurrentProgressLabel = $null
@@ -5694,18 +5864,17 @@ function Export-DatabaseObjects {
       if ($failCount -gt 0) {
         $summaryMsg += " ($failCount failed)"
       }
-      Write-Output $summaryMsg
+      Write-Host $summaryMsg -ForegroundColor $(if ($failCount -gt 0) { 'Yellow' } else { 'Green' })
 
       # Special notes for certain object types
       if ($objectType -eq 'SecurityPolicy') {
-        Write-Output "  [INFO] Row-Level Security policies require predicate functions to exist first"
+        Write-Host "  [INFO] Row-Level Security policies require predicate functions to exist first" -ForegroundColor Gray
       }
     }
   }
   #endregion Sequential Export via Work Items
 
-  # Return metrics summary
-  return $functionMetrics
+  # Metrics stored in $script:ExportFunctionMetrics - no return needed
 }
 
 function Export-TableData {
@@ -6063,6 +6232,12 @@ try {
       if ($config.targetSqlVersion -and -not $PSBoundParameters.ContainsKey('TargetSqlVersion')) {
         $TargetSqlVersion = $config.targetSqlVersion
         Write-Verbose "[INFO] Target SQL version set from config file: $TargetSqlVersion"
+      }
+
+      # Enable stripFilestream from config file
+      if ($config.export.stripFilestream) {
+        $script:StripFilestreamEnabled = $true
+        Write-Host "[INFO] FILESTREAM stripping enabled from config file" -ForegroundColor Yellow
       }
     }
     else {
@@ -6445,15 +6620,15 @@ For more details, see: https://go.microsoft.com/fwlink/?linkid=2226722
 
   # Export schema objects with timing
   $schemaTimer = Start-MetricsTimer -Category 'SchemaExport'
-  Write-Output "═══════════════════════════════════════════════════════════════"
-  $schemaResult = Export-DatabaseObjects -Database $smDatabase -OutputDir $exportDir -Scripter $scripter -TargetVersion $sqlVersion
+  Write-Host "═══════════════════════════════════════════════════════════════" -ForegroundColor Cyan
+  Export-DatabaseObjects -Database $smDatabase -OutputDir $exportDir -Scripter $scripter -TargetVersion $sqlVersion
   if ($schemaTimer) {
     $schemaTimer.Stop()
     $script:Metrics.Categories['SchemaExport'] = @{
       DurationMs     = $schemaTimer.ElapsedMilliseconds
-      ObjectCount    = if ($schemaResult) { $schemaResult.TotalObjects } else { 0 }
-      SuccessCount   = if ($schemaResult) { $schemaResult.SuccessCount } else { 0 }
-      FailCount      = if ($schemaResult) { $schemaResult.FailCount } else { 0 }
+      ObjectCount    = if ($script:ExportFunctionMetrics) { $script:ExportFunctionMetrics.TotalObjects } else { 0 }
+      SuccessCount   = if ($script:ExportFunctionMetrics) { $script:ExportFunctionMetrics.SuccessCount } else { 0 }
+      FailCount      = if ($script:ExportFunctionMetrics) { $script:ExportFunctionMetrics.FailCount } else { 0 }
       AvgMsPerObject = 0
     }
   }
@@ -6474,10 +6649,8 @@ For more details, see: https://go.microsoft.com/fwlink/?linkid=2226722
     }
   }
 
-  # Save export metadata (required for delta exports)
-  Save-ExportMetadata -OutputDir $exportDir
-
   # Copy unchanged files from previous export if delta mode is active
+  # This must happen BEFORE stripping so copied files also get stripped
   if ($script:DeltaExportEnabled -and $script:DeltaChangeResults -and $script:DeltaChangeResults.ToCopy.Count -gt 0) {
     Write-Output ''
     Write-Output 'Copying unchanged objects from previous export...'
@@ -6492,6 +6665,16 @@ For more details, see: https://go.microsoft.com/fwlink/?linkid=2226722
     Write-Log "Delta export copied $($copyResult.CopiedCount) unchanged files" -Severity INFO
   }
 
+  # Apply FILESTREAM stripping if enabled (post-process ALL SQL files including copied ones)
+  # This runs after delta copy to ensure both newly exported AND copied files are stripped
+  if ($script:StripFilestreamEnabled) {
+    Apply-FilestreamStripping -OutputDir $exportDir | Out-Null
+  }
+
+  # Save export metadata AFTER stripping so it reflects the final state
+  # (required for delta exports - describes what's actually in the output)
+  Save-ExportMetadata -OutputDir $exportDir
+
   # Create deployment manifest
   New-DeploymentManifest -OutputDir $exportDir -DatabaseName $Database -ServerName $Server
 
@@ -6503,8 +6686,8 @@ For more details, see: https://go.microsoft.com/fwlink/?linkid=2226722
 
   # Check for export failures and exit with error if any occurred
   $totalFailures = 0
-  if ($schemaResult -and $schemaResult.FailCount -gt 0) {
-    $totalFailures += $schemaResult.FailCount
+  if ($script:ExportFunctionMetrics -and $script:ExportFunctionMetrics.FailCount -gt 0) {
+    $totalFailures += $script:ExportFunctionMetrics.FailCount
   }
   if ($dataResult -and $dataResult.FailCount -gt 0) {
     $totalFailures += $dataResult.FailCount
