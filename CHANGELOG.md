@@ -5,6 +5,29 @@ All notable changes to Export-SqlServerSchema will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.7.4] - 2026-01-29
+
+### Added
+
+**Encryption Secrets Discovery**
+- Export now detects encryption objects and stores them in `_export_metadata.json` (version 1.1)
+- Captured objects: Database Master Key, symmetric keys, asymmetric keys, certificates, application roles
+- New `-ShowRequiredSecrets` switch for Import-SqlServerSchema.ps1
+- Displays all encryption objects required for import with a ready-to-use YAML configuration template
+- Falls back to scanning SQL files for older exports without metadata
+- Example usage:
+  ```powershell
+  ./Import-SqlServerSchema.ps1 -Server localhost -Database MyDb `
+      -SourcePath ".\exports\MyDb_20260129" -ShowRequiredSecrets
+  ```
+- Enhanced error messages now include YAML config snippets when encryption secrets are missing
+
+### Changed
+
+- Export metadata version bumped from "1.0" to "1.1" to include encryption object detection
+
+---
+
 ## [1.7.3] - 2026-01-28
 
 ### Added

@@ -110,8 +110,9 @@ Every export generates `_export_metadata.json` containing:
 - Complete object inventory with file paths
 - FileGroup details with original sizes (for import reference)
 - Grouping mode used
+- Encryption objects detected (version 1.1+): DMK, symmetric keys, certificates, asymmetric keys, application roles
 
-This metadata enables delta exports and provides an audit trail.
+This metadata enables delta exports, provides an audit trail, and helps discover required encryption secrets before import.
 
 ## 2. Importing Databases
 
@@ -453,6 +454,54 @@ import:
 2. Each secret is resolved from its source (env var, file, or inline value).
 3. When processing security scripts (symmetric keys, application roles, etc.), the script replaces placeholder passwords with the resolved secrets.
 4. If a required secret is missing, a warning is displayed with guidance on how to configure it.
+
+#### Discovering Required Secrets
+
+To find out what encryption secrets an export requires **before importing**, use the `-ShowRequiredSecrets` switch:
+
+```powershell
+# Scan export and show required secrets with suggested configuration
+./Import-SqlServerSchema.ps1 -Server localhost -Database MyDb `
+    -SourcePath ".\exports\MyDb_20260129" -ShowRequiredSecrets
+```
+
+This will:
+1. Read encryption metadata from `_export_metadata.json` (or scan SQL files if not available)
+2. Display all encryption objects found (DMK, symmetric keys, certificates, app roles)
+3. Generate a ready-to-use YAML configuration template
+
+Example output:
+```
+======================================================================
+  ENCRYPTION SECRETS REQUIRED FOR IMPORT
+======================================================================
+
+Encryption Objects Found:
+  [*] Database Master Key
+  [*] Symmetric Keys (1):
+      - DataEncryptionKey
+  [*] Application Roles (2):
+      - ReportingAppRole
+      - DataEntryRole
+
+----------------------------------------------------------------------
+  SUGGESTED YAML CONFIGURATION
+----------------------------------------------------------------------
+
+    encryptionSecrets:
+      databaseMasterKey:
+        env: SQL_DMK_PASSWORD
+      symmetricKeys:
+        DataEncryptionKey:
+          env: SQL_SYMKEY_DATAENCRYPTIONKEY
+      applicationRoles:
+        ReportingAppRole:
+          env: SQL_APPROLE_REPORTINGAPPROLE
+        DataEntryRole:
+          env: SQL_APPROLE_DATAENTRYROLE
+```
+
+> **Note**: The export script automatically detects encryption objects and stores them in `_export_metadata.json` (version 1.1+). For older exports without metadata, the import script falls back to scanning SQL files.
 
 ## 5. Troubleshooting
 
