@@ -3136,6 +3136,9 @@ function Invoke-ParallelExport {
 $script:LogFile = $null  # Will be set after output directory is created
 $script:VerboseOutput = $PSBoundParameters.ContainsKey('Verbose')  # Default is quiet; -Verbose shows per-object progress
 
+# Strip FILESTREAM feature - removes FILESTREAM from exported scripts for Linux/container targets
+$script:StripFilestreamEnabled = $false
+
 # Parallel export settings
 $script:ParallelEnabled = $false
 $script:ParallelMaxWorkers = 5
@@ -4758,6 +4761,115 @@ function Get-SqlServerVersion {
   }
 }
 
+function Apply-FilestreamStripping {
+  <#
+    .SYNOPSIS
+        Post-processes exported SQL files to remove FILESTREAM features.
+    .DESCRIPTION
+        Applies the same transformations as Import-SqlServerSchema.ps1 -StripFilestream
+        but at export time. This allows creating FILESTREAM-free scripts for
+        Linux/container deployments directly from export.
+    .PARAMETER OutputDir
+        The export output directory containing SQL files.
+    .OUTPUTS
+        Returns count of files modified.
+    #>
+  param(
+    [Parameter(Mandatory)]
+    [string]$OutputDir
+  )
+
+  if (-not $script:StripFilestreamEnabled) {
+    return 0
+  }
+
+  Write-Host ''
+  Write-Host 'Applying FILESTREAM stripping to exported scripts...' -ForegroundColor Yellow
+
+  $modifiedCount = 0
+  $skippedFileGroups = 0
+
+  # Process all SQL files in the output directory
+  $sqlFiles = Get-ChildItem -Path $OutputDir -Filter '*.sql' -Recurse
+
+  foreach ($file in $sqlFiles) {
+    $content = Get-Content -Path $file.FullName -Raw
+    $originalContent = $content
+    $modified = $false
+
+    # Special handling for FileGroups - remove FILESTREAM FileGroup blocks entirely
+    if ($file.Directory.Name -eq '00_FileGroups' -and $content -match 'CONTAINS\s+FILESTREAM') {
+      # Split by GO statements and filter out FILESTREAM blocks
+      $goPattern = '(?m)^\s*GO\s*$'
+      $batches = [regex]::Split($content, $goPattern)
+      $filteredBatches = @()
+
+      foreach ($batch in $batches) {
+        $trimmedBatch = $batch.Trim()
+        if ([string]::IsNullOrWhiteSpace($trimmedBatch)) {
+          continue
+        }
+
+        # Skip batches that create FILESTREAM FileGroups
+        if ($trimmedBatch -match '--\s*Type:\s*FileStreamDataFileGroup' -or
+            $trimmedBatch -match 'CONTAINS\s+FILESTREAM') {
+          $skippedFileGroups++
+          Write-Verbose "  [STRIP] Removed FILESTREAM FileGroup block from: $($file.Name)"
+          continue
+        }
+
+        $filteredBatches += $trimmedBatch
+      }
+
+      if ($filteredBatches.Count -gt 0) {
+        $content = ($filteredBatches -join "`nGO`n") + "`nGO"
+        $modified = $true
+      }
+      else {
+        # All blocks were FILESTREAM - delete the file entirely
+        Remove-Item -Path $file.FullName -Force
+        Write-Verbose "  [STRIP] Deleted FILESTREAM-only file: $($file.Name)"
+        $modifiedCount++
+        continue
+      }
+    }
+
+    # 1. Remove FILESTREAM_ON clause entirely
+    #    Pattern: FILESTREAM_ON [FileGroupName] or FILESTREAM_ON "DEFAULT"
+    if ($content -match 'FILESTREAM_ON') {
+      $content = $content -replace '\s*FILESTREAM_ON\s*(\[[^\]]+\]|"DEFAULT")', ''
+      $modified = $true
+    }
+
+    # 2. Remove FILESTREAM keyword from column definitions
+    #    VARBINARY(MAX) FILESTREAM -> VARBINARY(MAX)
+    #    [varbinary](max) FILESTREAM -> [varbinary](max)
+    if ($content -match 'FILESTREAM\b') {
+      $content = $content -replace '(\[?VARBINARY\]?\s*\(\s*MAX\s*\))\s+FILESTREAM\b', '$1'
+      $modified = $true
+    }
+
+    # Write back if modified
+    if ($modified -and $content -ne $originalContent) {
+      $content | Set-Content -Path $file.FullName -Encoding UTF8 -NoNewline
+      $modifiedCount++
+      Write-Verbose "  [STRIP] Modified: $($file.Name)"
+    }
+  }
+
+  if ($modifiedCount -gt 0 -or $skippedFileGroups -gt 0) {
+    Write-Host "  [SUCCESS] Stripped FILESTREAM from $modifiedCount file(s)" -ForegroundColor Green
+    if ($skippedFileGroups -gt 0) {
+      Write-Host "  [INFO] Removed $skippedFileGroups FILESTREAM FileGroup block(s)" -ForegroundColor Gray
+    }
+  }
+  else {
+    Write-Host "  [INFO] No FILESTREAM features found to strip" -ForegroundColor Gray
+  }
+
+  return $modifiedCount
+}
+
 function Import-YamlConfig {
   <#
     .SYNOPSIS
@@ -4902,6 +5014,11 @@ function Show-ExportConfiguration {
   }
   else {
     Write-Host "[DISABLED] Data export" -ForegroundColor Gray
+  }
+
+  # Show stripFilestream if enabled
+  if ($script:StripFilestreamEnabled) {
+    Write-Host "[ENABLED] FILESTREAM stripping (Linux/container target)" -ForegroundColor Yellow
   }
 
   Write-Host ""
@@ -6064,6 +6181,12 @@ try {
         $TargetSqlVersion = $config.targetSqlVersion
         Write-Verbose "[INFO] Target SQL version set from config file: $TargetSqlVersion"
       }
+
+      # Enable stripFilestream from config file
+      if ($config.export.stripFilestream) {
+        $script:StripFilestreamEnabled = $true
+        Write-Host "[INFO] FILESTREAM stripping enabled from config file" -ForegroundColor Yellow
+      }
     }
     else {
       Write-Warning "Config file not found: $ConfigFile"
@@ -6476,6 +6599,11 @@ For more details, see: https://go.microsoft.com/fwlink/?linkid=2226722
 
   # Save export metadata (required for delta exports)
   Save-ExportMetadata -OutputDir $exportDir
+
+  # Apply FILESTREAM stripping if enabled (post-process all exported SQL files)
+  if ($script:StripFilestreamEnabled) {
+    Apply-FilestreamStripping -OutputDir $exportDir | Out-Null
+  }
 
   # Copy unchanged files from previous export if delta mode is active
   if ($script:DeltaExportEnabled -and $script:DeltaChangeResults -and $script:DeltaChangeResults.ToCopy.Count -gt 0) {

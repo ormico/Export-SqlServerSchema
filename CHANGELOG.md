@@ -9,7 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-**Strip FILESTREAM for Linux/Container Targets**
+**Strip FILESTREAM for Linux/Container Targets (Export)**
+- New `export.stripFilestream` config option for Export-SqlServerSchema.ps1
+- Removes FILESTREAM features at export time for Linux/container deployment targets
+- When enabled, transformations applied to exported SQL files:
+  - Removes `FILESTREAM_ON [FileGroupName]` clauses entirely
+  - Converts `VARBINARY(MAX) FILESTREAM` columns to regular `VARBINARY(MAX)`
+  - Removes FILESTREAM FileGroup blocks from FileGroup scripts
+- Example config:
+  ```yaml
+  export:
+    stripFilestream: true
+  ```
+- Display shows `[ENABLED] FILESTREAM stripping` during export when active
+- Complementary to import-time stripping - use one or the other
+
+**Strip FILESTREAM for Linux/Container Targets (Import)**
 - New `-StripFilestream` parameter for Import-SqlServerSchema.ps1
 - New `stripFilestream` config option in developerMode/productionMode settings
 - FILESTREAM is Windows-only (requires NTFS filesystem integration)
