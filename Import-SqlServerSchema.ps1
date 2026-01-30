@@ -814,7 +814,7 @@ function Get-RequiredEncryptionSecrets {
       }
     }
     # Check if symmetric key references Database Master Key (implies DMK is required)
-    if (-not $encryptionObjects.hasDatabaseMasterKey -and $content -match '(ENCRYPTION|DECRYPTION)\s+BY\s+MASTER\s+KEY') {
+    if (-not $encryptionObjects.hasDatabaseMasterKey -and $content -match '(?i)ENCRYPTION\s+BY\s+MASTER\s+KEY') {
       $encryptionObjects.hasDatabaseMasterKey = $true
       Write-Verbose "  [ENCRYPTION] DMK inferred from symmetric key referencing MASTER KEY"
     }
