@@ -5,18 +5,25 @@ All notable changes to Export-SqlServerSchema will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.8.0] - 2026-01-30
+## [1.7.6] - 2026-01-30
 
 ### Added
 
 **Always Encrypted Support (Column Master Keys & Column Encryption Keys)**
 - Export now scripts `ColumnMasterKeys` and `ColumnEncryptionKeys` to `01_Security/` folder
 - CMK exported to `004_ColumnMasterKeys.sql`, CEK to `005_ColumnEncryptionKeys.sql`
+- Existing security file numbers adjusted: Roles→`006`, ApplicationRoles→`007`, Users→`008`
 - New object types `ColumnMasterKeys` and `ColumnEncryptionKeys` added to `-IncludeObjectTypes` and `-ExcludeObjectTypes` parameters
 - Encryption metadata detection includes CMK/CEK counts in `_export_metadata.json`
 - Import fallback scanner detects CMK/CEK in SQL files for older exports
 - `-ShowRequiredSecrets` now displays Always Encrypted keys with info that no secrets are needed
 - **Note**: Unlike traditional encryption (DMK, symmetric keys), Always Encrypted keys don't require secrets during import because the actual keys are stored externally (Azure Key Vault, Windows Certificate Store, HSM)
+
+**Fallback Scanning for Old Exports**
+- Comprehensive SQL file scanning now reads ALL `.sql` files in `01_Security/` folder
+- Detects encryption objects regardless of filename (supports non-standard naming)
+- Scans table scripts in `07_Tables/` for `ENCRYPTED WITH` clauses to infer CEK usage
+- New automated test suite: `tests/test-encryption-fallback-scan.ps1` with 9 test cases
 
 ### Fixed
 
@@ -27,6 +34,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Detects `ENCRYPTION BY MASTER KEY` in symmetric key files
   - Detects certificates with `WITH PRIVATE KEY` but no `ENCRYPTION BY PASSWORD` (DMK-encrypted)
 - Prevents false negatives when importing old exports that require Database Master Key
+
+**Code Documentation**
+- Added comments explaining why CMK/CEK don't filter by `IsSystemObject` (property doesn't exist on these SMO types)
+- Updated `Get-EncryptionObjectsMetadata` function documentation to describe two categories:
+  - PASSWORD-REQUIRING: DMK, symmetric keys, asymmetric keys, certificates, app roles
+  - ALWAYS ENCRYPTED: CMK/CEK (no secrets needed, keys stored externally)
 
 ---
 
