@@ -845,8 +845,8 @@ function Get-RequiredEncryptionSecrets {
     # Certificates with private keys protected by DMK (no ENCRYPTION BY PASSWORD clause)
     # If the cert has a private key but no explicit password, it's encrypted by DMK
     if (-not $encryptionObjects.hasDatabaseMasterKey -and
-        $content -match 'WITH\s+PRIVATE\s+KEY' -and
-        $content -notmatch 'ENCRYPTION\s+BY\s+PASSWORD') {
+        $content -match '(?i)WITH\s+PRIVATE\s+KEY(?!\s*\(\s*FILE\s*=)' -and
+        $content -notmatch '(?i)ENCRYPTION\s+BY\s+PASSWORD') {
       $encryptionObjects.hasDatabaseMasterKey = $true
       Write-Verbose "  [ENCRYPTION] DMK inferred from certificate with DMK-encrypted private key"
     }
