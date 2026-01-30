@@ -790,6 +790,8 @@ function Get-RequiredEncryptionSecrets {
   }
 
   # Scan for Database Master Key
+  # Note: DMK cannot be scripted via SMO (password is secret), so we won't find a dedicated file.
+  # Instead, we infer DMK requirement by checking if symmetric keys or certificates reference it.
   $dmkFiles = Get-ChildItem -Path $securityDir -Filter '*MasterKey*.sql' -ErrorAction SilentlyContinue
   foreach ($file in $dmkFiles) {
     $content = Get-Content -Path $file.FullName -Raw -ErrorAction SilentlyContinue
@@ -810,6 +812,11 @@ function Get-RequiredEncryptionSecrets {
       if ($keyName -notin $encryptionObjects.symmetricKeys) {
         $encryptionObjects.symmetricKeys += $keyName
       }
+    }
+    # Check if symmetric key references Database Master Key (implies DMK is required)
+    if (-not $encryptionObjects.hasDatabaseMasterKey -and $content -match '(?i)ENCRYPTION\s+BY\s+MASTER\s+KEY') {
+      $encryptionObjects.hasDatabaseMasterKey = $true
+      Write-Verbose "  [ENCRYPTION] DMK inferred from symmetric key referencing MASTER KEY"
     }
   }
 
@@ -834,6 +841,14 @@ function Get-RequiredEncryptionSecrets {
       if ($certName -notin $encryptionObjects.certificates) {
         $encryptionObjects.certificates += $certName
       }
+    }
+    # Certificates with private keys protected by DMK (no ENCRYPTION BY PASSWORD clause)
+    # If the cert has a private key but no explicit password, it's encrypted by DMK
+    if (-not $encryptionObjects.hasDatabaseMasterKey -and
+        $content -match '(?i)WITH\s+PRIVATE\s+KEY(?!\s*\(\s*FILE\s*=)' -and
+        $content -notmatch '(?i)ENCRYPTION\s+BY\s+PASSWORD') {
+      $encryptionObjects.hasDatabaseMasterKey = $true
+      Write-Verbose "  [ENCRYPTION] DMK inferred from certificate with DMK-encrypted private key"
     }
   }
 

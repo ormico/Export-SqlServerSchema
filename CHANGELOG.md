@@ -5,6 +5,20 @@ All notable changes to Export-SqlServerSchema will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.7.5] - 2026-01-30
+
+### Fixed
+
+**Encryption Secrets Fallback Scanner**
+- Fixed `$matches` hashtable piping bug in symmetric key scanner (line 806-807)
+- Now uses `[regex]::Matches()` to properly find all symmetric keys in each file
+- Added DMK inference for old exports without metadata:
+  - Detects `ENCRYPTION BY MASTER KEY` in symmetric key files
+  - Detects certificates with `WITH PRIVATE KEY` but no `ENCRYPTION BY PASSWORD` (DMK-encrypted)
+- Prevents false negatives when importing old exports that require Database Master Key
+
+---
+
 ## [1.7.4] - 2026-01-29
 
 ### Added
