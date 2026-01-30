@@ -752,11 +752,13 @@ function Get-EncryptionSecrets {
 function Get-RequiredEncryptionSecrets {
   <#
     .SYNOPSIS
-        Discovers encryption objects requiring secrets for import.
+        Discovers encryption objects in an export.
     .DESCRIPTION
         Reads encryption object information from export metadata file if available,
         otherwise falls back to scanning SQL files for encryption patterns.
-        Returns a structured list of objects that require passwords during import.
+        Returns all encryption objects found, including:
+        - Password-requiring objects: DMK, symmetric keys, certificates, asymmetric keys, application roles
+        - Always Encrypted keys: Column Master Keys and Column Encryption Keys (no passwords needed)
     .PARAMETER SourcePath
         Path to the export directory.
     .OUTPUTS

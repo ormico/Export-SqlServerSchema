@@ -2299,6 +2299,7 @@ function Build-WorkItems-Security {
   }
 
   # Column Master Keys (Always Encrypted) - must be exported before Column Encryption Keys
+  # Note: CMK SMO objects don't have IsSystemObject property - Always Encrypted keys are always user-created
   if (-not (Test-ObjectTypeExcluded -ObjectType 'ColumnMasterKeys')) {
     try {
       $cmks = @($Database.ColumnMasterKeys | Where-Object { -not (Test-ObjectExcluded -Schema $null -Name $_.Name) })
@@ -2316,6 +2317,7 @@ function Build-WorkItems-Security {
   }
 
   # Column Encryption Keys (Always Encrypted) - depends on Column Master Keys
+  # Note: CEK SMO objects don't have IsSystemObject property - Always Encrypted keys are always user-created
   if (-not (Test-ObjectTypeExcluded -ObjectType 'ColumnEncryptionKeys')) {
     try {
       $ceks = @($Database.ColumnEncryptionKeys | Where-Object { -not (Test-ObjectExcluded -Schema $null -Name $_.Name) })
@@ -2359,7 +2361,7 @@ function Build-WorkItems-Security {
               -ObjectType 'DatabaseRole' `
               -GroupingMode $groupBy `
               -Objects $objects `
-              -OutputPath (Join-Path $baseDir '004_Roles.sql') `
+              -OutputPath (Join-Path $baseDir '006_Roles.sql') `
               -ScriptingOptions @{}
           }
         }
@@ -2390,7 +2392,7 @@ function Build-WorkItems-Security {
               -ObjectType 'ApplicationRole' `
               -GroupingMode $groupBy `
               -Objects $objects `
-              -OutputPath (Join-Path $baseDir '005_ApplicationRoles.sql') `
+              -OutputPath (Join-Path $baseDir '007_ApplicationRoles.sql') `
               -ScriptingOptions @{}
           }
         }
@@ -2433,7 +2435,7 @@ function Build-WorkItems-Security {
               -ObjectType 'User' `
               -GroupingMode $groupBy `
               -Objects $objects `
-              -OutputPath (Join-Path $baseDir '006_Users.sql') `
+              -OutputPath (Join-Path $baseDir '008_Users.sql') `
               -ScriptingOptions @{}
           }
         }
@@ -3527,10 +3529,22 @@ function Get-EncryptionObjectsMetadata {
     .SYNOPSIS
         Detects encryption objects in the database for metadata export.
     .DESCRIPTION
-        Queries the database for encryption objects that will require passwords
-        during import: Database Master Key, Symmetric Keys, Certificates with
-        private keys, Asymmetric Keys with private keys, and Application Roles.
-        This information is stored in export metadata to help configure imports.
+        Queries the database for encryption objects and stores them in export
+        metadata to help configure imports. Two categories are detected:
+
+        PASSWORD-REQUIRING OBJECTS (must be configured before import):
+        - Database Master Key (DMK)
+        - Symmetric Keys
+        - Certificates with private keys
+        - Asymmetric Keys with private keys
+        - Application Roles
+
+        ALWAYS ENCRYPTED OBJECTS (no passwords needed - keys are external):
+        - Column Master Keys (CMK) - store only key store provider and path
+        - Column Encryption Keys (CEK) - store encrypted blob decrypted by CMK
+
+        Always Encrypted keys are included for completeness in metadata tracking
+        even though they don't require password configuration during import.
     .PARAMETER Database
         The SMO Database object to scan.
     .OUTPUTS
