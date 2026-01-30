@@ -777,11 +777,13 @@ function Get-RequiredEncryptionSecrets {
   # Fallback: scan SQL files for encryption patterns
   Write-Verbose "No encryption metadata found, scanning SQL files..."
   $encryptionObjects = [ordered]@{
-    hasDatabaseMasterKey = $false
-    symmetricKeys        = @()
-    certificates         = @()
-    asymmetricKeys       = @()
-    applicationRoles     = @()
+    hasDatabaseMasterKey  = $false
+    symmetricKeys         = @()
+    certificates          = @()
+    asymmetricKeys        = @()
+    columnMasterKeys      = @()
+    columnEncryptionKeys  = @()
+    applicationRoles      = @()
   }
 
   $securityDir = Join-Path $SourcePath '01_Security'
@@ -864,11 +866,39 @@ function Get-RequiredEncryptionSecrets {
     }
   }
 
+  # Scan for Column Master Keys (Always Encrypted)
+  $cmkFiles = Get-ChildItem -Path $securityDir -Filter '*ColumnMasterKey*.sql' -ErrorAction SilentlyContinue
+  foreach ($file in $cmkFiles) {
+    $content = Get-Content -Path $file.FullName -Raw -ErrorAction SilentlyContinue
+    $keyMatches = [regex]::Matches($content, 'CREATE\s+COLUMN\s+MASTER\s+KEY\s+\[?([^\]\s]+)\]?', 'IgnoreCase')
+    foreach ($match in $keyMatches) {
+      $keyName = $match.Groups[1].Value
+      if ($keyName -notin $encryptionObjects.columnMasterKeys) {
+        $encryptionObjects.columnMasterKeys += $keyName
+      }
+    }
+  }
+
+  # Scan for Column Encryption Keys (Always Encrypted)
+  $cekFiles = Get-ChildItem -Path $securityDir -Filter '*ColumnEncryptionKey*.sql' -ErrorAction SilentlyContinue
+  foreach ($file in $cekFiles) {
+    $content = Get-Content -Path $file.FullName -Raw -ErrorAction SilentlyContinue
+    $keyMatches = [regex]::Matches($content, 'CREATE\s+COLUMN\s+ENCRYPTION\s+KEY\s+\[?([^\]\s]+)\]?', 'IgnoreCase')
+    foreach ($match in $keyMatches) {
+      $keyName = $match.Groups[1].Value
+      if ($keyName -notin $encryptionObjects.columnEncryptionKeys) {
+        $encryptionObjects.columnEncryptionKeys += $keyName
+      }
+    }
+  }
+
   # Check if any encryption objects were found
   $hasAny = $encryptionObjects.hasDatabaseMasterKey -or
   $encryptionObjects.symmetricKeys.Count -gt 0 -or
   $encryptionObjects.certificates.Count -gt 0 -or
   $encryptionObjects.asymmetricKeys.Count -gt 0 -or
+  $encryptionObjects.columnMasterKeys.Count -gt 0 -or
+  $encryptionObjects.columnEncryptionKeys.Count -gt 0 -or
   $encryptionObjects.applicationRoles.Count -gt 0
 
   if ($hasAny) {
@@ -939,6 +969,24 @@ function Show-EncryptionSecretsTemplate {
   if ($EncryptionObjects.asymmetricKeys.Count -gt 0) {
     Write-Host "  [*] Asymmetric Keys ($($EncryptionObjects.asymmetricKeys.Count)):" -ForegroundColor Green
     foreach ($key in $EncryptionObjects.asymmetricKeys) {
+      Write-Host "      - $key"
+    }
+  }
+
+  # Column Master Keys (Always Encrypted - no secrets needed)
+  if ($EncryptionObjects.columnMasterKeys.Count -gt 0) {
+    Write-Host "  [i] Column Master Keys ($($EncryptionObjects.columnMasterKeys.Count)):" -ForegroundColor Cyan
+    Write-Host "      (Always Encrypted - keys stored externally, no secrets needed)"
+    foreach ($key in $EncryptionObjects.columnMasterKeys) {
+      Write-Host "      - $key"
+    }
+  }
+
+  # Column Encryption Keys (Always Encrypted - no secrets needed)
+  if ($EncryptionObjects.columnEncryptionKeys.Count -gt 0) {
+    Write-Host "  [i] Column Encryption Keys ($($EncryptionObjects.columnEncryptionKeys.Count)):" -ForegroundColor Cyan
+    Write-Host "      (Always Encrypted - encrypted by CMK, no secrets needed)"
+    foreach ($key in $EncryptionObjects.columnEncryptionKeys) {
       Write-Host "      - $key"
     }
   }

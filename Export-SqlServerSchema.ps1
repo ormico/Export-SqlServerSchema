@@ -114,7 +114,8 @@ param(
     'Functions', 'UserDefinedAggregates', 'StoredProcedures', 'Views', 'Synonyms', 'FullTextCatalogs',
     'FullTextStopLists', 'SearchPropertyLists', 'ExternalDataSources', 'ExternalFileFormats',
     'DatabaseRoles', 'DatabaseUsers', 'WindowsUsers', 'SqlUsers', 'ExternalUsers', 'CertificateMappedUsers',
-    'Certificates', 'AsymmetricKeys', 'SymmetricKeys', 'SecurityPolicies', 'PlanGuides', 'Data')]
+    'Certificates', 'AsymmetricKeys', 'SymmetricKeys', 'ColumnMasterKeys', 'ColumnEncryptionKeys',
+    'SecurityPolicies', 'PlanGuides', 'Data')]
   [string[]]$IncludeObjectTypes,
 
   [Parameter(HelpMessage = 'Exclude specific object types (overrides config file). Example: Data,SecurityPolicies')]
@@ -124,7 +125,8 @@ param(
     'Functions', 'UserDefinedAggregates', 'StoredProcedures', 'Views', 'Synonyms', 'FullTextCatalogs',
     'FullTextStopLists', 'SearchPropertyLists', 'ExternalDataSources', 'ExternalFileFormats',
     'DatabaseRoles', 'DatabaseUsers', 'WindowsUsers', 'SqlUsers', 'ExternalUsers', 'CertificateMappedUsers',
-    'Certificates', 'AsymmetricKeys', 'SymmetricKeys', 'SecurityPolicies', 'PlanGuides', 'Data')]
+    'Certificates', 'AsymmetricKeys', 'SymmetricKeys', 'ColumnMasterKeys', 'ColumnEncryptionKeys',
+    'SecurityPolicies', 'PlanGuides', 'Data')]
   [string[]]$ExcludeObjectTypes,
 
   [Parameter(HelpMessage = 'Enable parallel export processing for improved performance')]
@@ -323,6 +325,8 @@ $script:ParallelWorkerScriptBlock = {
             'AsymmetricKey' { $smoObj = $db.AsymmetricKeys[$objId.Name] }
             'Certificate' { $smoObj = $db.Certificates[$objId.Name] }
             'SymmetricKey' { $smoObj = $db.SymmetricKeys[$objId.Name] }
+            'ColumnMasterKey' { $smoObj = $db.ColumnMasterKeys[$objId.Name] }
+            'ColumnEncryptionKey' { $smoObj = $db.ColumnEncryptionKeys[$objId.Name] }
             'ApplicationRole' { $smoObj = $db.ApplicationRoles[$objId.Name] }
             'DatabaseRole' { $smoObj = $db.Roles[$objId.Name] }
             'User' { $smoObj = $db.Users[$objId.Name] }
@@ -2294,6 +2298,40 @@ function Build-WorkItems-Security {
     catch { Write-Verbose "Could not access SymmetricKeys collection: $_" }
   }
 
+  # Column Master Keys (Always Encrypted) - must be exported before Column Encryption Keys
+  if (-not (Test-ObjectTypeExcluded -ObjectType 'ColumnMasterKeys')) {
+    try {
+      $cmks = @($Database.ColumnMasterKeys | Where-Object { -not (Test-ObjectExcluded -Schema $null -Name $_.Name) })
+      if ($cmks.Count -gt 0) {
+        $objects = @($cmks | ForEach-Object { @{ Schema = $null; Name = $_.Name } })
+        $workItems += New-ExportWorkItem `
+          -ObjectType 'ColumnMasterKey' `
+          -GroupingMode 'all' `
+          -Objects $objects `
+          -OutputPath (Join-Path $baseDir '004_ColumnMasterKeys.sql') `
+          -ScriptingOptions @{}
+      }
+    }
+    catch { Write-Verbose "Could not access ColumnMasterKeys collection: $_" }
+  }
+
+  # Column Encryption Keys (Always Encrypted) - depends on Column Master Keys
+  if (-not (Test-ObjectTypeExcluded -ObjectType 'ColumnEncryptionKeys')) {
+    try {
+      $ceks = @($Database.ColumnEncryptionKeys | Where-Object { -not (Test-ObjectExcluded -Schema $null -Name $_.Name) })
+      if ($ceks.Count -gt 0) {
+        $objects = @($ceks | ForEach-Object { @{ Schema = $null; Name = $_.Name } })
+        $workItems += New-ExportWorkItem `
+          -ObjectType 'ColumnEncryptionKey' `
+          -GroupingMode 'all' `
+          -Objects $objects `
+          -OutputPath (Join-Path $baseDir '005_ColumnEncryptionKeys.sql') `
+          -ScriptingOptions @{}
+      }
+    }
+    catch { Write-Verbose "Could not access ColumnEncryptionKeys collection: $_" }
+  }
+
   # Database Roles - respect grouping mode (default: single to match sequential export)
   if (-not (Test-ObjectTypeExcluded -ObjectType 'DatabaseRoles')) {
     $groupBy = Get-ObjectGroupingMode -ObjectType 'DatabaseRoles'
@@ -3504,11 +3542,13 @@ function Get-EncryptionObjectsMetadata {
   )
 
   $encryptionObjects = [ordered]@{
-    hasDatabaseMasterKey = $false
-    symmetricKeys        = @()
-    certificates         = @()
-    asymmetricKeys       = @()
-    applicationRoles     = @()
+    hasDatabaseMasterKey  = $false
+    symmetricKeys         = @()
+    certificates          = @()
+    asymmetricKeys        = @()
+    columnMasterKeys      = @()
+    columnEncryptionKeys  = @()
+    applicationRoles      = @()
   }
 
   $hasAny = $false
@@ -3565,6 +3605,32 @@ function Get-EncryptionObjectsMetadata {
   }
   catch {
     Write-Verbose "  [ENCRYPTION] Could not enumerate Asymmetric Keys: $_"
+  }
+
+  try {
+    # Check for Column Master Keys (Always Encrypted - no secrets needed, keys are external)
+    $cmks = @($Database.ColumnMasterKeys | ForEach-Object { $_.Name })
+    if ($cmks.Count -gt 0) {
+      $encryptionObjects.columnMasterKeys = $cmks
+      $hasAny = $true
+      Write-Verbose "  [ENCRYPTION] Column Master Keys detected (Always Encrypted): $($cmks -join ', ')"
+    }
+  }
+  catch {
+    Write-Verbose "  [ENCRYPTION] Could not enumerate Column Master Keys: $_"
+  }
+
+  try {
+    # Check for Column Encryption Keys (Always Encrypted - no secrets needed, encrypted by CMK)
+    $ceks = @($Database.ColumnEncryptionKeys | ForEach-Object { $_.Name })
+    if ($ceks.Count -gt 0) {
+      $encryptionObjects.columnEncryptionKeys = $ceks
+      $hasAny = $true
+      Write-Verbose "  [ENCRYPTION] Column Encryption Keys detected (Always Encrypted): $($ceks -join ', ')"
+    }
+  }
+  catch {
+    Write-Verbose "  [ENCRYPTION] Could not enumerate Column Encryption Keys: $_"
   }
 
   try {
