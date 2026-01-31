@@ -3,6 +3,9 @@
 #
 # MINIMAL CONFIG: Every property has a safe default. An empty config file works!
 # You only need to specify properties you want to override.
+#
+# 📚 DETAILED DOCUMENTATION: docs/CONFIG_REFERENCE.md
+#    Complete property reference, types, examples, and troubleshooting
 
 # JSON Schema for validation
 $schema: "./export-import-config.schema.json"

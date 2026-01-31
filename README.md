@@ -779,10 +779,11 @@ The Import script splits SQL files on `GO` batch separators using regex pattern 
 ## Documentation
 
 - **README.md** (this file): Quick start and parameter reference
-- **docs/USER_GUIDE.md**: Detailed usage instructions and configuration guide
-- **docs/SOFTWARE_DESIGN.md**: Internal architecture, folder structure, and design decisions
-- **tests/README.md**: Integration testing with Docker
-- **.github/copilot-instructions.md**: Code style conventions
+- **[docs/USER_GUIDE.md](docs/USER_GUIDE.md)**: Detailed usage instructions, export/import modes, and examples
+- **[docs/CONFIG_REFERENCE.md](docs/CONFIG_REFERENCE.md)**: Comprehensive configuration file reference with all properties, types, and examples
+- **[docs/SOFTWARE_DESIGN.md](docs/SOFTWARE_DESIGN.md)**: Internal architecture, folder structure, and design decisions
+- **[tests/README.md](tests/README.md)**: Integration testing with Docker
+- **[.github/copilot-instructions.md](.github/copilot-instructions.md)**: Code style conventions
 
 See [CHANGELOG.md](CHANGELOG.md) for complete release notes.
 
