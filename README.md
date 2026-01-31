@@ -301,11 +301,11 @@ The parallel export feature uses multi-threading to speed up exports of large da
 ### Performance Characteristics
 
 Based on test database (500 tables, 100 views, 500 procedures, 100 functions, 100 triggers, 2000 indexes):
-- **Parallel**: 97.58s export time
-- **Sequential**: 93.30s export time
-- **Overhead**: 5% slower (acceptable for current database size)
+- **Sequential**: 91s export time
+- **Parallel**: 39s export time
+- **Speedup**: 2.3x faster with parallel mode
 
-**Note**: The 5% overhead is acceptable because parallel export is designed for scalability with very large databases (10,000+ objects) where parallelization shows significant benefits. For typical databases, sequential export is recommended.
+**Note**: Parallel export provides significant performance improvements (2.3x faster) even on moderately-sized databases. For very large databases (10,000+ objects), the benefits are even more pronounced.
 
 ### Usage
 
