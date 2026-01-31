@@ -300,7 +300,7 @@ The parallel export feature uses multi-threading to speed up exports of large da
 
 ### Performance Characteristics
 
-Based on test database (500 tables, 100 views, 500 procedures, 100 functions, 100 triggers, 2000 indexes):
+Based on test database (500 tables, 100 views, 500 procedures, 100 functions, 100 triggers, 2000 indexes, 50K rows):
 - **Sequential**: 91s export time
 - **Parallel**: 39s export time
 - **Speedup**: 2.3x faster with parallel mode
@@ -408,7 +408,7 @@ Control how objects are organized into files using the `groupBy` configuration s
 
 ### Performance Comparison
 
-Test database: 500 tables, 100 views, 500 procedures, 100 functions, 100 triggers, 2000 indexes
+Test database: 500 tables, 100 views, 500 procedures, 100 functions, 100 triggers, 2000 indexes, 50K rows
 
 | Mode | Export | Import | Total | Files |
 |------|--------|--------|-------|-------|
