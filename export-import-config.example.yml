@@ -4,7 +4,7 @@
 # MINIMAL CONFIG: Every property has a safe default. An empty config file works!
 # You only need to specify properties you want to override.
 #
-# 📚 DETAILED DOCUMENTATION: docs/CONFIG_REFERENCE.md
+# DETAILED DOCUMENTATION: docs/CONFIG_REFERENCE.md
 #    Complete property reference, types, examples, and troubleshooting
 
 # JSON Schema for validation
@@ -103,11 +103,17 @@ export:
     # - TableTriggers                  # Table-level triggers
     # - Views                          # Database views
     # - Synonyms                       # Object aliases
-    # - FullTextSearch                 # Full-text catalogs and stop lists
-    # - ExternalData                   # PolyBase data sources and file formats
+    # - FullTextCatalogs               # Full-text catalogs
+    # - FullTextStopLists              # Full-text stop lists
+    # - ExternalDataSources            # PolyBase external data sources
+    # - ExternalFileFormats            # PolyBase external file formats
     # - SearchPropertyLists            # Full-text search properties
     # - PlanGuides                     # Query hint overrides
-    # - Security                       # Keys, certificates, roles, users, audits
+    # - Certificates                   # Database certificates
+    # - AsymmetricKeys                 # Asymmetric keys
+    # - SymmetricKeys                  # Symmetric keys
+    # - ColumnMasterKeys               # Always Encrypted column master keys
+    # - ColumnEncryptionKeys           # Always Encrypted column encryption keys
     # - SecurityPolicies               # Row-Level Security policies
 
   # Specific objects to exclude (supports wildcards)

@@ -1064,7 +1064,8 @@ Valid values for `export.includeObjectTypes` and `export.excludeObjectTypes`:
 | `TableTriggers` | Table-level triggers |
 | `Views` | Database views |
 | `Synonyms` | Object aliases |
-| `FullTextCatalogs` | Full-text catalogs and stop lists |
+| `FullTextCatalogs` | Full-text catalogs |
+| `FullTextStopLists` | Full-text stop lists |
 | `ExternalDataSources` | PolyBase external data sources |
 | `ExternalFileFormats` | PolyBase external file formats |
 | `SearchPropertyLists` | Full-text search properties |
@@ -1075,7 +1076,11 @@ Valid values for `export.includeObjectTypes` and `export.excludeObjectTypes`:
 | `SqlUsers` | SQL Server login-based users |
 | `ExternalUsers` | Azure AD users and groups |
 | `CertificateMappedUsers` | Certificate/asymmetric key mapped users |
-| `SecurityObjects` | Keys, certificates, asymmetric keys, audits |
+| `Certificates` | Database certificates |
+| `AsymmetricKeys` | Asymmetric keys |
+| `SymmetricKeys` | Symmetric keys |
+| `ColumnMasterKeys` | Always Encrypted column master keys |
+| `ColumnEncryptionKeys` | Always Encrypted column encryption keys |
 | `SecurityPolicies` | Row-Level Security policies |
 | `Data` | Table data (INSERT statements) |
 
@@ -1615,7 +1620,7 @@ connectionTimeout: 30
 ### Schema Location
 
 - **Repository**: `export-import-config.schema.json` in repository root
-- **Online**: `https://github.com/ormico/Export-SqlServerSchema/export-import-config.schema.json`
+- **Online**: `https://raw.githubusercontent.com/ormico/Export-SqlServerSchema/main/export-import-config.schema.json`
 
 ### Validation Tools
 
@@ -1680,14 +1685,16 @@ ConvertFrom-Yaml $yaml
 
 **Example of incorrect nesting**:
 ```yaml
-# WRONG - includeData at root level doesn't affect import
-includeData: true
+# WRONG - enableSecurityPolicies is not a root-level property
+enableSecurityPolicies: true
 
-# CORRECT - includeData inside import.developerMode
+# CORRECT - enableSecurityPolicies inside import.developerMode or import.productionMode
 import:
   developerMode:
-    includeData: true
+    enableSecurityPolicies: true
 ```
+
+**Note**: Some properties like `includeData` and `importMode` are valid at both root level (as shortcuts) and nested level. See [Simplified Root-Level Settings](#simplified-root-level-settings).
 
 ### Encryption Secret Not Found
 
