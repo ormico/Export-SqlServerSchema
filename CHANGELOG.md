@@ -41,7 +41,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 **Fallback Scanning for Old Exports**
 - Comprehensive SQL file scanning now reads ALL `.sql` files in `01_Security/` folder
 - Detects encryption objects regardless of filename (supports non-standard naming)
-- Scans table scripts in `09_Tables_PrimaryKey/` and `10_Tables_ForeignKeys/` for `ENCRYPTED WITH` clauses to infer CEK usage
+- Scans table scripts in `07_Tables/` for `ENCRYPTED WITH` clauses to infer CEK usage
 - New automated test suite: `tests/test-encryption-fallback-scan.ps1` with 9 test cases
 
 ### Changed
