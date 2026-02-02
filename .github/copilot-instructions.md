@@ -255,7 +255,11 @@ Currently **not exported** (see MISSING_OBJECTS_ANALYSIS.md). FileGroups are env
 
 ### Always Encrypted Keys
 
-ColumnMasterKeys and ColumnEncryptionKeys are intentionally skipped—they require certificate management outside the database and can't be safely exported as T-SQL scripts.
+ColumnMasterKeys and ColumnEncryptionKeys are now fully supported for export and import. Unlike traditional encryption objects (DMK, symmetric keys, certificates), Always Encrypted keys don't require secrets during import because:
+- **CMK (Column Master Key)**: Only stores metadata (key store provider name + key path). The actual key is in an external store (Azure Key Vault, Windows Certificate Store, HSM).
+- **CEK (Column Encryption Key)**: Stores an encrypted blob that can only be decrypted by the external CMK.
+
+The T-SQL scripts exported by SMO are complete and can be imported directly without any password/secret configuration.
 
 ### Data Export Limitations
 

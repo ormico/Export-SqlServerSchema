@@ -221,6 +221,14 @@
         "/^pwsh -NoProfile -File \\.\\\\run-integration-test\\.ps1 2>&1 \\| Select-Object -Last 20$/": {
             "approve": true,
             "matchCommandLine": true
+        },
+        "/^pwsh -NoProfile -File \\./test-encryption-fallback-scan\\.ps1 2>&1$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^pwsh -NoProfile -File \\./test-encryption-fallback-scan\\.ps1$/": {
+            "approve": true,
+            "matchCommandLine": true
         }
     }
 }
