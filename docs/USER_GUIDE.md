@@ -142,7 +142,20 @@ Designed for full-fidelity deployment. It:
 
 ## 3. Configuration Reference
 
-This section provides complete documentation of all configuration options. Settings can be specified via:
+**For comprehensive configuration documentation**, see the **[Configuration File Reference](CONFIG_REFERENCE.md)**.
+
+This section provides a quick overview of configuration options. For detailed information including:
+- Complete property reference with types, defaults, and ranges
+- Encryption secrets configuration
+- Object types reference
+- Real-world configuration examples for all scenarios
+- Troubleshooting guide
+
+Please refer to **[CONFIG_REFERENCE.md](CONFIG_REFERENCE.md)**.
+
+### Quick Configuration Overview
+
+Settings can be specified via:
 1. **Command-line parameters** (highest priority)
 2. **YAML configuration file** (middle priority)
 3. **Default values** (lowest priority)
@@ -535,6 +548,7 @@ Encryption Objects Found:
 ## 6. Further Reading
 
 -   [README.md](../README.md) - Quick start and parameter reference
+-   [CONFIG_REFERENCE.md](CONFIG_REFERENCE.md) - Comprehensive configuration file documentation
 -   [SOFTWARE_DESIGN.md](SOFTWARE_DESIGN.md) - Internal architecture and design decisions
 -   [DELTA_EXPORT_DESIGN.md](DELTA_EXPORT_DESIGN.md) - Delta export implementation details
 -   [tests/README.md](../tests/README.md) - Integration testing with Docker
