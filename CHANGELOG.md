@@ -5,6 +5,13 @@ All notable changes to Export-SqlServerSchema will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.7.7] - 2026-02-02
+
+### Changed
+**Added CONFIG_REFERENCE.md to Release**
+
+---
+
 ## [1.7.6] - 2026-01-30
 
 ### Added
