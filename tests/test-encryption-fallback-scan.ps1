@@ -68,7 +68,7 @@ function New-TestExport {
 
     $exportDir = Join-Path $TestExportBase $Name
     $securityDir = Join-Path $exportDir "01_Security"
-    $tablesDir = Join-Path $exportDir "07_Tables"
+    $tablesDir = Join-Path $exportDir "09_Tables_PrimaryKey"
 
     # Clean and create directories
     if (Test-Path $exportDir) { Remove-Item $exportDir -Recurse -Force }

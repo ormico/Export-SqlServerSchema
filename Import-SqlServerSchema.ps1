@@ -898,10 +898,18 @@ function Get-RequiredEncryptionSecrets {
   # This detects Always Encrypted usage from old exports that didn't export CMK/CEK separately
   # Column definitions look like: [Column] VARBINARY(xxx) ENCRYPTED WITH (COLUMN_ENCRYPTION_KEY = [KeyName], ...)
   if ($encryptionObjects.columnMasterKeys.Count -eq 0 -and $encryptionObjects.columnEncryptionKeys.Count -eq 0) {
-    $tablesDir = Join-Path $SourcePath '07_Tables'
-    if (Test-Path $tablesDir) {
+    $tableDirs = @(
+      (Join-Path $SourcePath '09_Tables_PrimaryKey'),
+      (Join-Path $SourcePath '10_Tables_ForeignKeys')
+    )
+    $tableFiles = @()
+    foreach ($dir in $tableDirs) {
+      if (Test-Path $dir) {
+        $tableFiles += Get-ChildItem -Path $dir -Filter '*.sql' -Recurse -ErrorAction SilentlyContinue
+      }
+    }
+    if ($tableFiles.Count -gt 0) {
       Write-Verbose "  [ENCRYPTION] Scanning table scripts for ENCRYPTED WITH clauses..."
-      $tableFiles = Get-ChildItem -Path $tablesDir -Filter '*.sql' -Recurse -ErrorAction SilentlyContinue
       foreach ($file in $tableFiles) {
         $content = Get-Content -Path $file.FullName -Raw -ErrorAction SilentlyContinue
         if (-not $content) { continue }
