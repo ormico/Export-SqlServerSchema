@@ -97,11 +97,13 @@ $cred = Get-Credential
 ## Key Features
 
 **Export-SqlServerSchema.ps1**
-- Exports all database objects (21 folder types)
+- Exports all database objects (22 folder types)
 - Individual files per object (easy version control)
 - **Delta export mode** for incremental exports (only changed objects)
 - **Parallel export mode** for faster exports on multi-core systems
-- Export metadata (`_export_metadata.json`) for delta support and auditing
+- Export metadata (`_export_metadata.json`) for delta support, auditing, and encryption secret discovery
+- **Encryption object detection** in metadata for pre-import secret configuration
+- **FILESTREAM stripping** option for Linux/container deployment targets
 - FileGroups with SQLCMD variable parameterization (paths, sizes, growth)
 - Database Scoped Configurations (MAXDOP, optimizer settings)
 - Security Policies (Row-Level Security)
@@ -119,7 +121,7 @@ $cred = Get-Credential
 - **Production Mode**: Full import with FileGroups, MAXDOP, Security Policies
 - **Dependency retry logic** for programmability objects (Functions, Views, Stored Procedures)
   - Automatically resolves cross-type dependencies (Function → View, View → Function, etc.)
-  - Multi-pass execution with configurable retry count (default: 3 attempts)
+  - Multi-pass execution with configurable retry count (default: 10 attempts)
   - Handles complex dependency chains without manual intervention
 - YAML configuration file support (simplified and full formats)
 - Cross-platform FileGroup deployment with target OS detection
@@ -127,6 +129,10 @@ $cred = Get-Credential
 - Automatic foreign key constraint management
 - Comprehensive startup configuration display
 - Detailed completion summaries
+- **Encryption secret discovery** (`-ShowRequiredSecrets`) with ready-to-use YAML config generation
+- **FILESTREAM stripping** for Linux/container targets (`-StripFilestream`)
+- **Schema-based exclusion** (`-ExcludeSchemas`) to skip CDC, staging, or temp schemas
+- **Login-to-contained user conversion** for environments without server-level logins
 - Command-line parameters override config files
 - **Automatic retry logic** for transient failures with exponential backoff
 - **Configurable timeouts** and retry settings via config file or parameters
@@ -151,26 +157,31 @@ DbScripts/
     _DEPLOYMENT_README.md         # Deployment instructions
     _export_metadata.json         # Export metadata (for delta exports)
     00_FileGroups/                # FileGroup definitions with SQLCMD variables
-    01_Schemas/                   # Database schemas
-    02_Types/                     # User-defined types
-    03_Sequences/                 # Sequence objects
-    04_PartitionFunctions/        # Partition functions
-    05_PartitionSchemes/          # Partition schemes
-    06_Tables_PrimaryKey/         # Tables with primary keys
-    07_Tables_ForeignKeys/        # Foreign key constraints
-    08_Indexes/                   # Indexes
-    09_Defaults/                  # Default constraints
-    10_Rules/                     # Rule constraints
-    11_Programmability/           # Functions, procedures, triggers, views
-    12_Synonyms/                  # Synonyms
-    13_FullTextSearch/            # Full-text catalogs
-    14_Security/                  # Keys, certificates, roles
-    15_DatabaseScopedConfigurations/ # MAXDOP, optimizer settings
-    16_ExternalDataSources/       # PolyBase/Elastic Query sources
-    17_ExternalFileFormats/       # External data file formats
-    18_SecurityPolicies/          # Row-Level Security policies
-    19_SearchPropertyLists/       # Custom full-text properties
-    20_PlanGuides/                # Query hint guides
+    01_Security/                  # Keys, certificates, roles, users
+    02_DatabaseConfiguration/     # MAXDOP, optimizer settings
+    03_Schemas/                   # Database schemas
+    04_Sequences/                 # Sequence objects
+    05_PartitionFunctions/        # Partition functions
+    06_PartitionSchemes/          # Partition schemes
+    07_Types/                     # User-defined types
+    08_XmlSchemaCollections/      # XML schema collections
+    09_Tables_PrimaryKey/         # Tables with primary keys
+    10_Tables_ForeignKeys/        # Foreign key constraints
+    11_Indexes/                   # Indexes
+    12_Defaults/                  # Default constraints
+    13_Rules/                     # Rule constraints
+    14_Programmability/           # Functions, procedures, triggers, views
+      01_Assemblies/              #   CLR assemblies
+      02_Functions/               #   User-defined functions
+      03_StoredProcedures/        #   Stored procedures
+      04_Triggers/                #   Database and table triggers
+      05_Views/                   #   Views
+    15_Synonyms/                  # Synonyms
+    16_FullTextSearch/            # Full-text catalogs
+    17_ExternalData/              # External data sources and file formats
+    18_SearchPropertyLists/       # Custom full-text properties
+    19_PlanGuides/                # Query hint guides
+    20_SecurityPolicies/          # Row-Level Security policies
     21_Data/                      # Optional data INSERT scripts
 ```
 
@@ -195,6 +206,7 @@ DbScripts/
 | `-CommandTimeout` | No | Command timeout in seconds (default: 0 = use config/300) |
 | `-MaxRetries` | No | Max retry attempts for transient failures (default: 0 = use config/3) |
 | `-RetryDelaySeconds` | No | Initial retry delay in seconds (default: 0 = use config/2) |
+| `-CollectMetrics` | No | Collect performance metrics for analysis |
 | `-ConfigFile` | No | Path to YAML configuration file |
 
 ### Import-SqlServerSchema.ps1
@@ -209,9 +221,15 @@ DbScripts/
 | `-CreateDatabase` | No | Create database if it doesn't exist |
 | `-IncludeData` | No | Import data from 21_Data folder |
 | `-IncludeObjectTypes` | No | Whitelist: Only import specified types (e.g., Schemas,Tables,Views) |
+| `-ExcludeObjectTypes` | No | Blacklist: Import all except specified types (e.g., WindowsUsers) |
+| `-ExcludeSchemas` | No | Exclude scripts by schema prefix (e.g., cdc,staging) |
 | `-Credential` | No | SQL authentication credentials |
 | `-Force` | No | Skip existing schema check (required for multi-pass imports) |
 | `-ContinueOnError` | No | Continue on script errors |
+| `-ShowSQL` | No | Display SQL scripts during execution |
+| `-StripFilestream` | No | Remove FILESTREAM features for Linux/container targets |
+| `-ShowRequiredSecrets` | No | Show required encryption secrets and exit without importing |
+| `-CollectMetrics` | No | Collect performance metrics for analysis |
 | `-ConnectionTimeout` | No | Connection timeout in seconds (default: 0 = use config/30) |
 | `-CommandTimeout` | No | Command timeout in seconds (default: 0 = use config/300) |
 | `-MaxRetries` | No | Max retry attempts for transient failures (default: 0 = use config/3) |
@@ -280,7 +298,7 @@ For a database with 2,400 objects where only 50 changed:
 - **Full export**: ~90 seconds
 - **Delta export**: ~15 seconds (copy 2,350 unchanged files + export 50 changed)
 
-See [docs/DELTA_EXPORT_DESIGN.md](docs/DELTA_EXPORT_DESIGN.md) for detailed design documentation.
+See the [User Guide](docs/USER_GUIDE.md#15-delta-export-incremental) for detailed usage documentation.
 
 ## Parallel Export
 
@@ -300,12 +318,12 @@ The parallel export feature uses multi-threading to speed up exports of large da
 
 ### Performance Characteristics
 
-Based on test database (500 tables, 100 views, 500 procedures, 100 functions, 100 triggers, 2000 indexes):
-- **Parallel**: 97.58s export time
-- **Sequential**: 93.30s export time
-- **Overhead**: 5% slower (acceptable for current database size)
+Based on test database (500 tables, 100 views, 500 procedures, 100 functions, 100 triggers, 2000 indexes, 50K rows):
+- **Sequential**: 91s export time
+- **Parallel**: 39s export time
+- **Speedup**: 2.3x faster with parallel mode
 
-**Note**: The 5% overhead is acceptable because parallel export is designed for scalability with very large databases (10,000+ objects) where parallelization shows significant benefits. For typical databases, sequential export is recommended.
+**Note**: Parallel export provides significant performance improvements (2.3x faster) even on moderately-sized databases. For very large databases (10,000+ objects), the benefits are even more pronounced.
 
 ### Usage
 
@@ -361,12 +379,13 @@ Every export generates an `_export_metadata.json` file in the export root folder
 - **Enables delta exports**: Records export timestamp and object inventory
 - **Provides audit trail**: Documents what was exported and when
 - **Stores FileGroup details**: Preserves original file sizes/paths for reference
+- **Discovers encryption objects**: Records Database Master Key, symmetric keys, certificates, and application roles for pre-import secret configuration
 
 ### Metadata Contents
 
 ```json
 {
-  "version": "1.0",
+  "version": "1.1",
   "exportStartTimeUtc": "2026-01-26T15:30:00.000Z",
   "exportStartTimeServer": "2026-01-26T10:30:00.000",
   "serverName": "localhost",
@@ -388,11 +407,20 @@ Every export generates an `_export_metadata.json` file in the export root folder
         "growthVariable": "FG_ARCHIVE_GROWTH"
       }]
     }
-  ]
+  ],
+  "encryptionObjects": {
+    "hasDatabaseMasterKey": true,
+    "symmetricKeys": ["DataEncryptionKey"],
+    "certificates": ["SigningCert"],
+    "asymmetricKeys": [],
+    "applicationRoles": ["ReportingAppRole"]
+  }
 }
 ```
 
 The `fileGroups` array preserves original SIZE and FILEGROWTH values, which are replaced with SQLCMD variables in the exported SQL. This allows the Import script to use config-specified values or fall back to the original values from metadata.
+
+The `encryptionObjects` section (metadata version 1.1+) lists all encryption objects detected in the database. Use `-ShowRequiredSecrets` on the Import script to generate a ready-to-use YAML configuration template for these secrets.
 
 ## Export Grouping Modes
 
@@ -408,7 +436,7 @@ Control how objects are organized into files using the `groupBy` configuration s
 
 ### Performance Comparison
 
-Test database: 500 tables, 100 views, 500 procedures, 100 functions, 100 triggers, 2000 indexes
+Test database: 500 tables, 100 views, 500 procedures, 100 functions, 100 triggers, 2000 indexes, 50K rows
 
 | Mode | Export | Import | Total | Files |
 |------|--------|--------|-------|-------|
@@ -792,11 +820,6 @@ View detailed help:
 ```powershell
 Get-Help ./Export-SqlServerSchema.ps1 -Full
 Get-Help ./Import-SqlServerSchema.ps1 -Full
-```
-
-Validate scripts:
-```powershell
-./Validate-Scripts.ps1
 ```
 
 ## License
