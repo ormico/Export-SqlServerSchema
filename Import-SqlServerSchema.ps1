@@ -752,11 +752,18 @@ function Get-EncryptionSecrets {
 function Get-RequiredEncryptionSecrets {
   <#
     .SYNOPSIS
-        Discovers encryption objects requiring secrets for import.
+        Discovers encryption objects in an export.
     .DESCRIPTION
         Reads encryption object information from export metadata file if available,
         otherwise falls back to scanning SQL files for encryption patterns.
-        Returns a structured list of objects that require passwords during import.
+        Returns all encryption objects found, including:
+        - Password-requiring objects: DMK, symmetric keys, certificates, asymmetric keys, application roles
+        - Always Encrypted keys: Column Master Keys and Column Encryption Keys (no passwords needed)
+
+        Fallback scanning includes:
+        1. Content scan of all SQL files in 01_Security folder
+        2. Full regex-based detection of CREATE statements for encryption objects
+        3. Table script scan for ENCRYPTED WITH clauses (detects Always Encrypted from old exports)
     .PARAMETER SourcePath
         Path to the export directory.
     .OUTPUTS
@@ -777,11 +784,14 @@ function Get-RequiredEncryptionSecrets {
   # Fallback: scan SQL files for encryption patterns
   Write-Verbose "No encryption metadata found, scanning SQL files..."
   $encryptionObjects = [ordered]@{
-    hasDatabaseMasterKey = $false
-    symmetricKeys        = @()
-    certificates         = @()
-    asymmetricKeys       = @()
-    applicationRoles     = @()
+    hasDatabaseMasterKey  = $false
+    symmetricKeys         = @()
+    certificates          = @()
+    asymmetricKeys        = @()
+    columnMasterKeys      = @()
+    columnEncryptionKeys  = @()
+    columnMasterKeysInferred = $false
+    applicationRoles      = @()
   }
 
   $securityDir = Join-Path $SourcePath '01_Security'
@@ -789,77 +799,129 @@ function Get-RequiredEncryptionSecrets {
     return $null
   }
 
-  # Scan for Database Master Key
-  # Note: DMK cannot be scripted via SMO (password is secret), so we won't find a dedicated file.
-  # Instead, we infer DMK requirement by checking if symmetric keys or certificates reference it.
-  $dmkFiles = Get-ChildItem -Path $securityDir -Filter '*MasterKey*.sql' -ErrorAction SilentlyContinue
-  foreach ($file in $dmkFiles) {
+  # Scan ALL SQL files in 01_Security for encryption patterns
+  # This comprehensive approach handles any filename convention
+  $allSecurityFiles = Get-ChildItem -Path $securityDir -Filter '*.sql' -ErrorAction SilentlyContinue
+  foreach ($file in $allSecurityFiles) {
     $content = Get-Content -Path $file.FullName -Raw -ErrorAction SilentlyContinue
-    if ($content -match 'CREATE\s+MASTER\s+KEY') {
-      $encryptionObjects.hasDatabaseMasterKey = $true
-      break
-    }
-  }
+    if (-not $content) { continue }
 
-  # Scan for Symmetric Keys
-  $symKeyFiles = Get-ChildItem -Path $securityDir -Filter '*SymmetricKey*.sql' -ErrorAction SilentlyContinue
-  foreach ($file in $symKeyFiles) {
-    $content = Get-Content -Path $file.FullName -Raw -ErrorAction SilentlyContinue
-    # Use Select-String with -AllMatches to find all symmetric keys in each file
-    $keyMatches = [regex]::Matches($content, 'CREATE\s+SYMMETRIC\s+KEY\s+\[?([^\]\s]+)\]?', 'IgnoreCase')
-    foreach ($match in $keyMatches) {
+    # Strip SQL comments to avoid false positives from commented-out code
+    $cleanContent = $content -replace '/\*[\s\S]*?\*/', '' -replace '--[^\r\n]*', ''
+
+    # Check for explicit Database Master Key creation
+    if (-not $encryptionObjects.hasDatabaseMasterKey -and $cleanContent -match '(?i)CREATE\s+MASTER\s+KEY') {
+      $encryptionObjects.hasDatabaseMasterKey = $true
+      Write-Verbose "  [ENCRYPTION] DMK found in $($file.Name)"
+    }
+
+    # Scan for Symmetric Keys
+    $symMatches = [regex]::Matches($cleanContent, 'CREATE\s+SYMMETRIC\s+KEY\s+\[?([^\]\s]+)\]?', 'IgnoreCase')
+    foreach ($match in $symMatches) {
       $keyName = $match.Groups[1].Value
       if ($keyName -notin $encryptionObjects.symmetricKeys) {
         $encryptionObjects.symmetricKeys += $keyName
+        Write-Verbose "  [ENCRYPTION] Symmetric key '$keyName' found in $($file.Name)"
       }
     }
-    # Check if symmetric key references Database Master Key (implies DMK is required)
-    if (-not $encryptionObjects.hasDatabaseMasterKey -and $content -match '(?i)ENCRYPTION\s+BY\s+MASTER\s+KEY') {
+    # Check for DMK dependency (symmetric key encrypted by master key)
+    if (-not $encryptionObjects.hasDatabaseMasterKey -and $cleanContent -match '(?i)ENCRYPTION\s+BY\s+MASTER\s+KEY') {
       $encryptionObjects.hasDatabaseMasterKey = $true
-      Write-Verbose "  [ENCRYPTION] DMK inferred from symmetric key referencing MASTER KEY"
+      Write-Verbose "  [ENCRYPTION] DMK inferred from symmetric key referencing MASTER KEY in $($file.Name)"
     }
-  }
 
-  # Scan for Application Roles
-  $roleFiles = Get-ChildItem -Path $securityDir -Filter '*.approle.sql' -ErrorAction SilentlyContinue
-  foreach ($file in $roleFiles) {
-    $content = Get-Content -Path $file.FullName -Raw -ErrorAction SilentlyContinue
-    if ($content -match 'CREATE\s+APPLICATION\s+ROLE\s+\[?([^\]\s]+)\]?') {
-      $roleName = $Matches[1]
-      if ($roleName -notin $encryptionObjects.applicationRoles) {
-        $encryptionObjects.applicationRoles += $roleName
-      }
-    }
-  }
-
-  # Scan for Certificates
-  $certFiles = Get-ChildItem -Path $securityDir -Filter '*Certificate*.sql' -ErrorAction SilentlyContinue
-  foreach ($file in $certFiles) {
-    $content = Get-Content -Path $file.FullName -Raw -ErrorAction SilentlyContinue
-    if ($content -match 'CREATE\s+CERTIFICATE\s+\[?([^\]\s]+)\]?') {
-      $certName = $Matches[1]
+    # Scan for Certificates
+    $certMatches = [regex]::Matches($cleanContent, 'CREATE\s+CERTIFICATE\s+\[?([^\]\s]+)\]?', 'IgnoreCase')
+    foreach ($match in $certMatches) {
+      $certName = $match.Groups[1].Value
       if ($certName -notin $encryptionObjects.certificates) {
         $encryptionObjects.certificates += $certName
+        Write-Verbose "  [ENCRYPTION] Certificate '$certName' found in $($file.Name)"
       }
     }
-    # Certificates with private keys protected by DMK (no ENCRYPTION BY PASSWORD clause)
-    # If the cert has a private key but no explicit password, it's encrypted by DMK
-    if (-not $encryptionObjects.hasDatabaseMasterKey -and
-        $content -match '(?i)WITH\s+PRIVATE\s+KEY(?!\s*\(\s*FILE\s*=)' -and
-        $content -notmatch '(?i)ENCRYPTION\s+BY\s+PASSWORD') {
-      $encryptionObjects.hasDatabaseMasterKey = $true
-      Write-Verbose "  [ENCRYPTION] DMK inferred from certificate with DMK-encrypted private key"
+    # Check for DMK dependency (cert with private key but no explicit password)
+    # Split into statements and check each individually to handle multi-cert files
+    if (-not $encryptionObjects.hasDatabaseMasterKey) {
+      $statements = $cleanContent -split '(?m)^\s*GO\s*$'
+      foreach ($stmt in $statements) {
+        if ($stmt -match '(?i)WITH\s+PRIVATE\s+KEY(?!\s*\(\s*FILE\s*=)' -and
+            $stmt -notmatch '(?i)(ENCRYPTION|DECRYPTION)\s+BY\s+PASSWORD') {
+          $encryptionObjects.hasDatabaseMasterKey = $true
+          Write-Verbose "  [ENCRYPTION] DMK inferred from certificate with DMK-encrypted private key in $($file.Name)"
+          break
+        }
+      }
+    }
+
+    # Scan for Asymmetric Keys
+    $asymMatches = [regex]::Matches($cleanContent, 'CREATE\s+ASYMMETRIC\s+KEY\s+\[?([^\]\s]+)\]?', 'IgnoreCase')
+    foreach ($match in $asymMatches) {
+      $keyName = $match.Groups[1].Value
+      if ($keyName -notin $encryptionObjects.asymmetricKeys) {
+        $encryptionObjects.asymmetricKeys += $keyName
+        Write-Verbose "  [ENCRYPTION] Asymmetric key '$keyName' found in $($file.Name)"
+      }
+    }
+
+    # Scan for Application Roles
+    $roleMatches = [regex]::Matches($cleanContent, 'CREATE\s+APPLICATION\s+ROLE\s+\[?([^\]\s]+)\]?', 'IgnoreCase')
+    foreach ($match in $roleMatches) {
+      $roleName = $match.Groups[1].Value
+      if ($roleName -notin $encryptionObjects.applicationRoles) {
+        $encryptionObjects.applicationRoles += $roleName
+        Write-Verbose "  [ENCRYPTION] Application role '$roleName' found in $($file.Name)"
+      }
+    }
+
+    # Scan for Column Master Keys (Always Encrypted)
+    $cmkMatches = [regex]::Matches($cleanContent, 'CREATE\s+COLUMN\s+MASTER\s+KEY\s+\[?([^\]\s]+)\]?', 'IgnoreCase')
+    foreach ($match in $cmkMatches) {
+      $keyName = $match.Groups[1].Value
+      if ($keyName -notin $encryptionObjects.columnMasterKeys) {
+        $encryptionObjects.columnMasterKeys += $keyName
+        Write-Verbose "  [ENCRYPTION] CMK '$keyName' found in $($file.Name)"
+      }
+    }
+
+    # Scan for Column Encryption Keys (Always Encrypted)
+    $cekMatches = [regex]::Matches($cleanContent, 'CREATE\s+COLUMN\s+ENCRYPTION\s+KEY\s+\[?([^\]\s]+)\]?', 'IgnoreCase')
+    foreach ($match in $cekMatches) {
+      $keyName = $match.Groups[1].Value
+      if ($keyName -notin $encryptionObjects.columnEncryptionKeys) {
+        $encryptionObjects.columnEncryptionKeys += $keyName
+        Write-Verbose "  [ENCRYPTION] CEK '$keyName' found in $($file.Name)"
+      }
     }
   }
 
-  # Scan for Asymmetric Keys
-  $asymKeyFiles = Get-ChildItem -Path $securityDir -Filter '*AsymmetricKey*.sql' -ErrorAction SilentlyContinue
-  foreach ($file in $asymKeyFiles) {
-    $content = Get-Content -Path $file.FullName -Raw -ErrorAction SilentlyContinue
-    if ($content -match 'CREATE\s+ASYMMETRIC\s+KEY\s+\[?([^\]\s]+)\]?') {
-      $keyName = $Matches[1]
-      if ($keyName -notin $encryptionObjects.asymmetricKeys) {
-        $encryptionObjects.asymmetricKeys += $keyName
+  # Final fallback: Scan table scripts for ENCRYPTED WITH clauses
+  # This detects Always Encrypted usage from old exports that didn't export CMK/CEK separately
+  # Column definitions look like: [Column] VARBINARY(xxx) ENCRYPTED WITH (COLUMN_ENCRYPTION_KEY = [KeyName], ...)
+  if ($encryptionObjects.columnMasterKeys.Count -eq 0 -and $encryptionObjects.columnEncryptionKeys.Count -eq 0) {
+    $tablesDir = Join-Path $SourcePath '07_Tables'
+    if (Test-Path $tablesDir) {
+      Write-Verbose "  [ENCRYPTION] Scanning table scripts for ENCRYPTED WITH clauses..."
+      $tableFiles = Get-ChildItem -Path $tablesDir -Filter '*.sql' -Recurse -ErrorAction SilentlyContinue
+      foreach ($file in $tableFiles) {
+        $content = Get-Content -Path $file.FullName -Raw -ErrorAction SilentlyContinue
+        if (-not $content) { continue }
+
+        # Look for ENCRYPTED WITH (COLUMN_ENCRYPTION_KEY = [KeyName], ENCRYPTION_TYPE = xxx, ALGORITHM = xxx)
+        $encryptedColMatches = [regex]::Matches($content, 'ENCRYPTED\s+WITH\s*\(\s*COLUMN_ENCRYPTION_KEY\s*=\s*\[?([^\],\s]+)\]?', 'IgnoreCase')
+        foreach ($match in $encryptedColMatches) {
+          $cekName = $match.Groups[1].Value
+          if ($cekName -notin $encryptionObjects.columnEncryptionKeys) {
+            $encryptionObjects.columnEncryptionKeys += $cekName
+            Write-Verbose "  [ENCRYPTION] CEK '$cekName' inferred from ENCRYPTED WITH clause in $($file.Name)"
+          }
+        }
+      }
+
+      # If we found CEKs from table columns, mark that CMK exists (CMK is required for any CEK)
+      if ($encryptionObjects.columnEncryptionKeys.Count -gt 0 -and $encryptionObjects.columnMasterKeys.Count -eq 0) {
+        # We know CMK exists but can't determine the name from table definitions
+        $encryptionObjects.columnMasterKeysInferred = $true
+        Write-Verbose "  [ENCRYPTION] CMK required (inferred from CEK usage in table columns)"
       }
     }
   }
@@ -869,6 +931,9 @@ function Get-RequiredEncryptionSecrets {
   $encryptionObjects.symmetricKeys.Count -gt 0 -or
   $encryptionObjects.certificates.Count -gt 0 -or
   $encryptionObjects.asymmetricKeys.Count -gt 0 -or
+  $encryptionObjects.columnMasterKeys.Count -gt 0 -or
+  $encryptionObjects.columnMasterKeysInferred -or
+  $encryptionObjects.columnEncryptionKeys.Count -gt 0 -or
   $encryptionObjects.applicationRoles.Count -gt 0
 
   if ($hasAny) {
@@ -939,6 +1004,28 @@ function Show-EncryptionSecretsTemplate {
   if ($EncryptionObjects.asymmetricKeys.Count -gt 0) {
     Write-Host "  [*] Asymmetric Keys ($($EncryptionObjects.asymmetricKeys.Count)):" -ForegroundColor Green
     foreach ($key in $EncryptionObjects.asymmetricKeys) {
+      Write-Host "      - $key"
+    }
+  }
+
+  # Column Master Keys (Always Encrypted - no secrets needed)
+  if ($EncryptionObjects.columnMasterKeys.Count -gt 0) {
+    Write-Host "  [i] Column Master Keys ($($EncryptionObjects.columnMasterKeys.Count)):" -ForegroundColor Cyan
+    Write-Host "      (Always Encrypted - keys stored externally, no secrets needed)"
+    foreach ($key in $EncryptionObjects.columnMasterKeys) {
+      Write-Host "      - $key"
+    }
+  } elseif ($EncryptionObjects.columnMasterKeysInferred) {
+    Write-Host "  [!] Column Master Keys (unknown names):" -ForegroundColor Yellow
+    Write-Host "      CMK required (inferred from CEK usage in table columns)."
+    Write-Host "      Re-export with current Export-SqlServerSchema.ps1 to get CMK names."
+  }
+
+  # Column Encryption Keys (Always Encrypted - no secrets needed)
+  if ($EncryptionObjects.columnEncryptionKeys.Count -gt 0) {
+    Write-Host "  [i] Column Encryption Keys ($($EncryptionObjects.columnEncryptionKeys.Count)):" -ForegroundColor Cyan
+    Write-Host "      (Always Encrypted - encrypted by CMK, no secrets needed)"
+    foreach ($key in $EncryptionObjects.columnEncryptionKeys) {
       Write-Host "      - $key"
     }
   }

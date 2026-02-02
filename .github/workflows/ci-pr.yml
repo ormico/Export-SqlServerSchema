@@ -138,6 +138,13 @@ jobs:
           Write-Host "Running encryption secrets tests..."
           ./test-encryption-secrets.ps1
 
+      - name: Run encryption fallback scan tests
+        shell: pwsh
+        working-directory: ./tests
+        run: |
+          Write-Host "Running encryption fallback scan tests..."
+          ./test-encryption-fallback-scan.ps1
+
       - name: Cleanup
         if: always()
         working-directory: ./tests
