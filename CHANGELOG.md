@@ -25,6 +25,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Scans table scripts in `07_Tables/` for `ENCRYPTED WITH` clauses to infer CEK usage
 - New automated test suite: `tests/test-encryption-fallback-scan.ps1` with 9 test cases
 
+### Changed
+
+- **Security file numbering**: Roles moved from `004_` to `006_`, ApplicationRoles from `005_` to `007_`, Users from `006_` to `008_` to accommodate new CMK/CEK files. Old exports are unaffected (import processes all `.sql` files by alphabetical order regardless of numbering).
+
 ### Fixed
 
 **Encryption Secrets Fallback Scanner**

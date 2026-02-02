@@ -13,13 +13,16 @@
     Tests include:
     1. Symmetric keys detection
     2. Certificates detection
-    3. Asymmetric keys detection
-    4. Application roles detection
-    5. Column Master Keys (Always Encrypted) detection
-    6. Column Encryption Keys detection
-    7. DMK inference from symmetric key referencing MASTER KEY
-    8. DMK inference from certificate with DMK-encrypted private key
-    9. CEK inference from table ENCRYPTED WITH clauses
+    3. Application roles detection (dynamic SQL format)
+    4. Column Master Keys (Always Encrypted) detection
+    5. Column Encryption Keys detection
+    6. DMK inference from symmetric key referencing MASTER KEY
+    7. CEK inference from table ENCRYPTED WITH clauses
+    8. Non-standard filename detection (all-in-one file)
+    9. Asymmetric keys detection
+    10. DMK inference from certificate with DMK-encrypted private key
+    11. Negative - commented-out CREATE statements should not be detected
+    12. Negative - DECRYPTION BY PASSWORD should not infer DMK
 
 .EXAMPLE
     ./test-encryption-fallback-scan.ps1
@@ -342,6 +345,144 @@ if ($allFound) {
 } else {
     Write-TestStep "Failed to detect objects from non-standard filename" -Type Error
     $testsFailed++
+}
+
+# ---------------------------------------------------------------------------
+# TEST 9: Asymmetric Keys Detection
+# ---------------------------------------------------------------------------
+Write-Host "-" * 70 -ForegroundColor Gray
+Write-TestStep "TEST 9: Asymmetric Keys Detection" -Type Info
+
+$exportDir = New-TestExport -Name "test9_asymmetric" -SecurityFiles @{
+    "003_AsymmetricKeys.sql" = @"
+CREATE ASYMMETRIC KEY [TestAsymKey1]
+WITH ALGORITHM = RSA_2048;
+GO
+"@
+} -TableFiles @{}
+
+$output = Test-EncryptionDetection -ExportPath $exportDir -TestName "Asymmetric Keys"
+
+if ($output -match "Asymmetric key 'TestAsymKey1'") {
+    Write-TestStep "Detected asymmetric key: TestAsymKey1" -Type Success
+    $testsPassed++
+} else {
+    Write-TestStep "Failed to detect asymmetric key in verbose output" -Type Error
+    $testsFailed++
+}
+
+# ---------------------------------------------------------------------------
+# TEST 10: DMK Inference from Certificate with DMK-encrypted Private Key
+# ---------------------------------------------------------------------------
+Write-Host "-" * 70 -ForegroundColor Gray
+Write-TestStep "TEST 10: DMK Inference from Certificate (no ENCRYPTION BY PASSWORD)" -Type Info
+
+$exportDir = New-TestExport -Name "test10_dmk_cert" -SecurityFiles @{
+    "002_Certificates.sql" = @"
+CREATE CERTIFICATE [CertWithDmkKey]
+WITH SUBJECT = 'Test Certificate'
+GO
+ALTER CERTIFICATE [CertWithDmkKey]
+WITH PRIVATE KEY (
+    FILE = N'/tmp/cert.pvk'
+)
+GO
+"@
+    "002b_Certificates.sql" = @"
+CREATE CERTIFICATE [CertNeedsDbMasterKey]
+WITH SUBJECT = 'Cert with DMK-encrypted private key';
+GO
+ALTER CERTIFICATE [CertNeedsDbMasterKey]
+WITH PRIVATE KEY (
+    DECRYPTION_BY_PASSWORD = N'OldPwd'
+)
+GO
+"@
+    "002c_Certificates.sql" = @"
+CREATE CERTIFICATE [CertDmkEncrypted]
+WITH SUBJECT = 'Cert whose private key is encrypted by DMK';
+GO
+ALTER CERTIFICATE [CertDmkEncrypted]
+WITH PRIVATE KEY (
+    BINARY = 0xABCD
+)
+GO
+"@
+} -TableFiles @{}
+
+$output = Test-EncryptionDetection -ExportPath $exportDir -TestName "DMK Inference from Cert"
+
+if ($output -match "DMK inferred from certificate with DMK-encrypted private key") {
+    Write-TestStep "DMK correctly inferred from certificate with no password protection" -Type Success
+    $testsPassed++
+} else {
+    Write-TestStep "Failed to infer DMK from certificate" -Type Error
+    $testsFailed++
+}
+
+# ---------------------------------------------------------------------------
+# TEST 11: Negative - Commented-Out CREATE Statements Should NOT Detect
+# ---------------------------------------------------------------------------
+Write-Host "-" * 70 -ForegroundColor Gray
+Write-TestStep "TEST 11: Negative - Commented-out CREATE statements" -Type Info
+
+$exportDir = New-TestExport -Name "test11_commented" -SecurityFiles @{
+    "commented_objects.sql" = @"
+-- CREATE SYMMETRIC KEY [FakeKey] WITH ALGORITHM = AES_256
+-- ENCRYPTION BY PASSWORD = 'test';
+/* CREATE CERTIFICATE [FakeCert] WITH SUBJECT = 'Fake'; */
+/*
+CREATE ASYMMETRIC KEY [FakeAsymKey]
+WITH ALGORITHM = RSA_2048;
+*/
+-- CREATE APPLICATION ROLE [FakeRole] WITH DEFAULT_SCHEMA = [dbo], PASSWORD = 'test';
+-- CREATE COLUMN MASTER KEY [FakeCMK] WITH (KEY_STORE_PROVIDER_NAME = 'test', KEY_PATH = 'test');
+GO
+"@
+} -TableFiles @{}
+
+$output = Test-EncryptionDetection -ExportPath $exportDir -TestName "Commented-Out Statements"
+
+$anyDetected = $output -match "Symmetric key 'FakeKey'" -or
+               $output -match "Certificate 'FakeCert'" -or
+               $output -match "Asymmetric key 'FakeAsymKey'" -or
+               $output -match "Application role 'FakeRole'" -or
+               $output -match "CMK 'FakeCMK'"
+
+if (-not $anyDetected) {
+    Write-TestStep "Correctly ignored all commented-out CREATE statements" -Type Success
+    $testsPassed++
+} else {
+    Write-TestStep "False positive: detected objects from commented-out SQL" -Type Error
+    $testsFailed++
+}
+
+# ---------------------------------------------------------------------------
+# TEST 12: Negative - DECRYPTION BY PASSWORD Should NOT Infer DMK
+# ---------------------------------------------------------------------------
+Write-Host "-" * 70 -ForegroundColor Gray
+Write-TestStep "TEST 12: Negative - DECRYPTION BY PASSWORD should not infer DMK" -Type Info
+
+$exportDir = New-TestExport -Name "test12_decryption_pwd" -SecurityFiles @{
+    "002_Certificates.sql" = @"
+CREATE CERTIFICATE [CertRestoredFromFile]
+FROM FILE = N'/backup/cert.cer'
+WITH PRIVATE KEY (
+    FILE = N'/backup/cert.pvk',
+    DECRYPTION BY PASSWORD = N'BackupPassword123'
+);
+GO
+"@
+} -TableFiles @{}
+
+$output = Test-EncryptionDetection -ExportPath $exportDir -TestName "DECRYPTION BY PASSWORD"
+
+if ($output -match "DMK inferred") {
+    Write-TestStep "False positive: DMK inferred despite DECRYPTION BY PASSWORD" -Type Error
+    $testsFailed++
+} else {
+    Write-TestStep "Correctly did NOT infer DMK when DECRYPTION BY PASSWORD present" -Type Success
+    $testsPassed++
 }
 
 # ============================================================================
