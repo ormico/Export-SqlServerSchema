@@ -5,6 +5,18 @@ All notable changes to Export-SqlServerSchema will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.7.8] - 2026-02-02
+
+### Fixed
+
+**CMK Fallback Scanning Used Wrong Table Folder Paths**
+- Fixed `Get-RequiredEncryptionSecrets` fallback table scanning to use correct folder paths
+- Was scanning `07_Tables/` (which is the User-Defined Types folder) instead of `09_Tables_PrimaryKey/` and `10_Tables_ForeignKeys/`
+- Old exports without metadata that use `ENCRYPTED WITH` clauses on table columns are now correctly detected during import
+- Updated `test-encryption-fallback-scan.ps1` to use correct `09_Tables_PrimaryKey` folder in test fixtures
+
+---
+
 ## [1.7.7] - 2026-02-02
 
 ### Changed
@@ -29,7 +41,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 **Fallback Scanning for Old Exports**
 - Comprehensive SQL file scanning now reads ALL `.sql` files in `01_Security/` folder
 - Detects encryption objects regardless of filename (supports non-standard naming)
-- Scans table scripts in `07_Tables/` for `ENCRYPTED WITH` clauses to infer CEK usage
+- Scans table scripts in `09_Tables_PrimaryKey/` and `10_Tables_ForeignKeys/` for `ENCRYPTED WITH` clauses to infer CEK usage
 - New automated test suite: `tests/test-encryption-fallback-scan.ps1` with 9 test cases
 
 ### Changed
