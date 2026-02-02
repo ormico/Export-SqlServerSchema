@@ -213,6 +213,7 @@ jobs:
         run: |
           cp CHANGELOG.md release/
           cp docs/USER_GUIDE.md release/USER_GUIDE.md
+          cp docs/CONFIG_REFERENCE.md release/CONFIG_REFERENCE.md
           cp export-import-config.example.yml release/
           cp export-import-config.schema.json release/
           cp Export-SqlServerSchema.ps1 release/
