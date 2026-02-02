@@ -5,19 +5,6 @@ All notable changes to Export-SqlServerSchema will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
-
-### Changed
-
-**Documentation Updates**
-- Updated README.md parallel/sequential export performance numbers to reflect v1.6.0 results
-  - Sequential: 93.30s → 91s
-  - Parallel: 97.58s → 39s (2.3x faster than sequential)
-  - Changed from "5% overhead" narrative to "2.3x speedup" to accurately reflect parallel performance improvement
-- Added "50K rows" to test database descriptions in README.md for consistency with CHANGELOG
-
----
-
 ## [1.7.6] - 2026-01-30
 
 ### Added
@@ -41,6 +28,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **Security file numbering**: Roles moved from `004_` to `006_`, ApplicationRoles from `005_` to `007_`, Users from `006_` to `008_` to accommodate new CMK/CEK files. Old exports are unaffected (import processes all `.sql` files by alphabetical order regardless of numbering).
+
+**Documentation Updates**
+- Updated README.md parallel/sequential export performance numbers to reflect v1.6.0 results
+  - Sequential: 93.30s → 91s
+  - Parallel: 97.58s → 39s (2.3x faster than sequential)
+  - Changed from "5% overhead" narrative to "2.3x speedup" to accurately reflect parallel performance improvement
+- Added "50K rows" to test database descriptions in README.md for consistency with CHANGELOG
 
 ### Fixed
 
