@@ -12,3 +12,6 @@ exports_perf_schema/*
 exports_parallel_test/*
 exports_*/*
 perf-metrics-*.json
+**/*.log
+fixtures/filestream_test/import-log.txt
+fixtures/always_encrypted_test/import-log.txt

@@ -1,0 +1,15 @@
+{
+  "exportVersion": "1.0",
+  "exportDate": "2026-02-01T12:00:00Z",
+  "sourceServer": "WINDOWS-SERVER",
+  "sourceDatabase": "AlwaysEncryptedTestDb",
+  "objectCount": 8,
+  "includeData": false,
+  "targetSqlVersion": "Sql2022",
+  "features": {
+    "hasFilestream": false,
+    "hasMemoryOptimized": false,
+    "hasPartitions": false,
+    "hasAlwaysEncrypted": true
+  }
+}

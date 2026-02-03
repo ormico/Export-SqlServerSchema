@@ -5,6 +5,35 @@ All notable changes to Export-SqlServerSchema will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [unreleased] - YYYY-MM-DD
+
+### Added
+
+**Strip Always Encrypted for Targets Without External Key Stores**
+- New `-StripAlwaysEncrypted` parameter for Import-SqlServerSchema.ps1
+- New `stripAlwaysEncrypted` config option in developerMode/productionMode settings
+- Always Encrypted requires external key stores (Azure Key Vault, Windows Certificate Store, HSM)
+- When enabled, transformations applied during import:
+  - Removes `ENCRYPTED WITH (...)` clauses from column definitions (single-line and multi-line formats)
+  - Skips `CREATE COLUMN MASTER KEY` and `CREATE COLUMN ENCRYPTION KEY` statements
+  - Encrypted columns become regular (unencrypted) columns
+- Example usage:
+  ```powershell
+  # Command-line
+  ./Import-SqlServerSchema.ps1 -Server localhost -Database MyDb -SourcePath ./export -StripAlwaysEncrypted
+  ```
+  ```yaml
+  # Config file
+  import:
+    developerMode:
+      stripAlwaysEncrypted: true
+  ```
+- Command-line parameter overrides config file setting
+- Default: `false` (Always Encrypted features preserved)
+- New test suite: `tests/test-strip-always-encrypted.ps1` with fixture data in `tests/fixtures/always_encrypted_test/`
+
+---
+
 ## [1.7.8] - 2026-02-02
 
 ### Fixed
