@@ -234,6 +234,11 @@ if ($hasErrorLog) {
     $logHasTimestamp = $errorLogContent -match "\d{4}-\d{2}-\d{2}|\d{2}:\d{2}:\d{2}"
     Write-TestResult -TestName "Error log has timestamp" -Passed $logHasTimestamp `
         -Message "Error log should include timestamps"
+
+    # Test 2d: Error log contains file path
+    $logHasFilePath = $errorLogContent -match "File:.*fn_BrokenFunction"
+    Write-TestResult -TestName "Error log contains file path" -Passed $logHasFilePath `
+        -Message "Error log should include the full file path"
 }
 
 Drop-TestDatabase -DbName $targetDb1
@@ -324,6 +329,13 @@ if ($errorLogExists) {
 $reportsRetryFailure = $errorLogExists -and $errorLogContainsScript
 Write-TestResult -TestName "Retry failure clearly reported" -Passed $reportsRetryFailure `
     -Message "Scripts that fail after retry should have errors logged to import_errors_*.log"
+
+# Test 4b: Error log has actual SQL error details, not just wrapper exception
+if ($errorLogExists) {
+    $hasDetailedError = $errorLogContent -match "Error \d+:|Invalid object name|Message:"
+    Write-TestResult -TestName "Retry error log has detailed SQL error" -Passed $hasDetailedError `
+        -Message "Error log should contain inner SQL exception details, not just 'Exception calling ExecuteNonQuery'"
+}
 
 Drop-TestDatabase -DbName $targetDb4
 

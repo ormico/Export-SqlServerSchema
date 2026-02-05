@@ -460,6 +460,8 @@ function Add-FailedScript {
 
     [string]$Folder = '',
 
+    [string]$FilePath = '',
+
     [bool]$IsFinal = $true
   )
 
@@ -472,6 +474,7 @@ function Add-FailedScript {
 
   [void]$script:FailedScripts.Add([PSCustomObject]@{
     ScriptName   = $ScriptName
+    FilePath     = $FilePath
     Folder       = $Folder
     ErrorMessage = $shortError
     FullError    = $ErrorMessage
@@ -506,6 +509,9 @@ function Write-ErrorLog {
   foreach ($failure in $script:FailedScripts) {
     [void]$sb.AppendLine("[$index] $($failure.ScriptName)")
     [void]$sb.AppendLine("    Folder: $($failure.Folder)")
+    if ($failure.FilePath) {
+      [void]$sb.AppendLine("    File: $($failure.FilePath)")
+    }
     [void]$sb.AppendLine("    Time: $($failure.Timestamp)")
     [void]$sb.AppendLine("    Error: $($failure.ErrorMessage)")
     [void]$sb.AppendLine("")
@@ -2194,7 +2200,8 @@ function Invoke-ScriptsWithDependencyRetries {
     $Connection,
     [switch]$ContinueOnError,
     [int]$MaxAttempts,
-    [int]$InitialDelaySeconds
+    [int]$InitialDelaySeconds,
+    [string]$SourcePath = ''
   )
 
   if ($Scripts.Count -eq 0) {
@@ -2258,7 +2265,11 @@ function Invoke-ScriptsWithDependencyRetries {
       elseif ($result -eq -1) {
         # Script failed - add to retry list and track error
         $stillFailing += $scriptFile
-        if ($scriptError) {
+        # Prefer $script:LastScriptError which has full inner exception chain from Invoke-SqlScript
+        if ($script:LastScriptError) {
+          $failedScriptErrors[$scriptFile.Name] = $script:LastScriptError
+        }
+        elseif ($scriptError) {
           $failedScriptErrors[$scriptFile.Name] = $scriptError
         }
       }
@@ -2310,8 +2321,15 @@ function Invoke-ScriptsWithDependencyRetries {
       Write-Host "  - $($failedScript.Name)" -ForegroundColor Red
       Write-Host "    $shortError" -ForegroundColor DarkRed
 
+      # Derive folder from file path instead of hardcoding
+      $scriptFolder = '14_Programmability'  # default fallback
+      if ($SourcePath -and $failedScript.FullName.StartsWith($SourcePath)) {
+        $relativePath = $failedScript.FullName.Substring($SourcePath.Length).TrimStart('\', '/')
+        $scriptFolder = ($relativePath -split '[\\/]')[0]
+      }
+
       # Record for final summary
-      Add-FailedScript -ScriptName $failedScript.Name -ErrorMessage $errorMsg -Folder '14_Programmability' -IsFinal $true
+      Add-FailedScript -ScriptName $failedScript.Name -ErrorMessage $errorMsg -Folder $scriptFolder -FilePath $failedScript.FullName -IsFinal $true
     }
 
     if (-not $ContinueOnError) {
@@ -3814,7 +3832,12 @@ try {
               Write-Verbose "  Executed memory-optimized FileGroup SQL block"
             }
             catch {
-              Write-Host "  [ERROR] Failed to create memory-optimized FileGroup: $_" -ForegroundColor Red
+              $fgError = "Failed to create memory-optimized FileGroup: $($_.Exception.Message)"
+              if ($_.Exception.InnerException) {
+                $fgError += "`n  Inner: $($_.Exception.InnerException.Message)"
+              }
+              Write-Host "  [ERROR] $fgError" -ForegroundColor Red
+              Add-FailedScript -ScriptName 'MemoryOptimized_FileGroup' -ErrorMessage $fgError -Folder '00_FileGroups' -IsFinal $true
             }
           }
           Write-Output "[SUCCESS] Memory-optimized FileGroup(s) created"
@@ -3896,7 +3919,12 @@ try {
               Write-Verbose "  Executed memory-optimized FileGroup SQL block"
             }
             catch {
-              Write-Host "  [ERROR] Failed to create memory-optimized FileGroup: $_" -ForegroundColor Red
+              $fgError = "Failed to create memory-optimized FileGroup: $($_.Exception.Message)"
+              if ($_.Exception.InnerException) {
+                $fgError += "`n  Inner: $($_.Exception.InnerException.Message)"
+              }
+              Write-Host "  [ERROR] $fgError" -ForegroundColor Red
+              Add-FailedScript -ScriptName 'MemoryOptimized_FileGroup' -ErrorMessage $fgError -Folder '00_FileGroups' -IsFinal $true
               # Continue - don't abort the entire import for this
             }
           }
@@ -4149,7 +4177,7 @@ try {
       Write-Host "    $shortError" -ForegroundColor DarkRed
 
       # Record for final summary
-      Add-FailedScript -ScriptName $scriptFile.Name -ErrorMessage $errorMsg -Folder $currentFolder -IsFinal $true
+      Add-FailedScript -ScriptName $scriptFile.Name -ErrorMessage $errorMsg -Folder $currentFolder -FilePath $scriptFile.FullName -IsFinal $true
 
       if (-not $ContinueOnError) {
         # Set flag to abort - but don't throw error so we can still write error log
@@ -4177,7 +4205,8 @@ try {
       -Connection $script:SharedConnection `
       -ContinueOnError:$ContinueOnError `
       -MaxAttempts $effectiveMaxRetries `
-      -InitialDelaySeconds $effectiveRetryDelay
+      -InitialDelaySeconds $effectiveRetryDelay `
+      -SourcePath $SourcePath
 
     $successCount += $retryResults.Success
     $failureCount += $retryResults.Failure
@@ -4222,7 +4251,7 @@ try {
         Write-Host "    $shortError" -ForegroundColor DarkRed
 
         # Record for final summary
-        Add-FailedScript -ScriptName $scriptFile.Name -ErrorMessage $errorMsg -Folder '15_SecurityPolicies' -IsFinal $true
+        Add-FailedScript -ScriptName $scriptFile.Name -ErrorMessage $errorMsg -Folder '15_SecurityPolicies' -FilePath $scriptFile.FullName -IsFinal $true
 
         if (-not $ContinueOnError) {
           $abortAfterStructuralFailure = $true
@@ -4336,7 +4365,7 @@ try {
         Write-Host "    $shortError" -ForegroundColor DarkRed
 
         # Record for final summary
-        Add-FailedScript -ScriptName $scriptFile.Name -ErrorMessage $errorMsg -Folder '16_Data' -IsFinal $true
+        Add-FailedScript -ScriptName $scriptFile.Name -ErrorMessage $errorMsg -Folder '16_Data' -FilePath $scriptFile.FullName -IsFinal $true
 
         if (-not $ContinueOnError) {
           break
@@ -4380,7 +4409,12 @@ try {
               $fkCount++
             }
             catch {
-              Write-Error "  [ERROR] Failed to re-enable FK $($fk.Name) on $($table.Schema).$($table.Name): $_"
+              $fkErrorMsg = "Failed to re-enable FK $($fk.Name) on [$($table.Schema)].[$($table.Name)]: $($_.Exception.Message)"
+              if ($_.Exception.InnerException) {
+                $fkErrorMsg += "`n  Inner: $($_.Exception.InnerException.Message)"
+              }
+              Write-Error "  [ERROR] $fkErrorMsg"
+              Add-FailedScript -ScriptName "FK: $($fk.Name)" -ErrorMessage $fkErrorMsg -Folder 'ForeignKeys' -IsFinal $true
               $errorCount++
             }
           }
@@ -4399,7 +4433,12 @@ try {
       }
     }
     catch {
-      Write-Error "[ERROR] Error re-enabling foreign keys: $_"
+      $fkConnError = "Error re-enabling foreign keys: $($_.Exception.Message)"
+      if ($_.Exception.InnerException) {
+        $fkConnError += "`n  Inner: $($_.Exception.InnerException.Message)"
+      }
+      Write-Error "[ERROR] $fkConnError"
+      Add-FailedScript -ScriptName 'FK: Connection' -ErrorMessage $fkConnError -Folder 'ForeignKeys' -IsFinal $true
       $failureCount++
     }
     finally {
@@ -4544,7 +4583,7 @@ try {
     $displayCount = [Math]::Min($script:FailedScripts.Count, 10)
     for ($i = 0; $i -lt $displayCount; $i++) {
       $failure = $script:FailedScripts[$i]
-      Write-Host "  $($i + 1). $($failure.ScriptName) - $($failure.ErrorMessage)" -ForegroundColor Red
+      Write-Host "  $($i + 1). [$($failure.Folder)] $($failure.ScriptName) - $($failure.ErrorMessage)" -ForegroundColor Red
     }
     if ($script:FailedScripts.Count -gt 10) {
       Write-Host "  ... and $($script:FailedScripts.Count - 10) more error(s)" -ForegroundColor Red
