@@ -1,0 +1,4 @@
+import:
+  developerMode:
+    stripAlwaysEncrypted: true
+    fileGroupStrategy: removeToPrimary

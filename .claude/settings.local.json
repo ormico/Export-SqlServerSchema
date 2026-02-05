@@ -1,7 +1,9 @@
 {
   "permissions": {
     "allow": [
-      "Bash(pwsh:*)"
+      "Bash(pwsh:*)",
+      "WebSearch",
+      "Bash(docker-compose:*)"
     ]
   }
 }
