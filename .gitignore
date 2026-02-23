@@ -4,4 +4,4 @@ DbScripts/**
 *.log
 .local/
 
-tests/fixtures/filestream_test/import-log.txt
+.claude/settings.local.json

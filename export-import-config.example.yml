@@ -273,6 +273,16 @@ import:
     # Can also use command-line: -StripFilestream
     stripFilestream: false
 
+    # Strip Always Encrypted features for targets without external key stores (default: false)
+    # Always Encrypted uses external key stores (Azure Key Vault, Windows Certificate Store, etc.)
+    # When enabled:
+    #   - ENCRYPTED WITH clauses are removed from column definitions
+    #   - CREATE COLUMN MASTER KEY and CREATE COLUMN ENCRYPTION KEY statements are skipped
+    #   - Encrypted columns become regular (unencrypted) columns
+    # Required when target lacks access to the original key store (e.g., Linux Docker containers)
+    # Can also use command-line: -StripAlwaysEncrypted
+    stripAlwaysEncrypted: false
+
     # Convert login-mapped users to contained users (WITHOUT LOGIN)
     # Useful when importing to a different server without the same logins
     # convertLoginsToContained: false
@@ -351,6 +361,11 @@ import:
     # Usually false for production - FILESTREAM is typically supported on Windows servers
     # Set to true only if production target is SQL Server on Linux
     stripFilestream: false
+
+    # Strip Always Encrypted features (default: false)
+    # Usually false for production - key stores should be available on production servers
+    # Set to true only if production target lacks access to the original key store
+    stripAlwaysEncrypted: false
 
     # Convert login-mapped users to contained users (default: false)
     # Usually false for production - logins should exist on production servers
