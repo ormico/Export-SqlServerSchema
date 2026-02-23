@@ -153,6 +153,9 @@ param(
   [Parameter(HelpMessage = 'Strip FILESTREAM features (removes FILESTREAM_ON clauses, converts FILESTREAM columns to VARBINARY(MAX)). Required for Linux/container targets.')]
   [switch]$StripFilestream,
 
+  [Parameter(HelpMessage = 'Strip Always Encrypted features (removes ENCRYPTED WITH clauses from columns, skips Column Master Key and Column Encryption Key creation). Required for targets without access to external key stores.')]
+  [switch]$StripAlwaysEncrypted,
+
   [Parameter(HelpMessage = 'Show required encryption secrets for this export and generate suggested YAML config, then exit without importing')]
   [switch]$ShowRequiredSecrets
 )
@@ -171,6 +174,9 @@ $script:ExcludeSchemasFilter = $ExcludeSchemas
 
 # Store StripFilestream parameter at script level for use in transformations
 $script:StripFilestreamEnabled = $StripFilestream.IsPresent
+
+# Store StripAlwaysEncrypted parameter at script level for use in transformations
+$script:StripAlwaysEncryptedEnabled = $StripAlwaysEncrypted.IsPresent
 
 # Error tracking for improved reporting (Bug 3 fix)
 # Stores final failures (not temporary retry failures) for summary display
@@ -1891,6 +1897,62 @@ function Invoke-SqlScript {
       }
     }
 
+    # Strip Always Encrypted features for targets without external key stores
+    # Removes ENCRYPTED WITH clauses from column definitions and skips CMK/CEK creation
+    if ($SqlCmdVariables.ContainsKey('__StripAlwaysEncrypted__')) {
+      $originalSql = $sql
+
+      # Step 1: Strip ENCRYPTED WITH (...) from column definitions
+      # Handles single-line (SMO default), multi-line formatting, with/without COLLATE before,
+      # in CREATE TABLE and ALTER TABLE ADD, case-insensitive by default in PowerShell -replace
+      # Use \s+ before ENCRYPTED to consume whitespace between data type and ENCRYPTED keyword
+      $sql = $sql -replace '\s+ENCRYPTED\s+WITH\s*\([^)]+\)', ''
+
+      # Step 2: Remove CMK/CEK batches (CREATE COLUMN MASTER KEY, CREATE COLUMN ENCRYPTION KEY)
+      # Split on GO, filter batches containing CMK/CEK creation, rejoin remaining batches
+      if ($sql -match 'CREATE\s+COLUMN\s+(MASTER|ENCRYPTION)\s+KEY') {
+        $goPattern = '(?m)^\s*GO\s*$'
+        $batches = [regex]::Split($sql, $goPattern)
+        $filteredBatches = @()
+        $skippedCount = 0
+
+        foreach ($batch in $batches) {
+          $trimmedBatch = $batch.Trim()
+          if ([string]::IsNullOrWhiteSpace($trimmedBatch)) { continue }
+
+          if ($trimmedBatch -match 'CREATE\s+COLUMN\s+MASTER\s+KEY') {
+            $skippedCount++
+            Write-Verbose "  [TRANSFORM] Skipping CREATE COLUMN MASTER KEY batch: $scriptName"
+          }
+          elseif ($trimmedBatch -match 'CREATE\s+COLUMN\s+ENCRYPTION\s+KEY') {
+            $skippedCount++
+            Write-Verbose "  [TRANSFORM] Skipping CREATE COLUMN ENCRYPTION KEY batch: $scriptName"
+          }
+          else {
+            $filteredBatches += $trimmedBatch
+          }
+        }
+
+        if ($skippedCount -gt 0) {
+          Write-Verbose "  [TRANSFORM] Filtered out $skippedCount CMK/CEK batch(es) from: $scriptName"
+        }
+
+        if ($filteredBatches.Count -gt 0) {
+          $sql = ($filteredBatches -join "`nGO`n") + "`nGO"
+        }
+        else {
+          # All batches were CMK/CEK - skip entire script
+          Write-Verbose "  [TRANSFORM] Skipping entire script (all batches are CMK/CEK): $scriptName"
+          return $true
+        }
+      }
+
+      # Step 3: Log transformation if changes were made
+      if ($sql -ne $originalSql) {
+        Write-Verbose "  [TRANSFORM] Stripped Always Encrypted features: $scriptName"
+      }
+    }
+
     # Apply encryption secrets for security objects
     # This injects passwords for Database Master Key, Symmetric Keys, Certificates, and Application Roles
     if ($SqlCmdVariables.ContainsKey('__EncryptionSecrets__')) {
@@ -3147,6 +3209,15 @@ function Show-ImportConfiguration {
     Write-Host "[ENABLED] Strip FILESTREAM (Linux/container compatibility)" -ForegroundColor Magenta
   }
 
+  # Check stripAlwaysEncrypted from config or command-line parameter
+  $displayStripAlwaysEncrypted = $script:StripAlwaysEncryptedEnabled
+  if (-not $displayStripAlwaysEncrypted -and $modeSettings.ContainsKey('stripAlwaysEncrypted') -and $modeSettings.stripAlwaysEncrypted -eq $true) {
+    $displayStripAlwaysEncrypted = $true
+  }
+  if ($displayStripAlwaysEncrypted) {
+    Write-Host "[ENABLED] Strip Always Encrypted (no external key store required)" -ForegroundColor Magenta
+  }
+
   Write-Host ""
   Write-Host "═══════════════════════════════════════════════════════════════" -ForegroundColor Cyan
   Write-Host "Starting import..." -ForegroundColor Cyan
@@ -3967,6 +4038,28 @@ try {
     $sqlCmdVars['__StripFilestream__'] = $true
     Write-Output "[INFO] FILESTREAM stripping: enabled - FILESTREAM features will be removed (Linux/container compatibility)"
     Write-Output "       FILESTREAM_ON clauses will be removed, VARBINARY(MAX) FILESTREAM -> VARBINARY(MAX)"
+  }
+
+  # Check for stripAlwaysEncrypted setting (command-line parameter takes priority over config)
+  # Always Encrypted requires external key stores (Azure Key Vault, Windows Certificate Store, etc.)
+  # Stripping allows imports to targets without access to the original key store
+  $stripAlwaysEncryptedEnabled = $script:StripAlwaysEncryptedEnabled
+  if (-not $stripAlwaysEncryptedEnabled) {
+    # Check config file for mode-specific setting
+    $modeSettings = if ($ImportMode -eq 'Dev') {
+      if ($config -and $config.import -and $config.import.developerMode) { $config.import.developerMode } else { @{} }
+    }
+    else {
+      if ($config -and $config.import -and $config.import.productionMode) { $config.import.productionMode } else { @{} }
+    }
+    if ($modeSettings.ContainsKey('stripAlwaysEncrypted') -and $modeSettings.stripAlwaysEncrypted -eq $true) {
+      $stripAlwaysEncryptedEnabled = $true
+    }
+  }
+  if ($stripAlwaysEncryptedEnabled) {
+    $sqlCmdVars['__StripAlwaysEncrypted__'] = $true
+    Write-Output "[INFO] Always Encrypted stripping: enabled - CMK, CEK, and ENCRYPTED WITH clauses will be removed"
+    Write-Output "       Encrypted columns will become regular (unencrypted) columns"
   }
 
   # Resolve encryption secrets from config (for Database Master Key, Symmetric Keys, etc.)
