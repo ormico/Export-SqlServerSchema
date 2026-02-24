@@ -2385,7 +2385,8 @@ function Invoke-ScriptsWithDependencyRetries {
       }
 
       # Record for final summary
-      Add-FailedScript -ScriptName $failedScript.Name -ErrorMessage $errorMsg -Folder $scriptFolder -FilePath $failedScript.FullName    }
+      Add-FailedScript -ScriptName $failedScript.Name -ErrorMessage $errorMsg -Folder $scriptFolder -FilePath $failedScript.FullName
+    }
 
     if (-not $ContinueOnError) {
       # Don't use Write-Error as it terminates before error log can be written
