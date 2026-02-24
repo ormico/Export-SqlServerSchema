@@ -454,8 +454,6 @@ function Add-FailedScript {
         The error message (preferably the innermost SQL error).
     .PARAMETER Folder
         The folder the script belongs to (e.g., '09_Tables_PrimaryKey').
-    .PARAMETER IsFinal
-        Whether this is a final failure (not a temporary retry failure).
   #>
   param(
     [Parameter(Mandatory)]
@@ -466,12 +464,8 @@ function Add-FailedScript {
 
     [string]$Folder = '',
 
-    [string]$FilePath = '',
-
-    [bool]$IsFinal = $true
+    [string]$FilePath = ''
   )
-
-  if (-not $IsFinal) { return }
 
   # Extract the most useful error message (innermost exception)
   $shortError = $ErrorMessage -split "`n" | Where-Object { $_ -match 'Error \d+:|Message:' } | Select-Object -First 1
@@ -2391,8 +2385,7 @@ function Invoke-ScriptsWithDependencyRetries {
       }
 
       # Record for final summary
-      Add-FailedScript -ScriptName $failedScript.Name -ErrorMessage $errorMsg -Folder $scriptFolder -FilePath $failedScript.FullName -IsFinal $true
-    }
+      Add-FailedScript -ScriptName $failedScript.Name -ErrorMessage $errorMsg -Folder $scriptFolder -FilePath $failedScript.FullName    }
 
     if (-not $ContinueOnError) {
       # Don't use Write-Error as it terminates before error log can be written
@@ -3908,8 +3901,7 @@ try {
                 $fgError += "`n  Inner: $($_.Exception.InnerException.Message)"
               }
               Write-Host "  [ERROR] $fgError" -ForegroundColor Red
-              Add-FailedScript -ScriptName 'MemoryOptimized_FileGroup' -ErrorMessage $fgError -Folder '00_FileGroups' -IsFinal $true
-            }
+              Add-FailedScript -ScriptName 'MemoryOptimized_FileGroup' -ErrorMessage $fgError -Folder '00_FileGroups'            }
           }
           Write-Output "[SUCCESS] Memory-optimized FileGroup(s) created"
         }
@@ -3995,8 +3987,7 @@ try {
                 $fgError += "`n  Inner: $($_.Exception.InnerException.Message)"
               }
               Write-Host "  [ERROR] $fgError" -ForegroundColor Red
-              Add-FailedScript -ScriptName 'MemoryOptimized_FileGroup' -ErrorMessage $fgError -Folder '00_FileGroups' -IsFinal $true
-              # Continue - don't abort the entire import for this
+              Add-FailedScript -ScriptName 'MemoryOptimized_FileGroup' -ErrorMessage $fgError -Folder '00_FileGroups'              # Continue - don't abort the entire import for this
             }
           }
           Write-Output "[SUCCESS] Memory-optimized FileGroup(s) created"
@@ -4270,8 +4261,7 @@ try {
       Write-Host "    $shortError" -ForegroundColor DarkRed
 
       # Record for final summary
-      Add-FailedScript -ScriptName $scriptFile.Name -ErrorMessage $errorMsg -Folder $currentFolder -FilePath $scriptFile.FullName -IsFinal $true
-
+      Add-FailedScript -ScriptName $scriptFile.Name -ErrorMessage $errorMsg -Folder $currentFolder -FilePath $scriptFile.FullName
       if (-not $ContinueOnError) {
         # Set flag to abort - but don't throw error so we can still write error log
         $abortAfterStructuralFailure = $true
@@ -4344,8 +4334,7 @@ try {
         Write-Host "    $shortError" -ForegroundColor DarkRed
 
         # Record for final summary
-        Add-FailedScript -ScriptName $scriptFile.Name -ErrorMessage $errorMsg -Folder '15_SecurityPolicies' -FilePath $scriptFile.FullName -IsFinal $true
-
+        Add-FailedScript -ScriptName $scriptFile.Name -ErrorMessage $errorMsg -Folder '15_SecurityPolicies' -FilePath $scriptFile.FullName
         if (-not $ContinueOnError) {
           $abortAfterStructuralFailure = $true
           Write-Host "[ERROR] Security policy script failed. Aborting import after writing error log." -ForegroundColor Red
@@ -4458,8 +4447,7 @@ try {
         Write-Host "    $shortError" -ForegroundColor DarkRed
 
         # Record for final summary
-        Add-FailedScript -ScriptName $scriptFile.Name -ErrorMessage $errorMsg -Folder '16_Data' -FilePath $scriptFile.FullName -IsFinal $true
-
+        Add-FailedScript -ScriptName $scriptFile.Name -ErrorMessage $errorMsg -Folder '16_Data' -FilePath $scriptFile.FullName
         if (-not $ContinueOnError) {
           break
         }
@@ -4506,8 +4494,8 @@ try {
               if ($_.Exception.InnerException) {
                 $fkErrorMsg += "`n  Inner: $($_.Exception.InnerException.Message)"
               }
-              Write-Error "  [ERROR] $fkErrorMsg"
-              Add-FailedScript -ScriptName "FK: $($fk.Name)" -ErrorMessage $fkErrorMsg -Folder 'ForeignKeys' -IsFinal $true
+              Write-Host "  [ERROR] $fkErrorMsg" -ForegroundColor Red
+              Add-FailedScript -ScriptName "FK: $($fk.Name)" -ErrorMessage $fkErrorMsg -Folder 'ForeignKeys'
               $errorCount++
             }
           }
@@ -4515,7 +4503,7 @@ try {
       }
 
       if ($errorCount -gt 0) {
-        Write-Error "[ERROR] Foreign key constraint validation failed ($errorCount errors) - data may violate referential integrity"
+        Write-Host "[ERROR] Foreign key constraint validation failed ($errorCount errors) - data may violate referential integrity" -ForegroundColor Red
         $failureCount++
       }
       elseif ($fkCount -gt 0) {
@@ -4530,8 +4518,8 @@ try {
       if ($_.Exception.InnerException) {
         $fkConnError += "`n  Inner: $($_.Exception.InnerException.Message)"
       }
-      Write-Error "[ERROR] $fkConnError"
-      Add-FailedScript -ScriptName 'FK: Connection' -ErrorMessage $fkConnError -Folder 'ForeignKeys' -IsFinal $true
+      Write-Host "[ERROR] $fkConnError" -ForegroundColor Red
+      Add-FailedScript -ScriptName 'FK: Connection' -ErrorMessage $fkConnError -Folder 'ForeignKeys'
       $failureCount++
     }
     finally {
