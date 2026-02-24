@@ -3989,7 +3989,8 @@ try {
                 $fgError += "`n  Inner: $($_.Exception.InnerException.Message)"
               }
               Write-Host "  [ERROR] $fgError" -ForegroundColor Red
-              Add-FailedScript -ScriptName 'MemoryOptimized_FileGroup' -ErrorMessage $fgError -Folder '00_FileGroups'              # Continue - don't abort the entire import for this
+              # Continue - don't abort the entire import for this
+              Add-FailedScript -ScriptName 'MemoryOptimized_FileGroup' -ErrorMessage $fgError -Folder '00_FileGroups'
             }
           }
           Write-Output "[SUCCESS] Memory-optimized FileGroup(s) created"
