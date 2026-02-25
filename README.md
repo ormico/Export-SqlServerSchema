@@ -199,6 +199,10 @@ DbScripts/
 | `-MaxWorkers` | No | Max parallel workers (1-20, default: 5) |
 | `-DeltaFrom` | No | Path to previous export for incremental/delta export |
 | `-Credential` | No | SQL authentication credentials |
+| `-ServerFromEnv` | No | Env var name for server address (e.g., SQLCMD_SERVER) |
+| `-UsernameFromEnv` | No | Env var name for username (e.g., SQLCMD_USER) |
+| `-PasswordFromEnv` | No | Env var name for password (e.g., SQLCMD_PASSWORD) |
+| `-TrustServerCertificate` | No | Trust SQL Server certificate (for containers/self-signed) |
 | `-TargetSqlVersion` | No | Target SQL version (default: Sql2022) |
 | `-IncludeObjectTypes` | No | Whitelist: Only export specified types (e.g., Tables,Views) |
 | `-ExcludeObjectTypes` | No | Blacklist: Export all except specified types (e.g., Data) |
@@ -224,6 +228,10 @@ DbScripts/
 | `-ExcludeObjectTypes` | No | Blacklist: Import all except specified types (e.g., WindowsUsers) |
 | `-ExcludeSchemas` | No | Exclude scripts by schema prefix (e.g., cdc,staging) |
 | `-Credential` | No | SQL authentication credentials |
+| `-ServerFromEnv` | No | Env var name for server address (e.g., SQLCMD_SERVER) |
+| `-UsernameFromEnv` | No | Env var name for username (e.g., SQLCMD_USER) |
+| `-PasswordFromEnv` | No | Env var name for password (e.g., SQLCMD_PASSWORD) |
+| `-TrustServerCertificate` | No | Trust SQL Server certificate (for containers/self-signed) |
 | `-Force` | No | Skip existing schema check (required for multi-pass imports) |
 | `-ContinueOnError` | No | Continue on script errors |
 | `-ShowSQL` | No | Display SQL scripts during execution |
@@ -255,6 +263,52 @@ DbScripts/
 - Full fidelity deployment for staging/production
 
 **Selective Overrides**: Command-line parameters override mode defaults and config file settings.
+
+## Container and CI/CD Usage
+
+The toolkit supports credential injection via environment variables, making it easy to use in containers and CI/CD pipelines without building `PSCredential` objects in bash.
+
+### Environment Variable Credentials
+
+```powershell
+# Export using env var credentials
+./Export-SqlServerSchema.ps1 -Server $SERVER -Database $DB \
+    -UsernameFromEnv SQLCMD_USER -PasswordFromEnv SQLCMD_PASSWORD \
+    -TrustServerCertificate
+
+# Import using env var credentials
+./Import-SqlServerSchema.ps1 -Server $SERVER -Database $DB \
+    -SourcePath ./DbScripts/... \
+    -UsernameFromEnv SQLCMD_USER -PasswordFromEnv SQLCMD_PASSWORD \
+    -TrustServerCertificate -CreateDatabase
+```
+
+### YAML Config File (connection section)
+
+```yaml
+connection:
+  serverFromEnv: SQLCMD_SERVER
+  usernameFromEnv: SQLCMD_USER
+  passwordFromEnv: SQLCMD_PASSWORD
+  trustServerCertificate: true
+```
+
+### Credential Precedence
+
+1. Explicit `-Credential` / `-Server` command-line parameters (highest)
+2. `*FromEnv` command-line parameters
+3. Config file `connection:` section
+4. Defaults (Windows authentication)
+
+### Docker Example
+
+```bash
+export SQLCMD_USER=sa
+export SQLCMD_PASSWORD=$SA_PASSWORD
+pwsh /scripts/Export-SqlServerSchema.ps1 -Server $SERVER -Database $DB \
+    -UsernameFromEnv SQLCMD_USER -PasswordFromEnv SQLCMD_PASSWORD \
+    -TrustServerCertificate
+```
 
 ## Delta Export (Incremental)
 

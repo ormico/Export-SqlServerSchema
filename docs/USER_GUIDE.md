@@ -218,6 +218,26 @@ Settings can be specified via:
 | `retryDelaySeconds` | int | 2 | Initial retry delay in seconds (1-60) |
 | `trustServerCertificate` | bool | false | Trust self-signed certificates (for dev/Docker) |
 
+#### Connection Settings (`connection:`)
+
+| Property | Type | Default | Description |
+|----------|------|---------|-------------|
+| `serverFromEnv` | string | none | Env var name containing server address |
+| `usernameFromEnv` | string | none | Env var name containing username |
+| `passwordFromEnv` | string | none | Env var name containing password |
+| `trustServerCertificate` | bool | false | Trust self-signed certificates |
+
+These settings enable credential injection from environment variables, useful for containers and CI/CD:
+
+```yaml
+connection:
+  usernameFromEnv: SQLCMD_USER
+  passwordFromEnv: SQLCMD_PASSWORD
+  trustServerCertificate: true
+```
+
+Alternatively, use CLI parameters: `-UsernameFromEnv SQLCMD_USER -PasswordFromEnv SQLCMD_PASSWORD -TrustServerCertificate`
+
 #### Export Settings (`export:`)
 
 | Property | Type | Default | Description |
