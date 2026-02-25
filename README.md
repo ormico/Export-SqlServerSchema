@@ -272,14 +272,14 @@ The toolkit supports credential injection via environment variables, making it e
 
 ```powershell
 # Export using env var credentials
-./Export-SqlServerSchema.ps1 -Server $SERVER -Database $DB \
-    -UsernameFromEnv SQLCMD_USER -PasswordFromEnv SQLCMD_PASSWORD \
+./Export-SqlServerSchema.ps1 -Server $SERVER -Database $DB `
+    -UsernameFromEnv SQLCMD_USER -PasswordFromEnv SQLCMD_PASSWORD `
     -TrustServerCertificate
 
 # Import using env var credentials
-./Import-SqlServerSchema.ps1 -Server $SERVER -Database $DB \
-    -SourcePath ./DbScripts/... \
-    -UsernameFromEnv SQLCMD_USER -PasswordFromEnv SQLCMD_PASSWORD \
+./Import-SqlServerSchema.ps1 -Server $SERVER -Database $DB `
+    -SourcePath ./DbScripts/... `
+    -UsernameFromEnv SQLCMD_USER -PasswordFromEnv SQLCMD_PASSWORD `
     -TrustServerCertificate -CreateDatabase
 ```
 
