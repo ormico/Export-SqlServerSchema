@@ -3137,6 +3137,22 @@ function Write-ClrHint {
   Write-Host ''
 }
 
+function Assert-ValidSpConfigureOption {
+  <#
+    .SYNOPSIS
+        Validates that an sp_configure option name is in the allowed set.
+    .DESCRIPTION
+        Prevents SQL injection by rejecting any option name not in the
+        hardcoded allowlist. Throws on invalid input.
+  #>
+  param([string]$OptionName)
+
+  $allowedOptions = @('clr enabled', 'clr strict security', 'show advanced options')
+  if ($OptionName -notin $allowedOptions) {
+    throw "Invalid sp_configure option name: '$OptionName'. Allowed: $($allowedOptions -join ', ')"
+  }
+}
+
 function Set-ClrSpConfigure {
   <#
     .SYNOPSIS
@@ -3160,6 +3176,8 @@ function Set-ClrSpConfigure {
     [string]$OptionName,
     [int]$Value
   )
+
+  Assert-ValidSpConfigureOption -OptionName $OptionName
 
   try {
     # Note: caller is responsible for ensuring 'show advanced options' is enabled
@@ -3196,6 +3214,8 @@ function Get-ClrSpConfigureValue {
     [Microsoft.SqlServer.Management.Smo.Server]$Connection,
     [string]$OptionName
   )
+
+  Assert-ValidSpConfigureOption -OptionName $OptionName
 
   try {
     # Note: caller is responsible for ensuring 'show advanced options' is enabled
