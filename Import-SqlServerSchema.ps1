@@ -14,7 +14,7 @@
     Automatically handles foreign key constraints during data imports and validates referential integrity.
 
 .PARAMETER Server
-    Target SQL Server instance. Required parameter.
+    Target SQL Server instance. Can also be provided via -ServerFromEnv or config file connection.serverFromEnv.
     Examples: 'localhost', 'server\SQLEXPRESS', '192.168.1.100', 'server.database.windows.net'
 
 .PARAMETER Database
@@ -27,6 +27,24 @@
 
 .PARAMETER Credential
     PSCredential object for SQL Server authentication. If not provided, uses integrated Windows authentication.
+
+.PARAMETER ServerFromEnv
+    Name of an environment variable containing the SQL Server address. Only used when -Server is
+    not explicitly provided. Example: -ServerFromEnv SQLCMD_SERVER
+
+.PARAMETER UsernameFromEnv
+    Name of an environment variable containing the SQL authentication username.
+    Must be paired with -PasswordFromEnv. Example: -UsernameFromEnv SQLCMD_USER
+
+.PARAMETER PasswordFromEnv
+    Name of an environment variable containing the SQL authentication password.
+    Must be paired with -UsernameFromEnv. The password is never written to logs or verbose output.
+    Example: -PasswordFromEnv SQLCMD_PASSWORD
+
+.PARAMETER TrustServerCertificate
+    Trust the SQL Server certificate without validation. Required for containers with self-signed
+    certificates. Can also be set via config file (trustServerCertificate: true or
+    connection.trustServerCertificate: true). WARNING: Disables server identity verification.
 
 .PARAMETER ImportMode
     Import mode: 'Dev' (default, schema-only) or 'Prod' (full infrastructure with FileGroups, configs).
@@ -72,6 +90,11 @@
     ./Import-SqlServerSchema.ps1 -Server localhost -Database TargetDb `
         -SourcePath ".\DbScripts\..." -ContinueOnError
 
+    # Import in a container using environment variables for credentials
+    ./Import-SqlServerSchema.ps1 -Server $env:SQLCMD_SERVER -Database TargetDb `
+        -SourcePath ".\DbScripts\..." `
+        -UsernameFromEnv SQLCMD_USER -PasswordFromEnv SQLCMD_PASSWORD -TrustServerCertificate
+
 .NOTES
     Requires: SQL Server Management Objects (SMO), PowerShell 7.0+
     Optional: powershell-yaml module for YAML config file support
@@ -81,7 +104,7 @@
 
 [CmdletBinding()]
 param(
-  [Parameter(Mandatory = $true, HelpMessage = 'Target SQL Server instance')]
+  [Parameter(HelpMessage = 'Target SQL Server instance. Can also be provided via -ServerFromEnv or config connection.serverFromEnv')]
   [string]$Server,
 
   [Parameter(Mandatory = $true, HelpMessage = 'Target database name')]
@@ -157,7 +180,19 @@ param(
   [switch]$StripAlwaysEncrypted,
 
   [Parameter(HelpMessage = 'Show required encryption secrets for this export and generate suggested YAML config, then exit without importing')]
-  [switch]$ShowRequiredSecrets
+  [switch]$ShowRequiredSecrets,
+
+  [Parameter(HelpMessage = 'Environment variable name containing the server address (e.g., -ServerFromEnv SQLCMD_SERVER)')]
+  [string]$ServerFromEnv,
+
+  [Parameter(HelpMessage = 'Environment variable name containing the username (e.g., -UsernameFromEnv SQLCMD_USER)')]
+  [string]$UsernameFromEnv,
+
+  [Parameter(HelpMessage = 'Environment variable name containing the password (e.g., -PasswordFromEnv SQLCMD_PASSWORD)')]
+  [string]$PasswordFromEnv,
+
+  [Parameter(HelpMessage = 'Trust the SQL Server certificate without validation. Required for containers with self-signed certificates.')]
+  [switch]$TrustServerCertificate
 )
 
 $ErrorActionPreference = if ($ContinueOnError) { 'Continue' } else { 'Stop' }
@@ -214,6 +249,121 @@ $script:PrelimStopwatch = $null
 $script:ScriptCollectStopwatch = $null
 $script:ScriptStopwatch = $null
 $script:FKStopwatch = $null
+
+#region Credential Resolution from Environment Variables
+
+function Resolve-EnvCredential {
+  <#
+    .SYNOPSIS
+        Resolves credential and connection parameters from environment variables.
+    .DESCRIPTION
+        Builds a PSCredential from environment variable names specified via *FromEnv parameters
+        or config file connection section. Follows precedence:
+          1. Explicit -Credential / -Server command-line parameters (highest)
+          2. *FromEnv command-line parameters
+          3. Config file connection: section
+          4. Defaults (Windows auth, no overrides)
+    .OUTPUTS
+        Hashtable with resolved Server, Credential, and TrustServerCertificate values.
+  #>
+  param(
+    [string]$ServerParam,
+    [pscredential]$CredentialParam,
+    [string]$ServerFromEnvParam,
+    [string]$UsernameFromEnvParam,
+    [string]$PasswordFromEnvParam,
+    [bool]$TrustServerCertificateParam,
+    [hashtable]$Config,
+    [hashtable]$BoundParameters
+  )
+
+  $result = @{
+    Server                 = $ServerParam
+    Credential             = $CredentialParam
+    TrustServerCertificate = $TrustServerCertificateParam
+  }
+
+  # --- Resolve TrustServerCertificate ---
+  # CLI switch > config connection section > config root-level > default (false)
+  if (-not $BoundParameters.ContainsKey('TrustServerCertificate')) {
+    $trustResolved = $false
+    if ($Config -and $Config.ContainsKey('connection') -and $Config.connection -is [System.Collections.IDictionary]) {
+      if ($Config.connection.ContainsKey('trustServerCertificate')) {
+        $result.TrustServerCertificate = [bool]$Config.connection.trustServerCertificate
+        $trustResolved = $true
+      }
+    }
+    # Only fall back to root-level if connection section didn't specify it
+    if (-not $trustResolved -and $Config -and $Config.ContainsKey('trustServerCertificate')) {
+      $result.TrustServerCertificate = [bool]$Config.trustServerCertificate
+    }
+  }
+
+  # --- Resolve Server from env ---
+  # CLI -Server > -ServerFromEnv > config connection.serverFromEnv
+  if (-not $BoundParameters.ContainsKey('Server') -or [string]::IsNullOrWhiteSpace($ServerParam)) {
+    $serverEnvName = $ServerFromEnvParam
+    if (-not $serverEnvName -and $Config -and $Config.ContainsKey('connection') -and $Config.connection -is [System.Collections.IDictionary]) {
+      if ($Config.connection.ContainsKey('serverFromEnv')) {
+        $serverEnvName = $Config.connection.serverFromEnv
+      }
+    }
+
+    if ($serverEnvName) {
+      $envValue = [System.Environment]::GetEnvironmentVariable($serverEnvName)
+      if ([string]::IsNullOrWhiteSpace($envValue)) {
+        throw "Environment variable '$serverEnvName' (specified via ServerFromEnv) is not set or is empty."
+      }
+      $result.Server = $envValue
+      Write-Verbose "[ENV] Server resolved from environment variable '$serverEnvName'"
+    }
+  }
+
+  # --- Resolve Credential from env ---
+  # CLI -Credential > *FromEnv params > config connection.*FromEnv
+  if (-not $BoundParameters.ContainsKey('Credential') -or $null -eq $CredentialParam) {
+    $usernameEnvName = $UsernameFromEnvParam
+    $passwordEnvName = $PasswordFromEnvParam
+
+    # Fall back to config file connection section
+    if ($Config -and $Config.ContainsKey('connection') -and $Config.connection -is [System.Collections.IDictionary]) {
+      if (-not $usernameEnvName -and $Config.connection.ContainsKey('usernameFromEnv')) {
+        $usernameEnvName = $Config.connection.usernameFromEnv
+      }
+      if (-not $passwordEnvName -and $Config.connection.ContainsKey('passwordFromEnv')) {
+        $passwordEnvName = $Config.connection.passwordFromEnv
+      }
+    }
+
+    # Both username and password env vars must be specified together
+    if ($usernameEnvName -or $passwordEnvName) {
+      if (-not $usernameEnvName) {
+        throw "PasswordFromEnv is specified but UsernameFromEnv is missing. Both are required for SQL authentication."
+      }
+      if (-not $passwordEnvName) {
+        throw "UsernameFromEnv is specified but PasswordFromEnv is missing. Both are required for SQL authentication."
+      }
+
+      $usernameValue = [System.Environment]::GetEnvironmentVariable($usernameEnvName)
+      $passwordValue = [System.Environment]::GetEnvironmentVariable($passwordEnvName)
+
+      if ([string]::IsNullOrWhiteSpace($usernameValue)) {
+        throw "Environment variable '$usernameEnvName' (specified via UsernameFromEnv) is not set or is empty."
+      }
+      if ([string]::IsNullOrWhiteSpace($passwordValue)) {
+        throw "Environment variable '$passwordEnvName' (specified via PasswordFromEnv) is not set or is empty."
+      }
+
+      $securePassword = ConvertTo-SecureString $passwordValue -AsPlainText -Force
+      $result.Credential = [System.Management.Automation.PSCredential]::new($usernameValue, $securePassword)
+      Write-Verbose "[ENV] Credential resolved from environment variables '$usernameEnvName' and '$passwordEnvName'"
+    }
+  }
+
+  return $result
+}
+
+#endregion
 
 #region Helper Functions
 
@@ -564,7 +714,10 @@ function Get-TargetServerOS {
       $tempConnection.ConnectionContext.set_Login($Cred.UserName)
       $tempConnection.ConnectionContext.set_SecurePassword($Cred.Password)
     }
-    if ($Config -and $Config.ContainsKey('trustServerCertificate') -and $Config.trustServerCertificate) {
+    if ($script:TrustServerCertificateEnabled) {
+      $tempConnection.ConnectionContext.TrustServerCertificate = $true
+    }
+    elseif ($Config -and $Config.ContainsKey('trustServerCertificate') -and $Config.trustServerCertificate) {
       $tempConnection.ConnectionContext.TrustServerCertificate = $true
     }
     $tempConnection.ConnectionContext.Connect()
@@ -1385,7 +1538,10 @@ function Test-DatabaseConnection {
       $server.ConnectionContext.ConnectTimeout = $Timeout
 
       # Apply TrustServerCertificate from config if specified
-      if ($Config -and $Config.ContainsKey('trustServerCertificate')) {
+      if ($script:TrustServerCertificateEnabled) {
+        $server.ConnectionContext.TrustServerCertificate = $true
+      }
+      elseif ($Config -and $Config.ContainsKey('trustServerCertificate')) {
         $server.ConnectionContext.TrustServerCertificate = $Config.trustServerCertificate
       }
 
@@ -1419,7 +1575,7 @@ RECOMMENDED SOLUTIONS (in order of preference):
    - Maintains server identity verification
 
 3. DEVELOPMENT ONLY: Disable certificate validation (SECURITY RISK)
-   - Add to your config file: trustServerCertificate: true
+   - Use -TrustServerCertificate switch or add to your config file: trustServerCertificate: true
    - WARNING: This disables server identity verification and allows
      man-in-the-middle attacks. Use ONLY in isolated dev environments.
 
@@ -1470,7 +1626,10 @@ function Test-DatabaseExists {
       }
 
       # Apply TrustServerCertificate from config if specified
-      if ($Config -and $Config.ContainsKey('trustServerCertificate')) {
+      if ($script:TrustServerCertificateEnabled) {
+        $server.ConnectionContext.TrustServerCertificate = $true
+      }
+      elseif ($Config -and $Config.ContainsKey('trustServerCertificate')) {
         $server.ConnectionContext.TrustServerCertificate = $Config.trustServerCertificate
       }
 
@@ -1526,7 +1685,10 @@ function Test-SchemaExists {
       }
 
       # Apply TrustServerCertificate from config if specified
-      if ($Config -and $Config.ContainsKey('trustServerCertificate')) {
+      if ($script:TrustServerCertificateEnabled) {
+        $server.ConnectionContext.TrustServerCertificate = $true
+      }
+      elseif ($Config -and $Config.ContainsKey('trustServerCertificate')) {
         $server.ConnectionContext.TrustServerCertificate = $Config.trustServerCertificate
       }
 
@@ -1588,8 +1750,11 @@ function New-Database {
       $server.ConnectionContext.SecurePassword = $Cred.Password
     }
 
-    # Apply TrustServerCertificate from config if specified
-    if ($Config -and $Config.ContainsKey('trustServerCertificate')) {
+    # Apply TrustServerCertificate - resolved from CLI switch, config connection section, or config root
+    if ($script:TrustServerCertificateEnabled) {
+      $server.ConnectionContext.TrustServerCertificate = $true
+    }
+    elseif ($Config -and $Config.ContainsKey('trustServerCertificate')) {
       $server.ConnectionContext.TrustServerCertificate = $Config.trustServerCertificate
     }
 
@@ -1642,8 +1807,11 @@ function New-SqlServerConnection {
   $server.ConnectionContext.DatabaseName = $DatabaseName
   $server.ConnectionContext.StatementTimeout = $Timeout
 
-  # Apply TrustServerCertificate from config if specified
-  if ($Config -and $Config.ContainsKey('trustServerCertificate')) {
+  # Apply TrustServerCertificate - resolved from CLI switch, config connection section, or config root
+  if ($script:TrustServerCertificateEnabled) {
+    $server.ConnectionContext.TrustServerCertificate = $true
+  }
+  elseif ($Config -and $Config.ContainsKey('trustServerCertificate')) {
     $server.ConnectionContext.TrustServerCertificate = $Config.trustServerCertificate
   }
 
@@ -1662,7 +1830,7 @@ RECOMMENDED SOLUTIONS (in order of preference):
 
 1. PRODUCTION: Install a certificate from a trusted CA on SQL Server
 2. PRODUCTION: Add the SQL Server certificate to your trusted root store
-3. DEVELOPMENT ONLY: Add to config file: trustServerCertificate: true
+3. DEVELOPMENT ONLY: Use -TrustServerCertificate switch or add to config file: trustServerCertificate: true
    WARNING: This disables certificate validation - use ONLY in isolated dev environments.
 
 For more details, see: https://go.microsoft.com/fwlink/?linkid=2226722
@@ -2093,7 +2261,10 @@ function Invoke-SqlScript {
       $server.ConnectionContext.DatabaseName = $DatabaseName
 
       # Apply TrustServerCertificate from config if specified
-      if ($Config -and $Config.ContainsKey('trustServerCertificate')) {
+      if ($script:TrustServerCertificateEnabled) {
+        $server.ConnectionContext.TrustServerCertificate = $true
+      }
+      elseif ($Config -and $Config.ContainsKey('trustServerCertificate')) {
         $server.ConnectionContext.TrustServerCertificate = $Config.trustServerCertificate
       }
 
@@ -2112,7 +2283,7 @@ RECOMMENDED SOLUTIONS (in order of preference):
 
 1. PRODUCTION: Install a certificate from a trusted CA on SQL Server
 2. PRODUCTION: Add the SQL Server certificate to your trusted root store
-3. DEVELOPMENT ONLY: Add to config file: trustServerCertificate: true
+3. DEVELOPMENT ONLY: Use -TrustServerCertificate switch or add to config file: trustServerCertificate: true
    WARNING: This disables certificate validation - use ONLY in isolated dev environments.
 
 For more details, see: https://go.microsoft.com/fwlink/?linkid=2226722
@@ -3556,6 +3727,26 @@ try {
     }
   }
 
+  # Resolve credentials from environment variables (if specified)
+  # Precedence: CLI -Credential/-Server > *FromEnv CLI params > config connection: section > defaults
+  $envResolved = Resolve-EnvCredential `
+    -ServerParam $Server `
+    -CredentialParam $Credential `
+    -ServerFromEnvParam $ServerFromEnv `
+    -UsernameFromEnvParam $UsernameFromEnv `
+    -PasswordFromEnvParam $PasswordFromEnv `
+    -TrustServerCertificateParam $TrustServerCertificate.IsPresent `
+    -Config $config `
+    -BoundParameters $PSBoundParameters
+  $Server = $envResolved.Server
+  $Credential = $envResolved.Credential
+  $script:TrustServerCertificateEnabled = $envResolved.TrustServerCertificate
+
+  # Validate that Server was resolved from at least one source
+  if ([string]::IsNullOrWhiteSpace($Server)) {
+    throw "Server is required. Provide it via -Server, -ServerFromEnv, or config file connection.serverFromEnv."
+  }
+
   # Handle -ShowRequiredSecrets mode (display and exit without importing)
   if ($ShowRequiredSecrets) {
     Write-Output ""
@@ -4802,8 +4993,11 @@ try {
       $smServer.ConnectionContext.ConnectTimeout = $effectiveConnectionTimeout
       $smServer.ConnectionContext.DatabaseName = $Database
 
-      # Apply TrustServerCertificate from config if specified
-      if ($config -and $config.ContainsKey('trustServerCertificate')) {
+      # Apply TrustServerCertificate - resolved from CLI switch, config connection section, or config root
+      if ($script:TrustServerCertificateEnabled) {
+        $smServer.ConnectionContext.TrustServerCertificate = $true
+      }
+      elseif ($config -and $config.ContainsKey('trustServerCertificate')) {
         $smServer.ConnectionContext.TrustServerCertificate = $config.trustServerCertificate
       }
 
@@ -4899,8 +5093,11 @@ try {
       $smServer.ConnectionContext.ConnectTimeout = $effectiveConnectionTimeout
       $smServer.ConnectionContext.DatabaseName = $Database
 
-      # Apply TrustServerCertificate from config if specified
-      if ($config -and $config.ContainsKey('trustServerCertificate')) {
+      # Apply TrustServerCertificate - resolved from CLI switch, config connection section, or config root
+      if ($script:TrustServerCertificateEnabled) {
+        $smServer.ConnectionContext.TrustServerCertificate = $true
+      }
+      elseif ($config -and $config.ContainsKey('trustServerCertificate')) {
         $smServer.ConnectionContext.TrustServerCertificate = $config.trustServerCertificate
       }
 

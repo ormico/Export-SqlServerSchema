@@ -265,7 +265,7 @@ $tables = @($Database.Tables | Where-Object { -not $_.IsSystemObject })
 
 ## 8. Avoiding Interactive Prompts (CRITICAL for AI Agents)
 
-**CRITICAL**: The Export-SqlServerSchema.ps1 and Import-SqlServerSchema.ps1 scripts have **mandatory parameters** that will prompt for input if not provided. Interactive prompts **block terminal execution indefinitely** when run by AI agents, wasting time and credits.
+**CRITICAL**: The Export-SqlServerSchema.ps1 and Import-SqlServerSchema.ps1 scripts have **mandatory parameters** (`-Database`, and `-SourcePath` for Import) that will prompt for input if not provided. `-Server` is no longer mandatory (can be provided via `-ServerFromEnv` or config `connection.serverFromEnv`), but `-Database` and `-SourcePath` still are. Interactive prompts **block terminal execution indefinitely** when run by AI agents, wasting time and credits.
 
 ### 8.1 NEVER Run Scripts Without Required Parameters
 
@@ -343,13 +343,17 @@ Use `-ConfigFile` to provide settings via YAML instead of parameters:
 ### 8.5 Required Parameters Reference
 
 **Export-SqlServerSchema.ps1** mandatory parameters:
-- `-Server` (string) - SQL Server instance name
 - `-Database` (string) - Database name to export
 
+**Export-SqlServerSchema.ps1** required but resolvable parameters:
+- `-Server` (string) - SQL Server instance name. Can be provided via `-ServerFromEnv` or config `connection.serverFromEnv` instead of the CLI parameter.
+
 **Import-SqlServerSchema.ps1** mandatory parameters:
-- `-Server` (string) - SQL Server instance name  
 - `-Database` (string) - Target database name
 - `-SourcePath` (string) - Path to exported scripts folder
+
+**Import-SqlServerSchema.ps1** required but resolvable parameters:
+- `-Server` (string) - SQL Server instance name. Can be provided via `-ServerFromEnv` or config `connection.serverFromEnv` instead of the CLI parameter.
 
 ### 8.6 Subprocess Pattern for Test Scripts
 
@@ -383,4 +387,4 @@ Remove-Item Env:\TEST_USERNAME -ErrorAction SilentlyContinue
 - **Magic Numbers**: Hardcoding IDs or timeouts without named constants or parameters.
 - **Assumed Defaults**: Always specify `-Encoding UTF8` (or generic) when writing files if the default isn't guaranteed.
 - **Interactive Prompts**: Using `Get-Credential`, `Read-Host`, or omitting mandatory parameters.
-- **Omitting Mandatory Parameters**: Calling Export/Import scripts without `-Server` and `-Database`.
+- **Omitting Required Parameters**: Calling Export/Import scripts without `-Database` (and `-Server` unless provided via env var or config).

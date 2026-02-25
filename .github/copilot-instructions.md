@@ -213,8 +213,9 @@ $scriptDirs = Get-ChildItem $SourcePath -Directory |
 ### Parameter Conventions
 
 Both main scripts accept:
-- `-Server` and `-Database` (required)
-- `-Credential` for SQL auth (optional, defaults to Windows auth)
+- `-Server` (optional if provided via `-ServerFromEnv` or config `connection.serverFromEnv`) and `-Database` (required)
+- `-Credential` for SQL auth, or `-UsernameFromEnv`/`-PasswordFromEnv` for env var credentials (optional, defaults to Windows auth)
+- `-TrustServerCertificate` for containers with self-signed certificates
 - `-IncludeData` switch for data export/import
 - Export uses `-OutputPath`, Import uses `-SourcePath`
 
