@@ -89,8 +89,10 @@ function Invoke-ScriptForOutput {
     )
 
     $baseParams = @{
-        Server   = 'invalid-server-autodiscovery-test-99999'
-        Database = 'TestDb_AutoDiscovery'
+        Server            = 'invalid-server-autodiscovery-test-99999'
+        Database          = 'TestDb_AutoDiscovery'
+        ConnectionTimeout = 1
+        CommandTimeout    = 1
     }
 
     # Export needs -OutputPath; Import needs -SourcePath. Check filename only, not the
