@@ -277,7 +277,7 @@ Alternatively, use CLI parameters: `-UsernameFromEnv SQLCMD_USER -PasswordFromEn
 | `fileGroupFileSizeDefaults.sizeKB` | int | 1024 | Initial file size in KB |
 | `fileGroupFileSizeDefaults.fileGrowthKB` | int | 65536 | File growth increment in KB |
 | `externalConnectionStrings` | object | {} | Map external data source names to URLs |
-| `encryptionSecrets` | object | {} | Encryption key passwords (see Section 4.4) |
+| `encryptionSecrets` | object | {} | Encryption key passwords (see Section 4.5) |
 
 ### 3.3 Example Configuration Files
 
@@ -402,7 +402,65 @@ import:
 -   64 MB = 65536 KB
 -   1 GB = 1048576 KB
 
-### 4.4 Encryption Secrets
+### 4.4 Offline Validation and Dry Run
+
+#### -ValidateOnly (No Server Connection Required)
+
+Run a pre-flight config check before touching any server. Useful in CI/CD pipelines to catch configuration errors early.
+
+```powershell
+# Validate export config (no server needed)
+./Export-SqlServerSchema.ps1 -Server "sqlserver" -Database "MyDb" `
+    -OutputPath "./exports" -ConfigFile "./config.yml" -ValidateOnly
+
+# Validate import config and inspect source folder structure (no server needed)
+./Import-SqlServerSchema.ps1 -Server "sqlserver" -Database "MyDb" `
+    -SourcePath "./exports/MyDb_20260225" -ConfigFile "./config.yml" -ValidateOnly
+```
+
+**What `-ValidateOnly` checks:**
+
+| Check | Export | Import |
+|-------|--------|--------|
+| Config YAML syntax | ✓ | ✓ |
+| Known config key names | ✓ | ✓ |
+| Enum values (`targetSqlVersion`, `importMode`) | ✓ | ✓ |
+| Output/source path accessibility | ✓ | ✓ |
+| Environment variables from `*FromEnv` params | ✓ | ✓ |
+| Folder structure with script counts | — | ✓ |
+| Export metadata file (`_export_metadata.json`) | — | ✓ |
+| CLR assembly prerequisite | — | ✓ |
+| AlwaysEncrypted key prerequisite | — | ✓ |
+| Memory-optimized table prerequisite | — | ✓ |
+
+**Exit codes:** 0 on success (warnings are non-fatal), 1 if any errors are found.
+
+#### -WhatIf (Dry Run)
+
+Standard PowerShell `SupportsShouldProcess` support. Connects to the server, shows what would happen, then exits without making any changes.
+
+```powershell
+# Preview export (connects but creates no files)
+./Export-SqlServerSchema.ps1 -Server "localhost" -Database "MyDb" -WhatIf
+
+# Preview import (connects but runs no SQL, skips DB creation)
+./Import-SqlServerSchema.ps1 -Server "localhost" -Database "MyDb" `
+    -SourcePath "./exports/MyDb_20260225" -WhatIf
+```
+
+#### -TestConnection (Connectivity Smoke Test)
+
+Verify server access and permissions without performing the full operation.
+
+```powershell
+./Export-SqlServerSchema.ps1 -Server "sqlserver" -Database "MyDb" -TestConnection
+./Import-SqlServerSchema.ps1 -Server "sqlserver" -Database "MyDb" `
+    -SourcePath "./exports/MyDb" -TestConnection
+```
+
+Prints server version and edition, then exits 0. Non-zero on connection failure. Useful for container health checks.
+
+### 4.5 Encryption Secrets
 
 When importing databases that use encryption features (Database Master Key, Symmetric Keys, Certificates with private keys, Application Roles), you must provide the encryption passwords. SQL Server cannot export these passwords, so they must be supplied during import.
 

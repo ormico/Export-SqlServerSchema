@@ -56,9 +56,10 @@ If you want to test individual components:
 
 ## Test Files
 
-- **run-integration-test.ps1** - Comprehensive end-to-end test (8 steps)
+- **run-integration-test.ps1** - Comprehensive end-to-end test (includes -WhatIf and -TestConnection)
 - **setup-test-db.ps1** - Creates test database with sample schema
 - **test-schema.sql** - Test database schema definition with comprehensive object coverage
+- **test-validate-only.ps1** - Offline -ValidateOnly tests (39 tests, no server required)
 - **.env** - Configuration file (copy from .env.example)
 
 ## Test Database Coverage
