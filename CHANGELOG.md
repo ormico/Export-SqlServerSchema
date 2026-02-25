@@ -20,6 +20,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+**Config File Auto-Discovery (#59)**
+- Both `Export-SqlServerSchema.ps1` and `Import-SqlServerSchema.ps1` now automatically discover a config file when `-ConfigFile` is not provided
+- Search order: script directory first, then current working directory
+- Well-known filenames checked (in order): `export-import-config.yml`, `export-import-config.yaml`
+- A clear `[INFO]` message is printed indicating whether a config was auto-discovered or defaults are being used
+- Explicit `-ConfigFile` parameter still takes precedence and bypasses discovery entirely
+- New test suite: `tests/test-config-auto-discovery.ps1` (18 tests; no SQL Server required)
+
 **Offline Validation, Dry Run, and Connectivity Test (#60)**
 - New `-ValidateOnly` switch on both Export and Import scripts for offline configuration checks with no server connection required
   - Validates YAML config syntax, key names, and enum values (`targetSqlVersion`, `importMode`)

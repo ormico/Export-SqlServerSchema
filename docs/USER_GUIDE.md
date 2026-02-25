@@ -160,6 +160,24 @@ Settings can be specified via:
 2. **YAML configuration file** (middle priority)
 3. **Default values** (lowest priority)
 
+### Config File Auto-Discovery
+
+When the `-ConfigFile` parameter is not provided, both scripts automatically search for a config file so you do not need to specify it on every run.
+
+**Well-known file names** (searched in order):
+1. `export-import-config.yml`
+2. `export-import-config.yaml`
+
+**Search locations** (in priority order):
+1. Script directory (`$PSScriptRoot`) — for repos where the config lives next to the scripts
+2. Current working directory (`$PWD`) — for projects where you invoke the scripts from the repo root
+
+The first match wins. If no file is found the scripts continue with built-in defaults; no warning or error is raised.
+
+**Typical workflow**: commit a `export-import-config.yml` to your repo root (or alongside the scripts) and invoke the scripts without `-ConfigFile`. The right config is picked up automatically.
+
+An explicit `-ConfigFile` parameter always overrides auto-discovery.
+
 ### 3.1 Command-Line Parameters
 
 #### Export-SqlServerSchema.ps1
