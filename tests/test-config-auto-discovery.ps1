@@ -97,13 +97,15 @@ function Invoke-ScriptForOutput {
 
     # Export needs -OutputPath; Import needs -SourcePath. Check filename only, not the
     # full path (which contains 'Export-SqlServerSchema' in the directory name).
+    $tempScriptPath = $null
     if ((Split-Path $ScriptPath -Leaf) -like 'Export-*') {
-        $baseParams['OutputPath'] = Join-Path ([System.IO.Path]::GetTempPath()) ('exp_' + [System.Guid]::NewGuid().ToString('N').Substring(0, 6))
+        $tempScriptPath = Join-Path ([System.IO.Path]::GetTempPath()) ('exp_' + [System.Guid]::NewGuid().ToString('N').Substring(0, 6))
+        $baseParams['OutputPath'] = $tempScriptPath
     }
     else {
-        $sourceDir = Join-Path ([System.IO.Path]::GetTempPath()) ('src_' + [System.Guid]::NewGuid().ToString('N').Substring(0, 6))
-        New-Item -ItemType Directory -Path $sourceDir -Force | Out-Null
-        $baseParams['SourcePath'] = $sourceDir
+        $tempScriptPath = Join-Path ([System.IO.Path]::GetTempPath()) ('src_' + [System.Guid]::NewGuid().ToString('N').Substring(0, 6))
+        New-Item -ItemType Directory -Path $tempScriptPath -Force | Out-Null
+        $baseParams['SourcePath'] = $tempScriptPath
     }
 
     $allParams = $baseParams + $ExtraParams
@@ -128,6 +130,7 @@ try { & $(ConvertTo-Json $ScriptPath -Compress) $argStr *>&1 } catch {}
     }
     finally {
         Remove-Item $wrapperPs1 -ErrorAction SilentlyContinue
+        if ($tempScriptPath) { Remove-Item $tempScriptPath -Recurse -Force -ErrorAction SilentlyContinue }
     }
 }
 
