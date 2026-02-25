@@ -5290,7 +5290,7 @@ function Resolve-ConfigFile {
     if (-not $searchPath) { continue }
     foreach ($name in $wellKnownNames) {
       $candidate = Join-Path $searchPath $name
-      if (Test-Path $candidate) {
+      if (Test-Path -LiteralPath $candidate -PathType Leaf) {
         return $candidate
       }
     }
