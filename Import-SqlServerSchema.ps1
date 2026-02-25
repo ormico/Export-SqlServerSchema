@@ -14,7 +14,7 @@
     Automatically handles foreign key constraints during data imports and validates referential integrity.
 
 .PARAMETER Server
-    Target SQL Server instance. Required parameter.
+    Target SQL Server instance. Can also be provided via -ServerFromEnv or config file connection.serverFromEnv.
     Examples: 'localhost', 'server\SQLEXPRESS', '192.168.1.100', 'server.database.windows.net'
 
 .PARAMETER Database
@@ -104,7 +104,7 @@
 
 [CmdletBinding()]
 param(
-  [Parameter(Mandatory = $true, HelpMessage = 'Target SQL Server instance')]
+  [Parameter(HelpMessage = 'Target SQL Server instance. Can also be provided via -ServerFromEnv or config connection.serverFromEnv')]
   [string]$Server,
 
   [Parameter(Mandatory = $true, HelpMessage = 'Target database name')]
@@ -3535,6 +3535,11 @@ try {
   $Server = $envResolved.Server
   $Credential = $envResolved.Credential
   $script:TrustServerCertificateEnabled = $envResolved.TrustServerCertificate
+
+  # Validate that Server was resolved from at least one source
+  if ([string]::IsNullOrWhiteSpace($Server)) {
+    throw "Server is required. Provide it via -Server, -ServerFromEnv, or config file connection.serverFromEnv."
+  }
 
   # Handle -ShowRequiredSecrets mode (display and exit without importing)
   if ($ShowRequiredSecrets) {

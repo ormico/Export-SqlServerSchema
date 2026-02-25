@@ -368,12 +368,6 @@ connection:
     $errorOutput = $output | Out-String
     $connectionFailed = $errorOutput -match 'Connection failed|could not|error|timeout' -or $null -eq (Get-ChildItem $testExportPath9 -Directory -ErrorAction SilentlyContinue | Select-Object -First 1)
 
-    # Now test that ServerFromEnv DOES work when we use config-only approach
-    # (Since -Server is Mandatory, we can't omit it. The ServerFromEnv in config
-    # only applies when -Server is not in BoundParameters - but it's Mandatory so it always is.
-    # So ServerFromEnv really shines when Server is provided but empty or via config.)
-    # For the test, let's verify the env var resolved correctly in the config-only test (Test 7 variant)
-
     Write-TestResult "CLI -Server takes precedence over -ServerFromEnv" $connectionFailed
 } catch {
     Write-TestResult "CLI -Server takes precedence over -ServerFromEnv" $true
@@ -381,6 +375,91 @@ connection:
     [System.Environment]::SetEnvironmentVariable($envServerVar9, $null, [System.EnvironmentVariableTarget]::Process)
     [System.Environment]::SetEnvironmentVariable($envUserVar9, $null, [System.EnvironmentVariableTarget]::Process)
     [System.Environment]::SetEnvironmentVariable($envPassVar9, $null, [System.EnvironmentVariableTarget]::Process)
+}
+
+# --- Test 9b: ServerFromEnv works without -Server (Server is now optional) ---
+Write-Host "`n[INFO] Test 9b: Export with ServerFromEnv and no -Server parameter" -ForegroundColor Cyan
+
+$envServerVar9b = "TEST_SQLCMD_SERVER_$(Get-Random)"
+$envUserVar9b = "TEST_SQLCMD_USER_$(Get-Random)"
+$envPassVar9b = "TEST_SQLCMD_PASS_$(Get-Random)"
+[System.Environment]::SetEnvironmentVariable($envServerVar9b, $Server, [System.EnvironmentVariableTarget]::Process)
+[System.Environment]::SetEnvironmentVariable($envUserVar9b, $Username, [System.EnvironmentVariableTarget]::Process)
+[System.Environment]::SetEnvironmentVariable($envPassVar9b, $Password, [System.EnvironmentVariableTarget]::Process)
+
+try {
+    $testExportPath9b = Join-Path $ExportPath "env_test9b"
+    if (Test-Path $testExportPath9b) { Remove-Item $testExportPath9b -Recurse -Force }
+
+    # Export with NO -Server, relying entirely on ServerFromEnv
+    $output = & $exportScript -Database $SourceDatabase `
+        -ServerFromEnv $envServerVar9b `
+        -UsernameFromEnv $envUserVar9b -PasswordFromEnv $envPassVar9b `
+        -TrustServerCertificate -OutputPath $testExportPath9b 2>&1
+
+    $exportedDir = Get-ChildItem $testExportPath9b -Directory -ErrorAction SilentlyContinue | Select-Object -First 1
+    Write-TestResult "Export with ServerFromEnv (no -Server)" ($null -ne $exportedDir)
+} catch {
+    Write-TestResult "Export with ServerFromEnv (no -Server)" $false "Error: $_"
+} finally {
+    [System.Environment]::SetEnvironmentVariable($envServerVar9b, $null, [System.EnvironmentVariableTarget]::Process)
+    [System.Environment]::SetEnvironmentVariable($envUserVar9b, $null, [System.EnvironmentVariableTarget]::Process)
+    [System.Environment]::SetEnvironmentVariable($envPassVar9b, $null, [System.EnvironmentVariableTarget]::Process)
+}
+
+# --- Test 9c: Missing Server from all sources produces clear error ---
+Write-Host "`n[INFO] Test 9c: Missing Server from all sources produces error" -ForegroundColor Cyan
+
+try {
+    # No -Server, no -ServerFromEnv, no config — should fail with clear error
+    $output = & $exportScript -Database $SourceDatabase `
+        -Credential $credential `
+        -TrustServerCertificate -OutputPath (Join-Path $ExportPath "should_not_exist") 2>&1
+    $errorOutput = $output | Out-String
+    $hasError = $errorOutput -match 'Server is required'
+    Write-TestResult "Missing Server produces clear error" $hasError
+} catch {
+    $hasError = $_.Exception.Message -match 'Server is required'
+    Write-TestResult "Missing Server produces clear error" $hasError
+}
+
+# --- Test 9d: Config serverFromEnv works without -Server ---
+Write-Host "`n[INFO] Test 9d: Config serverFromEnv works without -Server" -ForegroundColor Cyan
+
+$envServerVar9d = "TEST_SQLCMD_SERVER_$(Get-Random)"
+$envUserVar9d = "TEST_SQLCMD_USER_$(Get-Random)"
+$envPassVar9d = "TEST_SQLCMD_PASS_$(Get-Random)"
+[System.Environment]::SetEnvironmentVariable($envServerVar9d, $Server, [System.EnvironmentVariableTarget]::Process)
+[System.Environment]::SetEnvironmentVariable($envUserVar9d, $Username, [System.EnvironmentVariableTarget]::Process)
+[System.Environment]::SetEnvironmentVariable($envPassVar9d, $Password, [System.EnvironmentVariableTarget]::Process)
+
+$configContent9d = @"
+connection:
+  serverFromEnv: $envServerVar9d
+  usernameFromEnv: $envUserVar9d
+  passwordFromEnv: $envPassVar9d
+  trustServerCertificate: true
+"@
+$configPath9d = Join-Path $ExportPath "test-env-server-only-config.yml"
+if (-not (Test-Path $ExportPath)) { New-Item -ItemType Directory -Path $ExportPath -Force | Out-Null }
+$configContent9d | Set-Content -Path $configPath9d
+
+try {
+    $testExportPath9d = Join-Path $ExportPath "env_test9d"
+    if (Test-Path $testExportPath9d) { Remove-Item $testExportPath9d -Recurse -Force }
+
+    # Export with NO -Server, relying entirely on config connection.serverFromEnv
+    $output = & $exportScript -Database $SourceDatabase `
+        -ConfigFile $configPath9d -OutputPath $testExportPath9d 2>&1
+
+    $exportedDir = Get-ChildItem $testExportPath9d -Directory -ErrorAction SilentlyContinue | Select-Object -First 1
+    Write-TestResult "Config serverFromEnv works (no -Server)" ($null -ne $exportedDir)
+} catch {
+    Write-TestResult "Config serverFromEnv works (no -Server)" $false "Error: $_"
+} finally {
+    [System.Environment]::SetEnvironmentVariable($envServerVar9d, $null, [System.EnvironmentVariableTarget]::Process)
+    [System.Environment]::SetEnvironmentVariable($envUserVar9d, $null, [System.EnvironmentVariableTarget]::Process)
+    [System.Environment]::SetEnvironmentVariable($envPassVar9d, $null, [System.EnvironmentVariableTarget]::Process)
 }
 
 # ==============================================================

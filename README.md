@@ -191,7 +191,7 @@ DbScripts/
 
 | Parameter | Required | Description |
 |-----------|----------|-------------|
-| `-Server` | Yes | SQL Server instance |
+| `-Server` | No* | SQL Server instance (*required via CLI, `-ServerFromEnv`, or config) |
 | `-Database` | Yes | Database to export |
 | `-OutputPath` | No | Output directory (default: ./DbScripts) |
 | `-IncludeData` | No | Export table data as INSERT statements |
@@ -217,7 +217,7 @@ DbScripts/
 
 | Parameter | Required | Description |
 |-----------|----------|-------------|
-| `-Server` | Yes | Target SQL Server instance |
+| `-Server` | No* | Target SQL Server instance (*required via CLI, `-ServerFromEnv`, or config) |
 | `-Database` | Yes | Target database name |
 | `-SourcePath` | Yes | Path to exported schema folder |
 | `-ImportMode` | No | Dev (default) or Prod - Controls infrastructure import |

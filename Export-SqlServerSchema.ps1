@@ -18,7 +18,7 @@
 
 .PARAMETER Server
     SQL Server instance (e.g., 'localhost', 'server\SQLEXPRESS', 'server.database.windows.net').
-    Required parameter.
+    Can also be provided via -ServerFromEnv or config file connection.serverFromEnv.
 
 .PARAMETER Database
     Database name to script. Required parameter.
@@ -92,7 +92,7 @@
 
 [CmdletBinding()]
 param(
-  [Parameter(Mandatory = $true, HelpMessage = 'SQL Server instance name')]
+  [Parameter(HelpMessage = 'SQL Server instance name. Can also be provided via -ServerFromEnv or config connection.serverFromEnv')]
   [string]$Server,
 
   [Parameter(Mandatory = $true, HelpMessage = 'Database name')]
@@ -6618,6 +6618,11 @@ try {
   $Server = $envResolved.Server
   $Credential = $envResolved.Credential
   $script:TrustServerCertificateEnabled = $envResolved.TrustServerCertificate
+
+  # Validate that Server was resolved from at least one source
+  if ([string]::IsNullOrWhiteSpace($Server)) {
+    throw "Server is required. Provide it via -Server, -ServerFromEnv, or config file connection.serverFromEnv."
+  }
 
   # Store IncludeData in script scope for parallel workers (Build-WorkItems-Data checks this)
   $script:IncludeData = $IncludeData

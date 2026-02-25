@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+**Environment Variable Credential Injection for Containers and CI/CD (#58)**
+- New `-UsernameFromEnv` and `-PasswordFromEnv` parameters on both Export and Import scripts
+  - Specify environment variable names containing SQL authentication credentials
+  - Passwords are converted to SecureString and never written to logs or verbose output
+- New `-ServerFromEnv` parameter to resolve server address from an environment variable
+- New `-TrustServerCertificate` switch for both scripts (previously config-file-only)
+  - Required for containers with self-signed certificates
+- New YAML config `connection:` section with `serverFromEnv`, `usernameFromEnv`, `passwordFromEnv`, and `trustServerCertificate`
+- Credential precedence: CLI `-Credential`/`-Server` > `*FromEnv` CLI params > config `connection:` section > defaults
+- New test suite: `tests/test-env-credentials.ps1` (14 tests)
+- Documentation updates: README container/CI-CD section, CONFIG_REFERENCE connection section, USER_GUIDE
+
+### Changed (Breaking)
+
+**`-Server` parameter is no longer mandatory**
+- `-Server` can now be omitted if the server address is provided via `-ServerFromEnv` or config `connection.serverFromEnv`
+- Validation still ensures a server is resolved from at least one source; a clear error is shown if missing
+- This is a **breaking change** for scripts that relied on PowerShell's mandatory parameter prompt behavior — those scripts will now need to handle the missing-server error themselves or pass `-Server` explicitly as before
+- All existing call patterns that pass `-Server` continue to work unchanged
+
 **Strip Always Encrypted for Targets Without External Key Stores**
 - New `-StripAlwaysEncrypted` parameter for Import-SqlServerSchema.ps1
 - New `stripAlwaysEncrypted` config option in developerMode/productionMode settings
