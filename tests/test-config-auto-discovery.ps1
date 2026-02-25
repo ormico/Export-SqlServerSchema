@@ -125,7 +125,7 @@ try { & $(ConvertTo-Json $ScriptPath -Compress) $argStr *>&1 } catch {}
 "@ | Set-Content -Path $wrapperPs1 -Encoding UTF8
 
     try {
-        $output = & pwsh -NoLogo -NonInteractive -File $wrapperPs1 2>&1
+        $output = & pwsh -NoLogo -NoProfile -NonInteractive -File $wrapperPs1 2>&1
         return ($output | ForEach-Object { "$_" }) -join "`n"
     }
     finally {
