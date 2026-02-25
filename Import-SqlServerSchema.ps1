@@ -3132,6 +3132,7 @@ function Set-ClrSpConfigure {
         Executes sp_configure to change a server-level setting. Used for
         'clr enabled' and 'clr strict security' options. Handles permission
         errors gracefully with clear warning messages.
+        Caller must ensure 'show advanced options' is already enabled.
     .PARAMETER Connection
         SMO Server connection object.
     .PARAMETER OptionName
@@ -3148,8 +3149,7 @@ function Set-ClrSpConfigure {
   )
 
   try {
-    # Enable advanced options first (required for 'clr strict security' and 'clr enabled')
-    $null = $Connection.ConnectionContext.ExecuteNonQuery("EXEC sp_configure 'show advanced options', 1; RECONFIGURE;")
+    # Note: caller is responsible for ensuring 'show advanced options' is enabled
     $null = $Connection.ConnectionContext.ExecuteNonQuery("EXEC sp_configure '$OptionName', $Value; RECONFIGURE;")
     return $true
   }
@@ -3185,8 +3185,7 @@ function Get-ClrSpConfigureValue {
   )
 
   try {
-    # Enable advanced options first (required for 'clr strict security')
-    $null = $Connection.ConnectionContext.ExecuteNonQuery("EXEC sp_configure 'show advanced options', 1; RECONFIGURE;")
+    # Note: caller is responsible for ensuring 'show advanced options' is enabled
     # Query sys.configurations directly for reliable value retrieval
     $result = $Connection.ConnectionContext.ExecuteWithResults(
       "SELECT CAST(value_in_use AS INT) AS run_value FROM sys.configurations WHERE name = '$OptionName'"
@@ -4446,6 +4445,7 @@ try {
   $clrStrictSecurityChanged = $false
   $clrEnabledChanged = $false
   $clrServerForRestore = $null
+  $showAdvancedOptionsOriginalValue = $null
 
   if ($hasClrAssemblyScripts -and $sqlCmdVars.ContainsKey('__ClrConfig__')) {
     $clrCfg = $sqlCmdVars['__ClrConfig__']
@@ -4471,6 +4471,18 @@ try {
 
       $clrServer.ConnectionContext.Connect()
       $clrServerForRestore = $clrServer
+
+      # Capture and enable 'show advanced options' (required for sp_configure CLR settings)
+      $showAdvResult = $clrServer.ConnectionContext.ExecuteWithResults(
+        "SELECT CAST(value_in_use AS INT) AS run_value FROM sys.configurations WHERE name = 'show advanced options'"
+      )
+      if ($showAdvResult.Tables.Count -gt 0 -and $showAdvResult.Tables[0].Rows.Count -gt 0) {
+        $showAdvancedOptionsOriginalValue = [int]$showAdvResult.Tables[0].Rows[0]['run_value']
+      }
+      if ($showAdvancedOptionsOriginalValue -ne 1) {
+        $null = $clrServer.ConnectionContext.ExecuteNonQuery("EXEC sp_configure 'show advanced options', 1; RECONFIGURE;")
+        Write-Verbose "[CLR] Enabled 'show advanced options' (was: $showAdvancedOptionsOriginalValue)"
+      }
 
       # Enable CLR integration if requested
       if ($clrCfg.enableClr) {
@@ -4660,6 +4672,17 @@ try {
       }
       catch {
         Write-Warning "[WARNING] Error restoring CLR enabled: $($_.Exception.Message)"
+      }
+    }
+
+    # Restore 'show advanced options' if we changed it
+    if ($null -ne $showAdvancedOptionsOriginalValue -and $showAdvancedOptionsOriginalValue -ne 1 -and $clrServerForRestore -and $clrServerForRestore.ConnectionContext.IsOpen) {
+      try {
+        $null = $clrServerForRestore.ConnectionContext.ExecuteNonQuery("EXEC sp_configure 'show advanced options', $showAdvancedOptionsOriginalValue; RECONFIGURE;")
+        Write-Verbose "[CLR] Restored 'show advanced options' to original value: $showAdvancedOptionsOriginalValue"
+      }
+      catch {
+        Write-Warning "[WARNING] Error restoring 'show advanced options': $($_.Exception.Message)"
       }
     }
 
