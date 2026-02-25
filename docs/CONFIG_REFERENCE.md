@@ -8,6 +8,7 @@ Comprehensive reference for the Export-SqlServerSchema YAML configuration file.
 2. [Configuration File Basics](#configuration-file-basics)
 3. [Configuration Property Reference](#configuration-property-reference)
    - [Global Settings](#global-settings)
+   - [Connection Settings](#connection-settings)
    - [Export Settings](#export-settings)
    - [Import Settings](#import-settings)
    - [Developer Mode Settings](#developer-mode-settings)
@@ -161,6 +162,76 @@ trustServerCertificate: true  # Required for Docker/self-signed certs
 ```yaml
 collectMetrics: true  # Enable for performance analysis
 ```
+
+### Connection Settings
+
+The `connection:` section enables credential injection from environment variables. This is useful for containers, CI/CD pipelines, and any scenario where secrets are provided as environment variables.
+
+#### `connection.serverFromEnv`
+
+- **Type**: String
+- **Default**: none
+- **Description**: Name of an environment variable containing the SQL Server address
+- **Precedence**: Only used when `-Server` is not explicitly provided on the command line
+
+```yaml
+connection:
+  serverFromEnv: SQLCMD_SERVER
+```
+
+#### `connection.usernameFromEnv`
+
+- **Type**: String
+- **Default**: none
+- **Description**: Name of an environment variable containing the SQL authentication username
+- **Requirement**: Must be paired with `passwordFromEnv`
+
+```yaml
+connection:
+  usernameFromEnv: SQLCMD_USER
+```
+
+#### `connection.passwordFromEnv`
+
+- **Type**: String
+- **Default**: none
+- **Description**: Name of an environment variable containing the SQL authentication password
+- **Requirement**: Must be paired with `usernameFromEnv`
+- **Security**: The password value is never written to verbose output, error logs, or error tracking
+
+```yaml
+connection:
+  passwordFromEnv: SQLCMD_PASSWORD
+```
+
+#### `connection.trustServerCertificate`
+
+- **Type**: Boolean
+- **Default**: `false`
+- **Description**: Trust server certificates without validation (same as root-level `trustServerCertificate`)
+- **Note**: The root-level `trustServerCertificate` setting continues to work. This is an alternative location within the `connection:` section.
+
+```yaml
+connection:
+  trustServerCertificate: true
+```
+
+#### Complete Connection Example
+
+```yaml
+connection:
+  serverFromEnv: SQLCMD_SERVER
+  usernameFromEnv: SQLCMD_USER
+  passwordFromEnv: SQLCMD_PASSWORD
+  trustServerCertificate: true
+```
+
+#### Credential Precedence
+
+1. **Explicit CLI parameters** (`-Credential`, `-Server`) — highest priority
+2. **CLI `*FromEnv` parameters** (`-UsernameFromEnv`, `-PasswordFromEnv`, `-ServerFromEnv`)
+3. **Config file `connection:` section** (`connection.usernameFromEnv`, etc.)
+4. **Default** — Windows integrated authentication
 
 #### `targetSqlVersion`
 

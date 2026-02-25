@@ -166,7 +166,7 @@ Settings can be specified via:
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `-Server` | string | *required* | SQL Server instance (e.g., 'localhost', 'server\\SQLEXPRESS') |
+| `-Server` | string | *see note* | SQL Server instance. Required via CLI, `-ServerFromEnv`, or config `connection.serverFromEnv` |
 | `-Database` | string | *required* | Database name to export |
 | `-OutputPath` | string | ./DbScripts | Output directory for exported scripts |
 | `-TargetSqlVersion` | string | Sql2022 | Target SQL version: Sql2012, Sql2014, Sql2016, Sql2017, Sql2019, Sql2022 |
@@ -188,7 +188,7 @@ Settings can be specified via:
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `-Server` | string | *required* | Target SQL Server instance |
+| `-Server` | string | *see note* | Target SQL Server instance. Required via CLI, `-ServerFromEnv`, or config `connection.serverFromEnv` |
 | `-Database` | string | *required* | Target database name |
 | `-SourcePath` | string | *required* | Path to exported schema folder |
 | `-ImportMode` | string | Dev | Import mode: Dev or Prod |
@@ -217,6 +217,26 @@ Settings can be specified via:
 | `maxRetries` | int | 3 | Max retry attempts for transient failures (1-10) |
 | `retryDelaySeconds` | int | 2 | Initial retry delay in seconds (1-60) |
 | `trustServerCertificate` | bool | false | Trust self-signed certificates (for dev/Docker) |
+
+#### Connection Settings (`connection:`)
+
+| Property | Type | Default | Description |
+|----------|------|---------|-------------|
+| `serverFromEnv` | string | none | Env var name containing server address |
+| `usernameFromEnv` | string | none | Env var name containing username |
+| `passwordFromEnv` | string | none | Env var name containing password |
+| `trustServerCertificate` | bool | false | Trust self-signed certificates |
+
+These settings enable credential injection from environment variables, useful for containers and CI/CD:
+
+```yaml
+connection:
+  usernameFromEnv: SQLCMD_USER
+  passwordFromEnv: SQLCMD_PASSWORD
+  trustServerCertificate: true
+```
+
+Alternatively, use CLI parameters: `-UsernameFromEnv SQLCMD_USER -PasswordFromEnv SQLCMD_PASSWORD -TrustServerCertificate`
 
 #### Export Settings (`export:`)
 
