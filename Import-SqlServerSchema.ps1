@@ -234,6 +234,7 @@ $script:Metrics = @{
   scriptExecutionSeconds   = 0.0
   fkDisableSeconds         = 0.0
   fkEnableSeconds          = 0.0
+  clrConfigSeconds         = 0.0
   scriptsProcessed         = 0
   scriptsSucceeded         = 0
   scriptsFailed            = 0
@@ -3240,6 +3241,170 @@ function Import-YamlConfig {
   }
 }
 
+function Test-ClrAssemblyScript {
+  <#
+    .SYNOPSIS
+        Tests whether a script file is a CLR assembly script.
+    .DESCRIPTION
+        Checks the script path and content to determine if it contains CLR assembly
+        definitions (CREATE ASSEMBLY statements). Used to identify scripts that may
+        require CLR strict security to be disabled.
+    .PARAMETER ScriptFile
+        The script file object to test.
+    .PARAMETER SourcePath
+        The root source path for relative path calculation.
+    .RETURNS
+        $true if the script is a CLR assembly script, $false otherwise.
+  #>
+  param(
+    [System.IO.FileInfo]$ScriptFile,
+    [string]$SourcePath
+  )
+
+  $relativePath = $ScriptFile.FullName.Substring($SourcePath.Length).TrimStart('\', '/')
+
+  # Assembly scripts are in 14_Programmability and have "Assembly" in the filename
+  if ($relativePath -match '14_Programmability' -and $ScriptFile.Name -match '(?i)^Assembly\.') {
+    return $true
+  }
+
+  # Also check for consolidated assembly files (grouped export mode)
+  if ($relativePath -match '14_Programmability' -and $ScriptFile.Name -match '(?i)Assemblies\.sql$') {
+    return $true
+  }
+
+  # Fallback: lightweight content check for scripts that don't follow naming conventions
+  if ($relativePath -match '14_Programmability') {
+    try {
+      $head = Get-Content -Path $ScriptFile.FullName -TotalCount 40 -ErrorAction Stop
+      if ($head -match '(?i)\bCREATE\s+ASSEMBLY\b') {
+        return $true
+      }
+    }
+    catch {
+      Write-Verbose "[CLR] Could not read '$($ScriptFile.Name)' for assembly detection: $($_.Exception.Message)"
+    }
+  }
+
+  return $false
+}
+
+function Write-ClrHint {
+  <#
+    .SYNOPSIS
+        Writes the CLR assembly HINT message to the console.
+    .PARAMETER ImportMode
+        The current import mode ('Dev' or 'Prod').
+  #>
+  param([string]$ImportMode)
+  $modeKey = if ($ImportMode -eq 'Dev') { 'developerMode' } else { 'productionMode' }
+  Write-Host ''
+  Write-Host '[HINT] CLR assembly load failed. If the source database uses unsigned assemblies, try setting:' -ForegroundColor Yellow
+  Write-Host '  import:' -ForegroundColor Yellow
+  Write-Host "    ${modeKey}:" -ForegroundColor Yellow
+  Write-Host '      clr:' -ForegroundColor Yellow
+  Write-Host '        enableClr: true' -ForegroundColor Yellow
+  Write-Host '        disableStrictSecurityForImport: true' -ForegroundColor Yellow
+  Write-Host ''
+}
+
+function Assert-ValidSpConfigureOption {
+  <#
+    .SYNOPSIS
+        Validates that an sp_configure option name is in the allowed set.
+    .DESCRIPTION
+        Prevents SQL injection by rejecting any option name not in the
+        hardcoded allowlist. Throws on invalid input.
+  #>
+  param([string]$OptionName)
+
+  $allowedOptions = @('clr enabled', 'clr strict security', 'show advanced options')
+  if ($OptionName -notin $allowedOptions) {
+    throw "Invalid sp_configure option name: '$OptionName'. Allowed: $($allowedOptions -join ', ')"
+  }
+}
+
+function Set-ClrSpConfigure {
+  <#
+    .SYNOPSIS
+        Sets a SQL Server sp_configure option and runs RECONFIGURE.
+    .DESCRIPTION
+        Executes sp_configure to change a server-level setting. Used for
+        'clr enabled' and 'clr strict security' options. Handles permission
+        errors gracefully with clear warning messages.
+        Caller must ensure 'show advanced options' is already enabled.
+    .PARAMETER Connection
+        SMO Server connection object.
+    .PARAMETER OptionName
+        The sp_configure option name (e.g., 'clr enabled', 'clr strict security').
+    .PARAMETER Value
+        The integer value to set (0 or 1).
+    .RETURNS
+        $true if successful, $false if failed.
+  #>
+  param(
+    [Microsoft.SqlServer.Management.Smo.Server]$Connection,
+    [string]$OptionName,
+    [int]$Value
+  )
+
+  Assert-ValidSpConfigureOption -OptionName $OptionName
+
+  try {
+    # Note: caller is responsible for ensuring 'show advanced options' is enabled
+    $null = $Connection.ConnectionContext.ExecuteNonQuery("EXEC sp_configure '$OptionName', $Value; RECONFIGURE;")
+    return $true
+  }
+  catch {
+    $errorMsg = $_.Exception.Message
+    if ($errorMsg -match 'permission|denied|sysadmin|serveradmin|15247|15248') {
+      Write-Warning "[WARNING] Insufficient permissions to change '$OptionName' via sp_configure"
+      Write-Warning "  This requires sysadmin or serveradmin role on the target server"
+      Write-Warning "  Error: $errorMsg"
+    }
+    else {
+      Write-Warning "[WARNING] Failed to set sp_configure '$OptionName' to $Value"
+      Write-Warning "  Error: $errorMsg"
+    }
+    return $false
+  }
+}
+
+function Get-ClrSpConfigureValue {
+  <#
+    .SYNOPSIS
+        Reads the current value of a SQL Server sp_configure option.
+    .PARAMETER Connection
+        SMO Server connection object.
+    .PARAMETER OptionName
+        The sp_configure option name.
+    .RETURNS
+        The current run_value as an integer, or $null on failure.
+  #>
+  param(
+    [Microsoft.SqlServer.Management.Smo.Server]$Connection,
+    [string]$OptionName
+  )
+
+  Assert-ValidSpConfigureOption -OptionName $OptionName
+
+  try {
+    # Note: caller is responsible for ensuring 'show advanced options' is enabled
+    # Query sys.configurations directly for reliable value retrieval
+    $result = $Connection.ConnectionContext.ExecuteWithResults(
+      "SELECT CAST(value_in_use AS INT) AS run_value FROM sys.configurations WHERE name = '$OptionName'"
+    )
+    if ($result.Tables.Count -gt 0 -and $result.Tables[0].Rows.Count -gt 0) {
+      return [int]$result.Tables[0].Rows[0]['run_value']
+    }
+    return $null
+  }
+  catch {
+    Write-Warning "[WARNING] Could not read sp_configure '$OptionName': $($_.Exception.Message)"
+    return $null
+  }
+}
+
 function Show-ImportConfiguration {
   <#
     .SYNOPSIS
@@ -3381,6 +3546,33 @@ function Show-ImportConfiguration {
   }
   if ($displayStripAlwaysEncrypted) {
     Write-Host "[ENABLED] Strip Always Encrypted (no external key store required)" -ForegroundColor Magenta
+  }
+
+  # Check CLR settings from config
+  $clrSettings = if ($modeSettings.ContainsKey('clr') -and $modeSettings.clr) { $modeSettings.clr } else { @{} }
+  $displayEnableClr = if ($clrSettings.ContainsKey('enableClr')) { $clrSettings.enableClr } else { $false }
+  $displayDisableStrictSecurity = if ($clrSettings.ContainsKey('disableStrictSecurityForImport')) { $clrSettings.disableStrictSecurityForImport } else { $false }
+  $displayRestoreStrictSecurity = if ($clrSettings.ContainsKey('restoreStrictSecuritySetting')) { $clrSettings.restoreStrictSecuritySetting } else { $true }
+  $displayRestoreClrEnabled = if ($clrSettings.ContainsKey('restoreClrEnabledSetting')) { $clrSettings.restoreClrEnabledSetting } else { $true }
+  if ($displayEnableClr -or $displayDisableStrictSecurity) {
+    if ($displayEnableClr) {
+      Write-Host "[ENABLED] CLR Integration (sp_configure 'clr enabled')" -ForegroundColor Magenta
+      if ($displayRestoreClrEnabled) {
+        Write-Host "          (will restore original value after import)" -ForegroundColor Gray
+      }
+      else {
+        Write-Host "          (will NOT restore after import)" -ForegroundColor Yellow
+      }
+    }
+    if ($displayDisableStrictSecurity) {
+      Write-Host "[ENABLED] CLR Strict Security: temporarily disabled for import" -ForegroundColor Magenta
+      if ($displayRestoreStrictSecurity) {
+        Write-Host "          (will restore original value after import)" -ForegroundColor Gray
+      }
+      else {
+        Write-Host "          (will NOT restore after import)" -ForegroundColor Yellow
+      }
+    }
   }
 
   Write-Host ""
@@ -4247,6 +4439,47 @@ try {
     Write-Output "       Encrypted columns will become regular (unencrypted) columns"
   }
 
+  # Check for CLR strict security settings from config
+  # CLR strict security (SQL Server 2017+) blocks unsigned assemblies by default
+  $clrModeSettings = if ($ImportMode -eq 'Dev') {
+    if ($config -and $config.import -and $config.import.developerMode) { $config.import.developerMode } else { @{} }
+  }
+  else {
+    if ($config -and $config.import -and $config.import.productionMode) { $config.import.productionMode } else { @{} }
+  }
+  $clrConfig = if ($clrModeSettings.ContainsKey('clr') -and $clrModeSettings.clr) { $clrModeSettings.clr } else { @{} }
+  $enableClr = if ($clrConfig.ContainsKey('enableClr')) { $clrConfig.enableClr } else { $false }
+  $disableStrictSecurity = if ($clrConfig.ContainsKey('disableStrictSecurityForImport')) { $clrConfig.disableStrictSecurityForImport } else { $false }
+  $restoreStrictSecurity = if ($clrConfig.ContainsKey('restoreStrictSecuritySetting')) { $clrConfig.restoreStrictSecuritySetting } else { $true }
+  $restoreClrEnabled = if ($clrConfig.ContainsKey('restoreClrEnabledSetting')) { $clrConfig.restoreClrEnabledSetting } else { $true }
+
+  if ($enableClr -or $disableStrictSecurity) {
+    $sqlCmdVars['__ClrConfig__'] = @{
+      enableClr                       = $enableClr
+      disableStrictSecurityForImport  = $disableStrictSecurity
+      restoreStrictSecuritySetting    = $restoreStrictSecurity
+      restoreClrEnabledSetting        = $restoreClrEnabled
+    }
+    if ($enableClr) {
+      Write-Output "[INFO] CLR integration: will be enabled on target server (sp_configure 'clr enabled')"
+      if ($restoreClrEnabled) {
+        Write-Output "       Original value will be restored after import completes"
+      }
+      else {
+        Write-Output "       Original value will NOT be restored after import (restoreClrEnabledSetting: false)"
+      }
+    }
+    if ($disableStrictSecurity) {
+      Write-Output "[INFO] CLR strict security: will be temporarily disabled during CLR object import"
+      if ($restoreStrictSecurity) {
+        Write-Output "       Original value will be restored after import completes"
+      }
+      else {
+        Write-Output "       Original value will NOT be restored after import (restoreStrictSecuritySetting: false)"
+      }
+    }
+  }
+
   # Resolve encryption secrets from config (for Database Master Key, Symmetric Keys, etc.)
   # This allows importing databases with encryption objects by providing passwords from secure sources
   $modeSettingsForSecrets = if ($ImportMode -eq 'Dev') {
@@ -4421,6 +4654,113 @@ try {
   # Flag to track if we should abort after structural failures (but still write error log)
   $abortAfterStructuralFailure = $false
 
+  # Check if any scripts are CLR assembly scripts (may be in structural or programmability group)
+  $hasClrAssemblyScripts = $false
+  foreach ($scriptFile in (@($structuralScripts) + @($programmabilityScripts))) {
+    if (Test-ClrAssemblyScript -ScriptFile $scriptFile -SourcePath $SourcePath) {
+      $hasClrAssemblyScripts = $true
+      Write-Verbose "[CLR] Found CLR assembly script: $($scriptFile.Name)"
+      break
+    }
+  }
+
+  # CLR strict security management - disable before any CLR scripts execute
+  $clrStrictSecurityOriginalValue = $null
+  $clrStrictSecurityChanged = $false
+  $clrEnabledOriginalValue = $null
+  $clrEnabledChanged = $false
+  $clrServerForRestore = $null
+  $showAdvancedOptionsOriginalValue = $null
+  $clrHintEmitted = $false
+
+  if ($hasClrAssemblyScripts -and $sqlCmdVars.ContainsKey('__ClrConfig__')) {
+    $clrCfg = $sqlCmdVars['__ClrConfig__']
+    if ($script:CollectMetrics) { $clrConfigSw = [System.Diagnostics.Stopwatch]::StartNew() }
+
+    try {
+      Write-Output ''
+      Write-Output 'Configuring CLR settings for assembly import...'
+
+      # Create a dedicated connection for sp_configure (requires master context)
+      $clrServer = [Microsoft.SqlServer.Management.Smo.Server]::new($Server)
+      if ($Credential) {
+        $clrServer.ConnectionContext.set_LoginSecure($false)
+        $clrServer.ConnectionContext.set_Login($Credential.UserName)
+        $clrServer.ConnectionContext.set_SecurePassword($Credential.Password)
+      }
+      $clrServer.ConnectionContext.ConnectTimeout = $effectiveConnectionTimeout
+      $clrServer.ConnectionContext.DatabaseName = 'master'
+
+      if ($config -and $config.ContainsKey('trustServerCertificate')) {
+        $clrServer.ConnectionContext.TrustServerCertificate = $config.trustServerCertificate
+      }
+
+      $clrServer.ConnectionContext.Connect()
+      $clrServerForRestore = $clrServer
+
+      # Capture and enable 'show advanced options' (required for sp_configure CLR settings)
+      $showAdvancedOptionsOriginalValue = Get-ClrSpConfigureValue -Connection $clrServer -OptionName 'show advanced options'
+      if ($showAdvancedOptionsOriginalValue -ne 1) {
+        $null = Set-ClrSpConfigure -Connection $clrServer -OptionName 'show advanced options' -Value 1
+        Write-Verbose "[CLR] Enabled 'show advanced options' (was: $showAdvancedOptionsOriginalValue)"
+      }
+
+      # Enable CLR integration if requested
+      if ($clrCfg.enableClr) {
+        $currentClrEnabled = Get-ClrSpConfigureValue -Connection $clrServer -OptionName 'clr enabled'
+        $clrEnabledOriginalValue = $currentClrEnabled
+        if ($null -eq $currentClrEnabled) {
+          Write-Warning "[WARNING] Could not read 'clr enabled' value - skipping CLR enable/disable"
+        }
+        elseif ($currentClrEnabled -eq 0) {
+          Write-Verbose "[CLR] CLR is currently disabled, enabling..."
+          $success = Set-ClrSpConfigure -Connection $clrServer -OptionName 'clr enabled' -Value 1
+          if ($success) {
+            $clrEnabledChanged = $true
+            Write-Output "[SUCCESS] Enabled CLR integration (sp_configure 'clr enabled', 1)"
+          }
+        }
+        else {
+          Write-Verbose "[CLR] CLR is already enabled (value: $currentClrEnabled)"
+        }
+      }
+
+      # Disable strict security if requested
+      if ($clrCfg.disableStrictSecurityForImport) {
+        $clrStrictSecurityOriginalValue = Get-ClrSpConfigureValue -Connection $clrServer -OptionName 'clr strict security'
+        Write-Verbose "[CLR] Current 'clr strict security' value: $clrStrictSecurityOriginalValue"
+
+        if ($clrStrictSecurityOriginalValue -eq 1) {
+          Write-Verbose "[CLR] Disabling 'clr strict security' for CLR assembly import..."
+          $success = Set-ClrSpConfigure -Connection $clrServer -OptionName 'clr strict security' -Value 0
+          if ($success) {
+            $clrStrictSecurityChanged = $true
+            Write-Output "[SUCCESS] Temporarily disabled CLR strict security for assembly import"
+          }
+        }
+        elseif ($clrStrictSecurityOriginalValue -eq 0) {
+          Write-Output "[INFO] CLR strict security is already disabled (value: 0)"
+        }
+        else {
+          Write-Warning "[WARNING] Could not read 'clr strict security' value - proceeding without changes"
+        }
+      }
+    }
+    catch {
+      Write-Warning "[WARNING] Error configuring CLR settings: $($_.Exception.Message)"
+      Write-Warning "  CLR assembly import may fail if strict security is enabled"
+    }
+    finally {
+      if ($script:CollectMetrics -and $clrConfigSw) {
+        $clrConfigSw.Stop()
+        $script:Metrics.clrConfigSeconds += $clrConfigSw.Elapsed.TotalSeconds
+      }
+    }
+  }
+
+  # Wrap script execution in try/finally to guarantee CLR strict security restore
+  try {
+
   # Process structural scripts first (no retry logic - these define structure)
   foreach ($scriptFile in $structuralScripts) {
     # Skip remaining scripts if we've already decided to abort
@@ -4465,6 +4805,13 @@ try {
     else {
       $skipCount++
     }
+
+    # Emit CLR HINT if this was a CLR assembly script that failed (once per run)
+    if (-not $clrHintEmitted -and $result -eq -1 -and (Test-ClrAssemblyScript -ScriptFile $scriptFile -SourcePath $SourcePath) -and
+        -not $sqlCmdVars.ContainsKey('__ClrConfig__')) {
+      Write-ClrHint -ImportMode $ImportMode
+      $clrHintEmitted = $true
+    }
   }
 
   # Process programmability scripts with dependency retry logic (only if no structural failures or abort flag)
@@ -4489,6 +4836,18 @@ try {
     $failureCount += $retryResults.Failure
     $skipCount += $retryResults.Skip
 
+    # Emit CLR HINT if assembly scripts failed and no CLR config was provided (once per run)
+    if (-not $clrHintEmitted -and $retryResults.Failure -gt 0 -and $hasClrAssemblyScripts -and -not $sqlCmdVars.ContainsKey('__ClrConfig__')) {
+      # Check if any of the failed scripts are CLR assembly scripts
+      $clrFailures = $script:FailedScripts | Where-Object {
+        $_.ScriptName -match '(?i)^Assembly\.' -or $_.ScriptName -match '(?i)Assemblies\.sql$'
+      }
+      if ($clrFailures.Count -gt 0) {
+        Write-ClrHint -ImportMode $ImportMode
+        $clrHintEmitted = $true
+      }
+    }
+
     # If programmability scripts failed and not in ContinueOnError mode, set abort flag
     if ($retryResults.Failure -gt 0 -and -not $ContinueOnError) {
       $abortAfterStructuralFailure = $true
@@ -4497,6 +4856,73 @@ try {
   elseif ($programmabilityScripts.Count -gt 0 -and ($abortAfterStructuralFailure -or $failureCount -gt 0)) {
     Write-Warning "[WARNING] Skipping $($programmabilityScripts.Count) programmability script(s) due to earlier failures"
     $skipCount += $programmabilityScripts.Count
+  }
+
+  } # end try (CLR strict security protection)
+  finally {
+    # Restore CLR settings - guaranteed to run even on unhandled errors
+    if ($script:CollectMetrics) { $clrConfigSw = [System.Diagnostics.Stopwatch]::StartNew() }
+
+    # Restore CLR strict security setting
+    if ($clrStrictSecurityChanged -and $clrServerForRestore) {
+      try {
+        if ($restoreStrictSecurity) {
+          Write-Verbose "[CLR] Restoring 'clr strict security' to original value: $clrStrictSecurityOriginalValue"
+          $success = Set-ClrSpConfigure -Connection $clrServerForRestore -OptionName 'clr strict security' -Value $clrStrictSecurityOriginalValue
+          if ($success) {
+            Write-Output "[SUCCESS] Restored CLR strict security to original value ($clrStrictSecurityOriginalValue)"
+          }
+        }
+        else {
+          Write-Output "[INFO] CLR strict security left as-is (restoreStrictSecuritySetting: false)"
+        }
+      }
+      catch {
+        Write-Warning "[WARNING] Error restoring CLR strict security: $($_.Exception.Message)"
+      }
+    }
+
+    # Restore CLR enabled setting
+    if ($clrEnabledChanged -and $clrServerForRestore) {
+      try {
+        if ($restoreClrEnabled) {
+          Write-Verbose "[CLR] Restoring 'clr enabled' to original value: $clrEnabledOriginalValue"
+          $success = Set-ClrSpConfigure -Connection $clrServerForRestore -OptionName 'clr enabled' -Value $clrEnabledOriginalValue
+          if ($success) {
+            Write-Output "[SUCCESS] Restored CLR enabled to original value ($clrEnabledOriginalValue)"
+          }
+        }
+        else {
+          Write-Output "[INFO] CLR enabled left as-is (restoreClrEnabledSetting: false)"
+        }
+      }
+      catch {
+        Write-Warning "[WARNING] Error restoring CLR enabled: $($_.Exception.Message)"
+      }
+    }
+
+    # Restore 'show advanced options' if we changed it
+    if ($null -ne $showAdvancedOptionsOriginalValue -and $showAdvancedOptionsOriginalValue -ne 1 -and $clrServerForRestore -and $clrServerForRestore.ConnectionContext.IsOpen) {
+      try {
+        Write-Verbose "[CLR] Restoring 'show advanced options' to original value: $showAdvancedOptionsOriginalValue"
+        $success = Set-ClrSpConfigure -Connection $clrServerForRestore -OptionName 'show advanced options' -Value $showAdvancedOptionsOriginalValue
+        if ($success) {
+          Write-Verbose "[CLR] Restored 'show advanced options' to original value: $showAdvancedOptionsOriginalValue"
+        }
+      }
+      catch {
+        Write-Warning "[WARNING] Error restoring 'show advanced options': $($_.Exception.Message)"
+      }
+    }
+
+    # Disconnect CLR connection and record metrics
+    if ($clrServerForRestore -and $clrServerForRestore.ConnectionContext.IsOpen) {
+      $clrServerForRestore.ConnectionContext.Disconnect()
+    }
+    if ($script:CollectMetrics -and $clrConfigSw) {
+      $clrConfigSw.Stop()
+      $script:Metrics.clrConfigSeconds += $clrConfigSw.Elapsed.TotalSeconds
+    }
   }
 
   # Process security policy scripts AFTER programmability objects (they depend on functions/procedures)
@@ -4912,6 +5338,9 @@ try {
     if ($script:Metrics.fkDisableSeconds -gt 0 -or $script:Metrics.fkEnableSeconds -gt 0) {
       Write-Output "  FK disable:         $([math]::Round($script:Metrics.fkDisableSeconds, 2))s"
       Write-Output "  FK re-enable:       $([math]::Round($script:Metrics.fkEnableSeconds, 2))s"
+    }
+    if ($script:Metrics.clrConfigSeconds -gt 0) {
+      Write-Output "  CLR config:         $([math]::Round($script:Metrics.clrConfigSeconds, 2))s"
     }
     Write-Output "  Scripts processed:  $($script:Metrics.scriptsProcessed)"
     Write-Output ''

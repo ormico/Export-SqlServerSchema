@@ -820,6 +820,34 @@ import:
 
 Configuration for encryption object passwords. See [Encryption Secrets Reference](#encryption-secrets-reference).
 
+#### `import.developerMode.clr`
+
+CLR integration and strict security settings for importing databases with CLR assemblies.
+
+- **Type**: Object
+- **Description**: Controls CLR assembly loading behavior during import. SQL Server 2017+ defaults to `clr strict security = 1`, which blocks unsigned/untrusted CLR assemblies.
+
+| Property | Type | Default | Description |
+|----------|------|---------|-------------|
+| `enableClr` | Boolean | `false` | Enable CLR integration via `sp_configure 'clr enabled'` |
+| `disableStrictSecurityForImport` | Boolean | `false` | Temporarily disable `clr strict security` during CLR object import |
+| `restoreStrictSecuritySetting` | Boolean | `true` | Restore original `clr strict security` value after import |
+| `restoreClrEnabledSetting` | Boolean | `true` | Restore original `clr enabled` value after import |
+
+```yaml
+import:
+  developerMode:
+    clr:
+      enableClr: true
+      disableStrictSecurityForImport: true     # Required for unsigned assemblies
+      restoreStrictSecuritySetting: true        # Restore after import
+      restoreClrEnabledSetting: true            # Restore CLR enabled after import
+```
+
+> **Note**: Changing `sp_configure` settings requires `sysadmin` or `serveradmin` role. If the import credential lacks permission, a clear warning is emitted.
+
+> **Note**: If CLR assembly import fails and `disableStrictSecurityForImport` is not enabled, the import will emit a `[HINT]` message suggesting the option.
+
 ---
 
 ### Production Mode Settings
@@ -957,6 +985,22 @@ import:
 #### `import.productionMode.encryptionSecrets`
 
 Configuration for production encryption passwords. **CRITICAL**: Never use inline `value:` secrets in production. See [Encryption Secrets Reference](#encryption-secrets-reference).
+
+#### `import.productionMode.clr`
+
+CLR integration settings for production. Same options as `import.developerMode.clr`.
+
+```yaml
+import:
+  productionMode:
+    clr:
+      enableClr: true
+      disableStrictSecurityForImport: false    # Production should use signed assemblies
+      restoreStrictSecuritySetting: true
+      restoreClrEnabledSetting: true
+```
+
+> **Best Practice**: In production, prefer signing CLR assemblies rather than disabling strict security. Only set `disableStrictSecurityForImport: true` when migrating legacy unsigned assemblies.
 
 ---
 
