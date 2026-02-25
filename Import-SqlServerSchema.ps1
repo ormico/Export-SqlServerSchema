@@ -95,6 +95,22 @@
         -SourcePath ".\DbScripts\..." `
         -UsernameFromEnv SQLCMD_USER -PasswordFromEnv SQLCMD_PASSWORD -TrustServerCertificate
 
+    # Auto-select the most recent export folder from a parent directory
+    ./Import-SqlServerSchema.ps1 -Server localhost -Database DevDb `
+        -SourcePath ".\exports" -UseLatestExport -CreateDatabase
+
+.PARAMETER UseLatestExport
+    When specified, treats -SourcePath as a parent directory and automatically selects the most
+    recent valid export folder within it. A valid export folder must contain a parseable
+    _export_metadata.json file. Selection is based on exportStartTimeUtc from metadata; falls
+    back to folder LastWriteTime if the field is absent.
+
+    If -SourcePath already points directly to a valid export folder, it is used as-is and a
+    warning is emitted that the switch is redundant. If no valid export folders are found, the
+    import aborts with a clear error. The resolved path is printed at startup for confirmation.
+
+    Can also be enabled via config file: import.useLatestExport: true
+
 .NOTES
     Requires: SQL Server Management Objects (SMO), PowerShell 7.0+
     Optional: powershell-yaml module for YAML config file support
@@ -192,7 +208,10 @@ param(
   [string]$PasswordFromEnv,
 
   [Parameter(HelpMessage = 'Trust the SQL Server certificate without validation. Required for containers with self-signed certificates.')]
-  [switch]$TrustServerCertificate
+  [switch]$TrustServerCertificate,
+
+  [Parameter(HelpMessage = 'Scan -SourcePath for valid export subfolders and auto-select the most recent one. Can also be set via config file: import.useLatestExport: true')]
+  [switch]$UseLatestExport
 )
 
 $ErrorActionPreference = if ($ContinueOnError) { 'Continue' } else { 'Stop' }
@@ -3181,6 +3200,130 @@ function Get-ScriptFiles {
   }
 }
 
+function Resolve-LatestExportPath {
+  <#
+    .SYNOPSIS
+        Resolves the most recent valid export folder from a parent directory.
+    .DESCRIPTION
+        Implements the -UseLatestExport resolution algorithm:
+
+        1. If -SourcePath itself contains _export_metadata.json, it is a direct export folder.
+           Return it with a warning that -UseLatestExport is redundant.
+        2. Otherwise, enumerate immediate child directories of -SourcePath.
+        3. For each child, check for a parseable _export_metadata.json (valid export folder).
+        4. Among valid export folders, select the one with the most recent exportStartTimeUtc
+           from metadata. Falls back to folder LastWriteTime when the field is absent.
+        5. Returns the resolved absolute path, or throws if no valid exports are found.
+    .PARAMETER SourcePath
+        The path provided by the caller. May be either a direct export folder or a parent
+        directory containing one or more export folders.
+    .OUTPUTS
+        The resolved absolute path to the selected export folder (string).
+  #>
+  param(
+    [Parameter(Mandatory)]
+    [string]$SourcePath
+  )
+
+  $resolvedSource = (Resolve-Path -LiteralPath $SourcePath).ProviderPath
+
+  # --- Case 1: SourcePath is itself a valid export folder ---
+  $directMeta = Join-Path $resolvedSource '_export_metadata.json'
+  if (Test-Path $directMeta) {
+    try {
+      $null = Get-Content -Path $directMeta -Raw -Encoding UTF8 | ConvertFrom-Json -AsHashtable
+      Write-Warning "[UseLatestExport] -SourcePath points directly to a valid export folder. -UseLatestExport is redundant here."
+      Write-Warning "  Using: $resolvedSource"
+      return $resolvedSource
+    }
+    catch {
+      # Metadata exists but is not parseable JSON — treat as non-export folder and scan children
+      Write-Verbose "[UseLatestExport] _export_metadata.json found but not parseable at root. Scanning children."
+    }
+  }
+
+  # --- Case 2: Scan immediate child directories ---
+  Write-Host "[INFO] UseLatestExport: scanning `"$resolvedSource`" for valid export folders..." -ForegroundColor Cyan
+
+  $children = Get-ChildItem -Path $resolvedSource -Directory -ErrorAction SilentlyContinue
+  if (-not $children -or $children.Count -eq 0) {
+    $msg = "No valid export folders found in `"$resolvedSource`". The directory contains no subdirectories. Ensure the folder contains at least one export with _export_metadata.json."
+    Write-Host "[ERROR] $msg" -ForegroundColor Red
+    throw $msg
+  }
+
+  # Collect valid export candidates with their sort key
+  $candidates = @()
+  foreach ($child in $children) {
+    $metaPath = Join-Path $child.FullName '_export_metadata.json'
+    if (-not (Test-Path $metaPath)) { continue }
+
+    try {
+      $meta = Get-Content -Path $metaPath -Raw -Encoding UTF8 | ConvertFrom-Json -AsHashtable
+    }
+    catch {
+      Write-Verbose "[UseLatestExport] Skipping $($child.Name): _export_metadata.json is not valid JSON."
+      continue
+    }
+
+    # Build sort key: prefer exportStartTimeUtc from metadata, fall back to LastWriteTime
+    $sortTime = $null
+    $usedFallback = $false
+    if ($meta -is [hashtable] -and $meta.ContainsKey('exportStartTimeUtc') -and $meta.exportStartTimeUtc) {
+      try {
+        $sortTime = [datetime]::Parse($meta.exportStartTimeUtc, $null, [System.Globalization.DateTimeStyles]::RoundtripKind)
+      }
+      catch {
+        Write-Verbose "[UseLatestExport] Could not parse exportStartTimeUtc for $($child.Name): $_"
+      }
+    }
+    if ($null -eq $sortTime) {
+      $sortTime = $child.LastWriteTimeUtc
+      $usedFallback = $true
+    }
+
+    $candidates += [pscustomobject]@{
+      Directory    = $child
+      SortTime     = $sortTime
+      Metadata     = $meta
+      UsedFallback = $usedFallback
+    }
+  }
+
+  if ($candidates.Count -eq 0) {
+    $msg = "No valid export folders found in `"$resolvedSource`". Ensure the folder contains at least one export with _export_metadata.json."
+    Write-Host "[ERROR] $msg" -ForegroundColor Red
+    throw $msg
+  }
+
+  # Select the most recent
+  $selected = ($candidates | Sort-Object -Property SortTime -Descending)[0]
+
+  # Build display timestamp
+  $displayTime = if (-not $selected.UsedFallback) {
+    $selected.SortTime.ToString('yyyy-MM-dd HH:mm:ss') + ' UTC'
+  }
+  else {
+    $selected.Directory.LastWriteTimeUtc.ToString('yyyy-MM-dd HH:mm:ss') + ' UTC (filesystem fallback)'
+  }
+
+  # Surface server/database from metadata for confirmation
+  $metaInfo = ''
+  if ($selected.Metadata -is [hashtable]) {
+    $srv = if ($selected.Metadata.ContainsKey('serverName')) { $selected.Metadata.serverName } else { $null }
+    $db  = if ($selected.Metadata.ContainsKey('databaseName')) { $selected.Metadata.databaseName } else { $null }
+    if ($srv -or $db) {
+      $metaInfo = " ($srv\$db)"
+    }
+  }
+
+  Write-Host "[INFO] Found $($candidates.Count) export folder(s). Selected latest:" -ForegroundColor Cyan
+  Write-Host "       $($selected.Directory.Name) (exported: $displayTime)$metaInfo" -ForegroundColor Cyan
+  Write-Host "[INFO] Resolved SourcePath: $($selected.Directory.FullName)" -ForegroundColor Cyan
+
+  return $selected.Directory.FullName
+}
+
 function Resolve-ConfigFile {
   <#
     .SYNOPSIS
@@ -3765,6 +3908,15 @@ try {
           Write-Verbose "[INFO] ExcludeSchemas set from config file: $($config.import.excludeSchemas -join ', ')"
         }
       }
+
+      # Override UseLatestExport from config ONLY if not explicitly set on command line
+      # CLI switch presence (even $false) takes precedence over config file
+      if (-not $PSBoundParameters.ContainsKey('UseLatestExport')) {
+        if ($config.import.useLatestExport) {
+          $UseLatestExport = $config.import.useLatestExport
+          Write-Verbose "[INFO] UseLatestExport set from config file: $UseLatestExport"
+        }
+      }
     }
     else {
       Write-Warning "Config file not found: $ConfigFile"
@@ -3790,6 +3942,13 @@ try {
   # Validate that Server was resolved from at least one source
   if ([string]::IsNullOrWhiteSpace($Server)) {
     throw "Server is required. Provide it via -Server, -ServerFromEnv, or config file connection.serverFromEnv."
+  }
+
+  # Resolve SourcePath when -UseLatestExport is set
+  # This must happen after config is loaded (config may enable UseLatestExport) and before
+  # any code that relies on $SourcePath pointing to a direct export folder.
+  if ($UseLatestExport) {
+    $SourcePath = Resolve-LatestExportPath -SourcePath $SourcePath
   }
 
   # Handle -ShowRequiredSecrets mode (display and exit without importing)
