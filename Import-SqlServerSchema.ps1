@@ -4476,9 +4476,11 @@ try {
   # CLR strict security management - disable before any CLR scripts execute
   $clrStrictSecurityOriginalValue = $null
   $clrStrictSecurityChanged = $false
+  $clrEnabledOriginalValue = $null
   $clrEnabledChanged = $false
   $clrServerForRestore = $null
   $showAdvancedOptionsOriginalValue = $null
+  $clrHintEmitted = $false
 
   if ($hasClrAssemblyScripts -and $sqlCmdVars.ContainsKey('__ClrConfig__')) {
     $clrCfg = $sqlCmdVars['__ClrConfig__']
@@ -4516,7 +4518,10 @@ try {
       if ($clrCfg.enableClr) {
         $currentClrEnabled = Get-ClrSpConfigureValue -Connection $clrServer -OptionName 'clr enabled'
         $clrEnabledOriginalValue = $currentClrEnabled
-        if ($currentClrEnabled -eq 0) {
+        if ($null -eq $currentClrEnabled) {
+          Write-Warning "[WARNING] Could not read 'clr enabled' value - skipping CLR enable/disable"
+        }
+        elseif ($currentClrEnabled -eq 0) {
           Write-Verbose "[CLR] CLR is currently disabled, enabling..."
           $success = Set-ClrSpConfigure -Connection $clrServer -OptionName 'clr enabled' -Value 1
           if ($success) {
@@ -4610,10 +4615,11 @@ try {
       $skipCount++
     }
 
-    # Emit CLR HINT if this was a CLR assembly script that failed
-    if ($result -eq -1 -and (Test-ClrAssemblyScript -ScriptFile $scriptFile -SourcePath $SourcePath) -and
+    # Emit CLR HINT if this was a CLR assembly script that failed (once per run)
+    if (-not $clrHintEmitted -and $result -eq -1 -and (Test-ClrAssemblyScript -ScriptFile $scriptFile -SourcePath $SourcePath) -and
         -not $sqlCmdVars.ContainsKey('__ClrConfig__')) {
       Write-ClrHint -ImportMode $ImportMode
+      $clrHintEmitted = $true
     }
   }
 
@@ -4639,14 +4645,15 @@ try {
     $failureCount += $retryResults.Failure
     $skipCount += $retryResults.Skip
 
-    # Emit CLR HINT if assembly scripts failed and no CLR config was provided
-    if ($retryResults.Failure -gt 0 -and $hasClrAssemblyScripts -and -not $sqlCmdVars.ContainsKey('__ClrConfig__')) {
+    # Emit CLR HINT if assembly scripts failed and no CLR config was provided (once per run)
+    if (-not $clrHintEmitted -and $retryResults.Failure -gt 0 -and $hasClrAssemblyScripts -and -not $sqlCmdVars.ContainsKey('__ClrConfig__')) {
       # Check if any of the failed scripts are CLR assembly scripts
       $clrFailures = $script:FailedScripts | Where-Object {
         $_.ScriptName -match '(?i)^Assembly\.' -or $_.ScriptName -match '(?i)Assemblies\.sql$'
       }
       if ($clrFailures.Count -gt 0) {
         Write-ClrHint -ImportMode $ImportMode
+        $clrHintEmitted = $true
       }
     }
 
