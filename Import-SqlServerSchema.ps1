@@ -3105,6 +3105,25 @@ function Test-ClrAssemblyScript {
   return $false
 }
 
+function Write-ClrHint {
+  <#
+    .SYNOPSIS
+        Writes the CLR assembly HINT message to the console.
+    .PARAMETER ImportMode
+        The current import mode ('Dev' or 'Prod').
+  #>
+  param([string]$ImportMode)
+  $modeKey = if ($ImportMode -eq 'Dev') { 'developerMode' } else { 'productionMode' }
+  Write-Host ''
+  Write-Host '[HINT] CLR assembly load failed. If the source database uses unsigned assemblies, try setting:' -ForegroundColor Yellow
+  Write-Host '  import:' -ForegroundColor Yellow
+  Write-Host "    ${modeKey}:" -ForegroundColor Yellow
+  Write-Host '      clr:' -ForegroundColor Yellow
+  Write-Host '        enableClr: true' -ForegroundColor Yellow
+  Write-Host '        disableStrictSecurityForImport: true' -ForegroundColor Yellow
+  Write-Host ''
+}
+
 function Set-ClrSpConfigure {
   <#
     .SYNOPSIS
@@ -4538,14 +4557,7 @@ try {
     # Emit CLR HINT if this was a CLR assembly script that failed
     if ($result -eq -1 -and (Test-ClrAssemblyScript -ScriptFile $scriptFile -SourcePath $SourcePath) -and
         -not $sqlCmdVars.ContainsKey('__ClrConfig__')) {
-      Write-Host ''
-      Write-Host '[HINT] CLR assembly load failed. If the source database uses unsigned assemblies, try setting:' -ForegroundColor Yellow
-      Write-Host '  import:' -ForegroundColor Yellow
-      Write-Host "    $($ImportMode.ToLower())$( if ($ImportMode -eq 'Dev') { 'eloperMode' } else { 'uctionMode' }):" -ForegroundColor Yellow
-      Write-Host '      clr:' -ForegroundColor Yellow
-      Write-Host '        enableClr: true' -ForegroundColor Yellow
-      Write-Host '        disableStrictSecurityForImport: true' -ForegroundColor Yellow
-      Write-Host ''
+      Write-ClrHint -ImportMode $ImportMode
     }
   }
 
@@ -4578,14 +4590,7 @@ try {
         $_.ScriptName -match '(?i)^Assembly\.' -or $_.ScriptName -match '(?i)Assemblies\.sql$'
       }
       if ($clrFailures.Count -gt 0) {
-        Write-Host ''
-        Write-Host '[HINT] CLR assembly load failed. If the source database uses unsigned assemblies, try setting:' -ForegroundColor Yellow
-        Write-Host '  import:' -ForegroundColor Yellow
-        Write-Host "    $($ImportMode.ToLower())$( if ($ImportMode -eq 'Dev') { 'eloperMode' } else { 'uctionMode' }):" -ForegroundColor Yellow
-        Write-Host '      clr:' -ForegroundColor Yellow
-        Write-Host '        enableClr: true' -ForegroundColor Yellow
-        Write-Host '        disableStrictSecurityForImport: true' -ForegroundColor Yellow
-        Write-Host ''
+        Write-ClrHint -ImportMode $ImportMode
       }
     }
 
