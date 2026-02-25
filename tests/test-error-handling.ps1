@@ -113,7 +113,7 @@ END
 
 # Clean up any existing test databases from previous runs
 Write-Host "[INFO] Cleaning up test databases from previous runs..." -ForegroundColor Gray
-@('TestDb_ErrorTest1', 'TestDb_ErrorTest3', 'TestDb_RetryError') | ForEach-Object {
+@('TestDb_ErrorTest1', 'TestDb_ErrorTest3', 'TestDb_RetryError', 'TestDb_FKError') | ForEach-Object {
     Drop-TestDatabase -DbName $_
 }
 
@@ -234,6 +234,11 @@ if ($hasErrorLog) {
     $logHasTimestamp = $errorLogContent -match "\d{4}-\d{2}-\d{2}|\d{2}:\d{2}:\d{2}"
     Write-TestResult -TestName "Error log has timestamp" -Passed $logHasTimestamp `
         -Message "Error log should include timestamps"
+
+    # Test 2d: Error log contains file path
+    $logHasFilePath = $errorLogContent -match "File:.*fn_BrokenFunction"
+    Write-TestResult -TestName "Error log contains file path" -Passed $logHasFilePath `
+        -Message "Error log should include the full file path"
 }
 
 Drop-TestDatabase -DbName $targetDb1
@@ -325,7 +330,71 @@ $reportsRetryFailure = $errorLogExists -and $errorLogContainsScript
 Write-TestResult -TestName "Retry failure clearly reported" -Passed $reportsRetryFailure `
     -Message "Scripts that fail after retry should have errors logged to import_errors_*.log"
 
+# Test 4b: Error log has actual SQL error details, not just wrapper exception
+if ($errorLogExists) {
+    $hasDetailedError = $errorLogContent -match "Error \d+:|Invalid object name|Message:"
+    Write-TestResult -TestName "Retry error log has detailed SQL error" -Passed $hasDetailedError `
+        -Message "Error log should contain inner SQL exception details, not just 'Exception calling ExecuteNonQuery'"
+}
+
 Drop-TestDatabase -DbName $targetDb4
+
+# ═══════════════════════════════════════════════════════════════
+# TEST 5: FK RE-ENABLE FAILURE IS TRACKED IN ERROR LOG
+# ═══════════════════════════════════════════════════════════════
+
+Write-Host "`n[INFO] Test 5: FK Re-enable Failures Are Tracked in Error Log" -ForegroundColor Cyan
+
+# Export TestDb with data so we have a real data folder to inject into
+$fkExportDir = Join-Path $ExportPath "fk_export"
+& $exportScript -Server $Server -Database $SourceDatabase -OutputPath $fkExportDir `
+    -Credential $credential -IncludeData -Verbose:$false 2>&1 | Out-Null
+
+$fkExportedDir = Get-ChildItem $fkExportDir -Directory | Select-Object -First 1
+
+# Inject a row that violates FK_Orders_Customers (CustomerId 99999 does not exist in dbo.Customers).
+# FKs are disabled during data loading so this INSERT succeeds; re-enable then fails.
+$fkViolationDir = Join-Path $fkExportedDir.FullName "21_Data"
+if (-not (Test-Path $fkViolationDir)) {
+    New-Item -ItemType Directory -Path $fkViolationDir -Force | Out-Null
+}
+$fkViolationSql = @"
+-- Intentionally violates FK_Orders_Customers: CustomerId 99999 does not exist
+INSERT INTO [Sales].[Orders] ([CustomerId], [OrderDate], [TotalAmount], [Status], [TenantId])
+VALUES (99999, GETDATE(), 1.00, 'Pending', 1);
+GO
+"@
+$fkViolationPath = Join-Path $fkViolationDir "zz_fk_violation.data.sql"
+$fkViolationSql | Set-Content -Path $fkViolationPath
+Write-Host "  Injected FK-violating row as .data.sql (Orders.CustomerId=99999)" -ForegroundColor Gray
+
+$targetDb5 = "TestDb_FKError"
+Drop-TestDatabase -DbName $targetDb5
+
+try {
+    $fkImportOutput = & $importScript -Server $Server -Database $targetDb5 `
+        -SourcePath $fkExportedDir.FullName -ConfigFile $configPath1 `
+        -Credential $credential -IncludeData -ContinueOnError 2>&1 | Out-String
+} catch {
+    $fkImportOutput = $_.Exception.Message
+}
+
+# Check error log for FK re-enable failures
+$fkErrorLogs = Get-ChildItem -Path $fkExportedDir.FullName -Filter "import_errors_*.log" -ErrorAction SilentlyContinue
+$fkErrorLogExists = $fkErrorLogs.Count -gt 0
+$fkErrorLogContent = if ($fkErrorLogExists) { Get-Content $fkErrorLogs[0].FullName -Raw } else { "" }
+
+# Test 5a: FK failure name appears in error log (ScriptName starts with "FK:")
+$fkTracked = $fkErrorLogExists -and ($fkErrorLogContent -match "\[1\] FK:")
+Write-TestResult -TestName "FK re-enable failure tracked in error log" -Passed $fkTracked `
+    -Message "FK re-enable failures should appear in import_errors_*.log as 'FK: <constraint_name>'"
+
+# Test 5b: FK error attributed to ForeignKeys folder
+$fkFolderAttrib = $fkErrorLogExists -and ($fkErrorLogContent -match "Folder: ForeignKeys")
+Write-TestResult -TestName "FK error attributed to ForeignKeys folder" -Passed $fkFolderAttrib `
+    -Message "FK errors should show 'Folder: ForeignKeys' in the error log"
+
+Drop-TestDatabase -DbName $targetDb5
 
 # ═══════════════════════════════════════════════════════════════
 # CLEANUP
