@@ -29,7 +29,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Required for containers with self-signed certificates
 - New YAML config `connection:` section with `serverFromEnv`, `usernameFromEnv`, `passwordFromEnv`, and `trustServerCertificate`
 - Credential precedence: CLI `-Credential`/`-Server` > `*FromEnv` CLI params > config `connection:` section > defaults
-- New test suite: `tests/test-env-credentials.ps1` (14 tests)
+- New test suite: `tests/test-env-credentials.ps1` (18 tests)
 - Documentation updates: README container/CI-CD section, CONFIG_REFERENCE connection section, USER_GUIDE
 
 ### Changed (Breaking)
