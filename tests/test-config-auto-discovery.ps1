@@ -220,7 +220,7 @@ try {
     Write-TestResult 'Empty ScriptRoot handled safely — CWD still searched' ($result -eq $ymlInCwd)
     Remove-Item $ymlInCwd
 
-    # 9. First-match-wins: .yml in CWD returned when script dir has only .yaml
+    # 9. Script directory priority: .yaml in script dir wins over .yml in CWD
     $yamlInScript = Join-Path $tempScriptDir 'export-import-config.yaml'
     $ymlInCwd     = Join-Path $tempCwdDir    'export-import-config.yml'
     Set-Content -Path $yamlInScript -Value 'export: {}' -Encoding UTF8
