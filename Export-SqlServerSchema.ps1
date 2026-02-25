@@ -223,13 +223,15 @@ function Resolve-EnvCredential {
   # --- Resolve TrustServerCertificate ---
   # CLI switch > config connection section > config root-level > default (false)
   if (-not $BoundParameters.ContainsKey('TrustServerCertificate')) {
+    $trustResolved = $false
     if ($Config -and $Config.ContainsKey('connection') -and $Config.connection -is [System.Collections.IDictionary]) {
       if ($Config.connection.ContainsKey('trustServerCertificate')) {
         $result.TrustServerCertificate = [bool]$Config.connection.trustServerCertificate
+        $trustResolved = $true
       }
     }
-    # Also check root-level trustServerCertificate (existing config pattern)
-    if (-not $result.TrustServerCertificate -and $Config -and $Config.ContainsKey('trustServerCertificate')) {
+    # Only fall back to root-level if connection section didn't specify it
+    if (-not $trustResolved -and $Config -and $Config.ContainsKey('trustServerCertificate')) {
       $result.TrustServerCertificate = [bool]$Config.trustServerCertificate
     }
   }

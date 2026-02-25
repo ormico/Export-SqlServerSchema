@@ -135,10 +135,10 @@ try {
         -UsernameFromEnv $envUserVar -PasswordFromEnv $envPassVar `
         -TrustServerCertificate -OutputPath $testExportPath 2>&1
 
-    $exportSuccess = $LASTEXITCODE -eq 0 -or ($output -join "`n") -match '\[SUCCESS\].*Connected'
     $exportedDir = Get-ChildItem $testExportPath -Directory -ErrorAction SilentlyContinue | Select-Object -First 1
+    $exportSuccess = $null -ne $exportedDir
 
-    Write-TestResult "Export with *FromEnv credentials" ($null -ne $exportedDir)
+    Write-TestResult "Export with *FromEnv credentials" $exportSuccess
 } catch {
     Write-TestResult "Export with *FromEnv credentials" $false "Error: $_"
 } finally {
@@ -366,7 +366,7 @@ connection:
     # Actually, per our precedence: CLI -Server > -ServerFromEnv. Since Server IS bound, ServerFromEnv is ignored.
     # This means the export should FAIL with a connection error.
     $errorOutput = $output | Out-String
-    $connectionFailed = $errorOutput -match 'Connection failed|could not|error|timeout' -or $null -eq (Get-ChildItem $testExportPath9 -Directory -ErrorAction SilentlyContinue | Select-Object -First 1)
+    $connectionFailed = $errorOutput -match 'Connection failed|could not|error|timeout'
 
     Write-TestResult "CLI -Server takes precedence over -ServerFromEnv" $connectionFailed
 } catch {
@@ -610,6 +610,40 @@ import:
         Write-TestResult "TrustServerCertificate via config connection section" $false "Error: $_"
     } finally {
         Drop-TestDatabase -DbName $targetDb13
+    }
+
+    # --- Test 13b: connection.trustServerCertificate false cannot be overridden by root-level true ---
+    Write-Host "`n[INFO] Test 13b: connection.trustServerCertificate(false) not overridden by root-level(true)" -ForegroundColor Cyan
+
+    $targetDb13b = "TestDb_EnvTest13b"
+    Drop-TestDatabase -DbName $targetDb13b
+
+    $configContent13b = @"
+trustServerCertificate: true
+connection:
+  trustServerCertificate: false
+import:
+  defaultMode: Dev
+"@
+    $configPath13b = Join-Path $ExportPath "test-import-trust-override-config.yml"
+    $configContent13b | Set-Content -Path $configPath13b
+
+    try {
+        # connection.trustServerCertificate: false should win over root-level true,
+        # so the connection should fail (SQL Server container uses self-signed cert)
+        $output = & $importScript -Server $Server -Database $targetDb13b `
+            -SourcePath $importSourceDir.FullName `
+            -Credential $credential `
+            -ConfigFile $configPath13b -CreateDatabase -Force 2>&1
+
+        $outputStr = $output | Out-String
+        $connectionFailed = $outputStr -match 'certificate|trust|SSL|TLS|connection failed|error'
+        Write-TestResult "connection.trustServerCertificate(false) not overridden by root-level(true)" $connectionFailed
+    } catch {
+        # A connection failure exception is the expected outcome
+        Write-TestResult "connection.trustServerCertificate(false) not overridden by root-level(true)" $true
+    } finally {
+        Drop-TestDatabase -DbName $targetDb13b
     }
 
     # --- Test 14: Import - CLI *FromEnv takes precedence over config connection section ---
