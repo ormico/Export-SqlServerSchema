@@ -81,12 +81,12 @@ The first match found is used. If no config file is found, the scripts continue 
 **Example**: Place `export-import-config.yml` in the same folder as the scripts or in your project root, and it will be picked up automatically without specifying `-ConfigFile`.
 
 When auto-discovery is active, the script reports what it found:
-```
+```text
 [INFO] Using config file: /path/to/export-import-config.yml (auto-discovered)
 ```
 
 Or when nothing is found:
-```
+```text
 [INFO] No config file found, using defaults
 ```
 

@@ -706,12 +706,12 @@ The well-known file names searched (in order) are:
 The first match found is used. If no config file is found in either location, the scripts continue with defaults — no error is raised.
 
 Console output when a config file is auto-discovered:
-```
+```text
 [INFO] Using config file: /path/to/export-import-config.yml (auto-discovered)
 ```
 
 Console output when no config file is found:
-```
+```text
 [INFO] No config file found, using defaults
 ```
 
