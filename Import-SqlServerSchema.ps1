@@ -4375,7 +4375,8 @@ try {
   }
   try {
     # Connect to master first for preliminary checks - reconnect to target DB later if needed
-    $initialDb = if ($CreateDatabase) { 'master' } else { $Database }
+    # Also use master in WhatIf mode since the target DB may not exist yet
+    $initialDb = if ($CreateDatabase -or $WhatIfPreference) { 'master' } else { $Database }
     $script:SharedConnection = New-SqlServerConnection -ServerName $Server -DatabaseName $initialDb -Cred $Credential -Config $config -Timeout $effectiveCommandTimeout
   }
   catch {
