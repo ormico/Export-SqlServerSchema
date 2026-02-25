@@ -3350,9 +3350,16 @@ function Show-ImportConfiguration {
   $displayEnableClr = if ($clrSettings.ContainsKey('enableClr')) { $clrSettings.enableClr } else { $false }
   $displayDisableStrictSecurity = if ($clrSettings.ContainsKey('disableStrictSecurityForImport')) { $clrSettings.disableStrictSecurityForImport } else { $false }
   $displayRestoreStrictSecurity = if ($clrSettings.ContainsKey('restoreStrictSecuritySetting')) { $clrSettings.restoreStrictSecuritySetting } else { $true }
+  $displayRestoreClrEnabled = if ($clrSettings.ContainsKey('restoreClrEnabledSetting')) { $clrSettings.restoreClrEnabledSetting } else { $true }
   if ($displayEnableClr -or $displayDisableStrictSecurity) {
     if ($displayEnableClr) {
       Write-Host "[ENABLED] CLR Integration (sp_configure 'clr enabled')" -ForegroundColor Magenta
+      if ($displayRestoreClrEnabled) {
+        Write-Host "          (will restore original value after import)" -ForegroundColor Gray
+      }
+      else {
+        Write-Host "          (will NOT restore after import)" -ForegroundColor Yellow
+      }
     }
     if ($displayDisableStrictSecurity) {
       Write-Host "[ENABLED] CLR Strict Security: temporarily disabled for import" -ForegroundColor Magenta
@@ -4221,15 +4228,23 @@ try {
   $enableClr = if ($clrConfig.ContainsKey('enableClr')) { $clrConfig.enableClr } else { $false }
   $disableStrictSecurity = if ($clrConfig.ContainsKey('disableStrictSecurityForImport')) { $clrConfig.disableStrictSecurityForImport } else { $false }
   $restoreStrictSecurity = if ($clrConfig.ContainsKey('restoreStrictSecuritySetting')) { $clrConfig.restoreStrictSecuritySetting } else { $true }
+  $restoreClrEnabled = if ($clrConfig.ContainsKey('restoreClrEnabledSetting')) { $clrConfig.restoreClrEnabledSetting } else { $true }
 
   if ($enableClr -or $disableStrictSecurity) {
     $sqlCmdVars['__ClrConfig__'] = @{
       enableClr                       = $enableClr
       disableStrictSecurityForImport  = $disableStrictSecurity
       restoreStrictSecuritySetting    = $restoreStrictSecurity
+      restoreClrEnabledSetting        = $restoreClrEnabled
     }
     if ($enableClr) {
       Write-Output "[INFO] CLR integration: will be enabled on target server (sp_configure 'clr enabled')"
+      if ($restoreClrEnabled) {
+        Write-Output "       Original value will be restored after import completes"
+      }
+      else {
+        Write-Output "       Original value will NOT be restored after import (restoreClrEnabledSetting: false)"
+      }
     }
     if ($disableStrictSecurity) {
       Write-Output "[INFO] CLR strict security: will be temporarily disabled during CLR object import"
@@ -4460,6 +4475,7 @@ try {
       # Enable CLR integration if requested
       if ($clrCfg.enableClr) {
         $currentClrEnabled = Get-ClrSpConfigureValue -Connection $clrServer -OptionName 'clr enabled'
+        $clrEnabledOriginalValue = $currentClrEnabled
         if ($currentClrEnabled -eq 0) {
           Write-Verbose "[CLR] CLR is currently disabled, enabling..."
           $success = Set-ClrSpConfigure -Connection $clrServer -OptionName 'clr enabled' -Value 1
@@ -4606,9 +4622,11 @@ try {
 
   } # end try (CLR strict security protection)
   finally {
-    # Restore CLR strict security setting - guaranteed to run even on unhandled errors
+    # Restore CLR settings - guaranteed to run even on unhandled errors
+    if ($script:CollectMetrics) { $clrConfigSw = [System.Diagnostics.Stopwatch]::StartNew() }
+
+    # Restore CLR strict security setting
     if ($clrStrictSecurityChanged -and $clrServerForRestore) {
-      if ($script:CollectMetrics) { $clrConfigSw = [System.Diagnostics.Stopwatch]::StartNew() }
       try {
         if ($restoreStrictSecurity) {
           Write-Verbose "[CLR] Restoring 'clr strict security' to original value: $clrStrictSecurityOriginalValue"
@@ -4624,18 +4642,34 @@ try {
       catch {
         Write-Warning "[WARNING] Error restoring CLR strict security: $($_.Exception.Message)"
       }
-      finally {
-        if ($clrServerForRestore.ConnectionContext.IsOpen) {
-          $clrServerForRestore.ConnectionContext.Disconnect()
+    }
+
+    # Restore CLR enabled setting
+    if ($clrEnabledChanged -and $clrServerForRestore) {
+      try {
+        if ($restoreClrEnabled) {
+          Write-Verbose "[CLR] Restoring 'clr enabled' to original value: $clrEnabledOriginalValue"
+          $success = Set-ClrSpConfigure -Connection $clrServerForRestore -OptionName 'clr enabled' -Value $clrEnabledOriginalValue
+          if ($success) {
+            Write-Output "[SUCCESS] Restored CLR enabled to original value ($clrEnabledOriginalValue)"
+          }
         }
-        if ($script:CollectMetrics -and $clrConfigSw) {
-          $clrConfigSw.Stop()
-          $script:Metrics.clrConfigSeconds += $clrConfigSw.Elapsed.TotalSeconds
+        else {
+          Write-Output "[INFO] CLR enabled left as-is (restoreClrEnabledSetting: false)"
         }
       }
+      catch {
+        Write-Warning "[WARNING] Error restoring CLR enabled: $($_.Exception.Message)"
+      }
     }
-    elseif ($clrServerForRestore -and $clrServerForRestore.ConnectionContext.IsOpen) {
+
+    # Disconnect CLR connection and record metrics
+    if ($clrServerForRestore -and $clrServerForRestore.ConnectionContext.IsOpen) {
       $clrServerForRestore.ConnectionContext.Disconnect()
+    }
+    if ($script:CollectMetrics -and $clrConfigSw) {
+      $clrConfigSw.Stop()
+      $script:Metrics.clrConfigSeconds += $clrConfigSw.Elapsed.TotalSeconds
     }
   }
 

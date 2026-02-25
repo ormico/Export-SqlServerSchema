@@ -519,6 +519,11 @@
               "type": "boolean",
               "description": "Restore the original 'clr strict security' value after CLR object import completes (success or failure). When false, leaves the setting as-is after import.",
               "default": true
+            },
+            "restoreClrEnabledSetting": {
+              "type": "boolean",
+              "description": "Restore the original 'clr enabled' value after CLR object import completes (success or failure). When false, leaves CLR enabled after import.",
+              "default": true
             }
           },
           "additionalProperties": false

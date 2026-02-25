@@ -283,11 +283,18 @@ try {
         Write-TestResult -TestName "Config: restoreStrictSecuritySetting is true" `
             -Passed ($clrSection.restoreStrictSecuritySetting -eq $true) `
             -Message "Expected restoreStrictSecuritySetting: true, got: $($clrSection.restoreStrictSecuritySetting)"
+
+        # Test 7b: restoreClrEnabledSetting defaults to not present (defaults to true in code)
+        $hasRestoreClrEnabled = $clrSection.ContainsKey('restoreClrEnabledSetting')
+        Write-TestResult -TestName "Config: restoreClrEnabledSetting not set (defaults to true)" `
+            -Passed (-not $hasRestoreClrEnabled -or $clrSection.restoreClrEnabledSetting -eq $true) `
+            -Message "Expected restoreClrEnabledSetting absent or true, got: $($clrSection.restoreClrEnabledSetting)"
     }
     else {
         Write-TestResult -TestName "Config: enableClr is true" -Passed $false -Message "No clr section"
         Write-TestResult -TestName "Config: disableStrictSecurityForImport is true" -Passed $false -Message "No clr section"
         Write-TestResult -TestName "Config: restoreStrictSecuritySetting is true" -Passed $false -Message "No clr section"
+        Write-TestResult -TestName "Config: restoreClrEnabledSetting not set (defaults to true)" -Passed $false -Message "No clr section"
     }
 }
 catch {
@@ -295,6 +302,7 @@ catch {
     Write-TestResult -TestName "Config: enableClr is true" -Passed $false -Message "Skipped"
     Write-TestResult -TestName "Config: disableStrictSecurityForImport is true" -Passed $false -Message "Skipped"
     Write-TestResult -TestName "Config: restoreStrictSecuritySetting is true" -Passed $false -Message "Skipped"
+    Write-TestResult -TestName "Config: restoreClrEnabledSetting not set (defaults to true)" -Passed $false -Message "Skipped"
 }
 
 # Test 8: No-restore config has restoreStrictSecuritySetting: false
@@ -352,6 +360,9 @@ if ($null -ne $importSettingsProps.clr) {
     Write-TestResult -TestName "Schema: clr has restoreStrictSecuritySetting property" `
         -Passed ($null -ne $clrProps.restoreStrictSecuritySetting) `
         -Message "Expected restoreStrictSecuritySetting in clr properties"
+    Write-TestResult -TestName "Schema: clr has restoreClrEnabledSetting property" `
+        -Passed ($null -ne $clrProps.restoreClrEnabledSetting) `
+        -Message "Expected restoreClrEnabledSetting in clr properties"
 
     # Test 12: Default values are correct
     Write-TestResult -TestName "Schema: enableClr defaults to false" `
@@ -363,14 +374,19 @@ if ($null -ne $importSettingsProps.clr) {
     Write-TestResult -TestName "Schema: restoreStrictSecuritySetting defaults to true" `
         -Passed ($clrProps.restoreStrictSecuritySetting.default -eq $true) `
         -Message "Expected default true, got: $($clrProps.restoreStrictSecuritySetting.default)"
+    Write-TestResult -TestName "Schema: restoreClrEnabledSetting defaults to true" `
+        -Passed ($clrProps.restoreClrEnabledSetting.default -eq $true) `
+        -Message "Expected default true, got: $($clrProps.restoreClrEnabledSetting.default)"
 }
 else {
     Write-TestResult -TestName "Schema: clr has enableClr property" -Passed $false -Message "No clr section"
     Write-TestResult -TestName "Schema: clr has disableStrictSecurityForImport property" -Passed $false -Message "No clr section"
     Write-TestResult -TestName "Schema: clr has restoreStrictSecuritySetting property" -Passed $false -Message "No clr section"
+    Write-TestResult -TestName "Schema: clr has restoreClrEnabledSetting property" -Passed $false -Message "No clr section"
     Write-TestResult -TestName "Schema: enableClr defaults to false" -Passed $false -Message "No clr section"
     Write-TestResult -TestName "Schema: disableStrictSecurityForImport defaults to false" -Passed $false -Message "No clr section"
     Write-TestResult -TestName "Schema: restoreStrictSecuritySetting defaults to true" -Passed $false -Message "No clr section"
+    Write-TestResult -TestName "Schema: restoreClrEnabledSetting defaults to true" -Passed $false -Message "No clr section"
 }
 
 Write-Host ""

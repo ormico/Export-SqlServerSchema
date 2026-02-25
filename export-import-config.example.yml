@@ -295,6 +295,7 @@ import:
     #   enableClr: true                         # Enable CLR integration (sp_configure 'clr enabled')
     #   disableStrictSecurityForImport: true     # Temporarily disable strict security during CLR import
     #   restoreStrictSecuritySetting: true       # Restore original strict security value after import
+    #   restoreClrEnabledSetting: true           # Restore original CLR enabled value after import
 
     # Object types to exclude in developer mode
     excludeObjectTypes: []
@@ -386,6 +387,7 @@ import:
     #   enableClr: true                         # Enable CLR if target needs it
     #   disableStrictSecurityForImport: false    # Production should use signed assemblies
     #   restoreStrictSecuritySetting: true       # Always restore in production
+    #   restoreClrEnabledSetting: true           # Always restore in production
 
     # No object types excluded in production mode
     excludeObjectTypes: []

@@ -761,6 +761,7 @@ CLR integration and strict security settings for importing databases with CLR as
 | `enableClr` | Boolean | `false` | Enable CLR integration via `sp_configure 'clr enabled'` |
 | `disableStrictSecurityForImport` | Boolean | `false` | Temporarily disable `clr strict security` during CLR object import |
 | `restoreStrictSecuritySetting` | Boolean | `true` | Restore original `clr strict security` value after import |
+| `restoreClrEnabledSetting` | Boolean | `true` | Restore original `clr enabled` value after import |
 
 ```yaml
 import:
@@ -769,6 +770,7 @@ import:
       enableClr: true
       disableStrictSecurityForImport: true     # Required for unsigned assemblies
       restoreStrictSecuritySetting: true        # Restore after import
+      restoreClrEnabledSetting: true            # Restore CLR enabled after import
 ```
 
 > **Note**: Changing `sp_configure` settings requires `sysadmin` or `serveradmin` role. If the import credential lacks permission, a clear warning is emitted.
@@ -924,6 +926,7 @@ import:
       enableClr: true
       disableStrictSecurityForImport: false    # Production should use signed assemblies
       restoreStrictSecuritySetting: true
+      restoreClrEnabledSetting: true
 ```
 
 > **Best Practice**: In production, prefer signing CLR assemblies rather than disabling strict security. Only set `disableStrictSecurityForImport: true` when migrating legacy unsigned assemblies.
