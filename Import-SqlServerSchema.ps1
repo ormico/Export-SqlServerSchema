@@ -347,7 +347,7 @@ function Resolve-EnvCredential {
       if ([string]::IsNullOrWhiteSpace($usernameValue)) {
         throw "Environment variable '$usernameEnvName' (specified via UsernameFromEnv) is not set or is empty."
       }
-      if ($null -eq $passwordValue -or $passwordValue -eq '') {
+      if ([string]::IsNullOrWhiteSpace($passwordValue)) {
         throw "Environment variable '$passwordEnvName' (specified via PasswordFromEnv) is not set or is empty."
       }
 
