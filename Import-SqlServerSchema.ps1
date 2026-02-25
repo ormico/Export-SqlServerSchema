@@ -4506,14 +4506,9 @@ try {
       $clrServerForRestore = $clrServer
 
       # Capture and enable 'show advanced options' (required for sp_configure CLR settings)
-      $showAdvResult = $clrServer.ConnectionContext.ExecuteWithResults(
-        "SELECT CAST(value_in_use AS INT) AS run_value FROM sys.configurations WHERE name = 'show advanced options'"
-      )
-      if ($showAdvResult.Tables.Count -gt 0 -and $showAdvResult.Tables[0].Rows.Count -gt 0) {
-        $showAdvancedOptionsOriginalValue = [int]$showAdvResult.Tables[0].Rows[0]['run_value']
-      }
+      $showAdvancedOptionsOriginalValue = Get-ClrSpConfigureValue -Connection $clrServer -OptionName 'show advanced options'
       if ($showAdvancedOptionsOriginalValue -ne 1) {
-        $null = $clrServer.ConnectionContext.ExecuteNonQuery("EXEC sp_configure 'show advanced options', 1; RECONFIGURE;")
+        $null = Set-ClrSpConfigure -Connection $clrServer -OptionName 'show advanced options' -Value 1
         Write-Verbose "[CLR] Enabled 'show advanced options' (was: $showAdvancedOptionsOriginalValue)"
       }
 
@@ -4711,8 +4706,11 @@ try {
     # Restore 'show advanced options' if we changed it
     if ($null -ne $showAdvancedOptionsOriginalValue -and $showAdvancedOptionsOriginalValue -ne 1 -and $clrServerForRestore -and $clrServerForRestore.ConnectionContext.IsOpen) {
       try {
-        $null = $clrServerForRestore.ConnectionContext.ExecuteNonQuery("EXEC sp_configure 'show advanced options', $showAdvancedOptionsOriginalValue; RECONFIGURE;")
-        Write-Verbose "[CLR] Restored 'show advanced options' to original value: $showAdvancedOptionsOriginalValue"
+        Write-Verbose "[CLR] Restoring 'show advanced options' to original value: $showAdvancedOptionsOriginalValue"
+        $success = Set-ClrSpConfigure -Connection $clrServerForRestore -OptionName 'show advanced options' -Value $showAdvancedOptionsOriginalValue
+        if ($success) {
+          Write-Verbose "[CLR] Restored 'show advanced options' to original value: $showAdvancedOptionsOriginalValue"
+        }
       }
       catch {
         Write-Warning "[WARNING] Error restoring 'show advanced options': $($_.Exception.Message)"
