@@ -114,6 +114,9 @@ $cred = Get-Credential
 - **Automatic retry logic** for transient failures (network timeouts, Azure SQL throttling, deadlocks)
 - **Configurable timeouts** for slow networks and long-running operations
 - **Comprehensive error logging** to file for diagnostics
+- **Offline validation** (`-ValidateOnly`) for CI/CD config checks without a server connection
+- **Dry run mode** (`-WhatIf`) to preview what would be exported without creating files
+- **Connectivity smoke test** (`-TestConnection`) to verify server access before a full export
 
 **Import-SqlServerSchema.ps1**
 - **Two import modes**: Dev (default) vs Prod (opt-in)
@@ -137,6 +140,9 @@ $cred = Get-Credential
 - **Automatic retry logic** for transient failures with exponential backoff
 - **Configurable timeouts** and retry settings via config file or parameters
 - **Comprehensive error logging** with connection cleanup guarantees
+- **Offline validation** (`-ValidateOnly`) with folder structure analysis and prerequisite detection
+- **Dry run mode** (`-WhatIf`) to preview what would be imported without running any SQL
+- **Connectivity smoke test** (`-TestConnection`) to verify server access before a full import
 
 ## Testing
 
@@ -212,6 +218,9 @@ DbScripts/
 | `-RetryDelaySeconds` | No | Initial retry delay in seconds (default: 0 = use config/2) |
 | `-CollectMetrics` | No | Collect performance metrics for analysis |
 | `-ConfigFile` | No | Path to YAML configuration file |
+| `-ValidateOnly` | No | Validate config/paths offline without connecting to SQL Server |
+| `-WhatIf` | No | Dry run: connect and show what would happen, but make no changes |
+| `-TestConnection` | No | Test connectivity and permissions then exit |
 
 ### Import-SqlServerSchema.ps1
 
@@ -242,6 +251,75 @@ DbScripts/
 | `-CommandTimeout` | No | Command timeout in seconds (default: 0 = use config/300) |
 | `-MaxRetries` | No | Max retry attempts for transient failures (default: 0 = use config/3) |
 | `-RetryDelaySeconds` | No | Initial retry delay in seconds (default: 0 = use config/2) |
+| `-ValidateOnly` | No | Validate config/paths offline without connecting to SQL Server |
+| `-WhatIf` | No | Dry run: connect and show what would happen, but run no SQL |
+| `-TestConnection` | No | Test connectivity and permissions then exit |
+
+## Offline Validation and Dry Run
+
+### -ValidateOnly (Offline Config Check)
+
+Validates your configuration without connecting to SQL Server. Ideal for CI/CD pipeline setup, config debugging, and deployment readiness checks.
+
+```powershell
+# Validate export config before running (no server needed)
+./Export-SqlServerSchema.ps1 -Server "sqlserver" -Database "MyDb" `
+    -OutputPath "./exports" -ConfigFile "./config.yml" -ValidateOnly
+
+# Validate import config and inspect source folder structure (no server needed)
+./Import-SqlServerSchema.ps1 -Server "sqlserver" -Database "MyDb" `
+    -SourcePath "./exports/MyDb_20260225" -ConfigFile "./config.yml" -ValidateOnly
+```
+
+What `-ValidateOnly` checks:
+
+**Export:**
+- Config file YAML syntax and key name validity
+- Enum values (e.g., `targetSqlVersion`)
+- Output path accessibility (exists and writable, or parent exists)
+- Environment variables referenced by `*FromEnv` parameters
+
+**Import (all of the above, plus):**
+- Source path existence
+- Folder structure with script counts per object category
+- Export metadata file presence (`_export_metadata.json`)
+- CLR assembly prerequisite (warns if scripts use `CREATE ASSEMBLY` without `clr.disableStrictSecurity`)
+- AlwaysEncrypted prerequisite (warns if Column Master/Encryption Keys found without `-StripAlwaysEncrypted`)
+- Memory-optimized table prerequisite (warns if `MEMORY_OPTIMIZED = ON` found without a memory-optimized filegroup)
+
+Exits with code **0** on success (warnings are non-fatal), code **1** if errors are found. **No server connection is made.**
+
+### -WhatIf (Dry Run)
+
+Standard PowerShell `SupportsShouldProcess` support. Connects to the server, shows what would happen, but makes no changes.
+
+```powershell
+# See what export would produce (connects but creates no files)
+./Export-SqlServerSchema.ps1 -Server "localhost" -Database "MyDb" -WhatIf
+
+# See what import would do (connects but runs no SQL)
+./Import-SqlServerSchema.ps1 -Server "localhost" -Database "MyDb" `
+    -SourcePath "./exports/MyDb_20260225" -WhatIf
+```
+
+`-WhatIf` for export: connects and shows object counts per category that would be exported.
+
+`-WhatIf` for import: connects, checks if the target database exists, and shows script counts per folder that would be executed.
+
+### -TestConnection (Connectivity Smoke Test)
+
+Verifies connectivity and permissions then exits without performing the full operation.
+
+```powershell
+# Quick connectivity check before export
+./Export-SqlServerSchema.ps1 -Server "sqlserver" -Database "MyDb" -TestConnection
+
+# Quick connectivity check before import
+./Import-SqlServerSchema.ps1 -Server "sqlserver" -Database "MyDb" `
+    -SourcePath "./exports/MyDb" -TestConnection
+```
+
+Exits **0** on success (prints server version and database accessibility), non-zero on failure. Useful for container health checks and pre-deployment pipeline verification.
 
 ## Import Modes Explained
 

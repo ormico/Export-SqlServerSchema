@@ -95,6 +95,28 @@
         -SourcePath ".\DbScripts\..." `
         -UsernameFromEnv SQLCMD_USER -PasswordFromEnv SQLCMD_PASSWORD -TrustServerCertificate
 
+    # Validate configuration and source path offline (no server connection required)
+    ./Import-SqlServerSchema.ps1 -Server localhost -Database TargetDb `
+        -SourcePath ".\DbScripts\localhost_SourceDb_20251110_120000" -ValidateOnly
+
+    # Preview what would be imported (requires server connection)
+    ./Import-SqlServerSchema.ps1 -Server localhost -Database TargetDb `
+        -SourcePath ".\DbScripts\localhost_SourceDb_20251110_120000" -CreateDatabase -WhatIf
+
+    # Test server connectivity and permissions only
+    ./Import-SqlServerSchema.ps1 -Server localhost -Database TargetDb `
+        -SourcePath ".\DbScripts\localhost_SourceDb_20251110_120000" -TestConnection
+
+.PARAMETER ValidateOnly
+    Validate configuration, source path, folder structure, and referenced environment variables
+    without connecting to SQL Server. Parses export folder and reports what object categories
+    would be imported with counts. Flags known prerequisite mismatches (CLR, AlwaysEncrypted,
+    memory-optimized tables). Exit code is non-zero if any errors are found.
+
+.PARAMETER TestConnection
+    Test connectivity to the SQL Server and verify permissions, then exit without importing.
+    Useful for smoke-testing credentials in pipelines.
+
 .NOTES
     Requires: SQL Server Management Objects (SMO), PowerShell 7.0+
     Optional: powershell-yaml module for YAML config file support
@@ -102,7 +124,7 @@
     Supports: Windows, Linux, macOS
 #>
 
-[CmdletBinding()]
+[CmdletBinding(SupportsShouldProcess)]
 param(
   [Parameter(HelpMessage = 'Target SQL Server instance. Can also be provided via -ServerFromEnv or config connection.serverFromEnv')]
   [string]$Server,
@@ -111,7 +133,6 @@ param(
   [string]$Database,
 
   [Parameter(Mandatory = $true, HelpMessage = 'Path to exported schema scripts')]
-  [ValidateScript({ Test-Path $_ -PathType Container })]
   [string]$SourcePath,
 
   [Parameter(HelpMessage = 'SQL Server credentials')]
@@ -192,7 +213,13 @@ param(
   [string]$PasswordFromEnv,
 
   [Parameter(HelpMessage = 'Trust the SQL Server certificate without validation. Required for containers with self-signed certificates.')]
-  [switch]$TrustServerCertificate
+  [switch]$TrustServerCertificate,
+
+  [Parameter(HelpMessage = 'Validate config, source path, folder structure, and referenced secrets without connecting to SQL Server. Non-zero exit on errors.')]
+  [switch]$ValidateOnly,
+
+  [Parameter(HelpMessage = 'Test SQL Server connectivity and permissions, then exit without importing.')]
+  [switch]$TestConnection
 )
 
 $ErrorActionPreference = if ($ContinueOnError) { 'Continue' } else { 'Stop' }
@@ -364,6 +391,426 @@ function Resolve-EnvCredential {
 }
 
 #endregion
+
+#region Validation Functions
+
+function Test-ImportConfigKeys {
+  <#
+    .SYNOPSIS
+        Validates config hashtable keys and values for the import script.
+    .OUTPUTS
+        Hashtable with Errors and Warnings arrays.
+    #>
+  param([hashtable]$Config)
+
+  $errors = [System.Collections.ArrayList]::new()
+  $warnings = [System.Collections.ArrayList]::new()
+
+  $knownTopLevel = @(
+    'export', 'import', 'connection', 'connectionTimeout', 'commandTimeout',
+    'maxRetries', 'retryDelaySeconds', 'trustServerCertificate', 'importMode',
+    'includeData', 'collectMetrics', 'targetSqlVersion', '$schema',
+    'fileGroupFileSizeDefaults', 'encryptionSecrets'
+  )
+
+  foreach ($key in $Config.Keys) {
+    if ($key -notin $knownTopLevel) {
+      [void]$warnings.Add("Unknown config key at root level: '$key'")
+    }
+  }
+
+  if ($Config.targetSqlVersion) {
+    $validVersions = @('Sql2012', 'Sql2014', 'Sql2016', 'Sql2017', 'Sql2019', 'Sql2022')
+    if ($Config.targetSqlVersion -notin $validVersions) {
+      [void]$errors.Add("Invalid targetSqlVersion: '$($Config.targetSqlVersion)'. Valid values: $($validVersions -join ', ')")
+    }
+  }
+
+  if ($Config.importMode) {
+    if ($Config.importMode -notin @('Dev', 'Prod')) {
+      [void]$errors.Add("Invalid importMode: '$($Config.importMode)'. Must be 'Dev' or 'Prod'")
+    }
+  }
+
+  if ($Config.connectionTimeout -ne $null -and $Config.connectionTimeout -isnot [int]) {
+    [void]$errors.Add("connectionTimeout must be an integer (got: $($Config.connectionTimeout.GetType().Name))")
+  }
+
+  if ($Config.commandTimeout -ne $null -and $Config.commandTimeout -isnot [int]) {
+    [void]$errors.Add("commandTimeout must be an integer (got: $($Config.commandTimeout.GetType().Name))")
+  }
+
+  if ($Config.connection -and $Config.connection -is [hashtable]) {
+    $knownConnection = @('serverFromEnv', 'usernameFromEnv', 'passwordFromEnv', 'trustServerCertificate', 'server')
+    foreach ($key in $Config.connection.Keys) {
+      if ($key -notin $knownConnection) {
+        [void]$warnings.Add("Unknown config key: 'connection.$key'")
+      }
+    }
+  }
+
+  if ($Config.import -and $Config.import -is [hashtable]) {
+    $knownImport = @(
+      'defaultMode', 'createDatabase', 'force', 'continueOnError', 'includeData',
+      'includeObjectTypes', 'excludeObjectTypes', 'excludeSchemas',
+      'developerMode', 'productionMode', 'encryptionSecrets', 'clr',
+      'fileGroupFileSizeDefaults'
+    )
+    foreach ($key in $Config.import.Keys) {
+      if ($key -notin $knownImport) {
+        [void]$warnings.Add("Unknown config key: 'import.$key'")
+      }
+    }
+  }
+
+  return @{ Errors = $errors; Warnings = $warnings }
+}
+
+function Get-ImportFolderSummary {
+  <#
+    .SYNOPSIS
+        Parses an export folder and returns a summary of object categories and script counts.
+    .OUTPUTS
+        Array of hashtables with FolderName, DisplayName, ScriptCount, Flags.
+    #>
+  param([string]$SourcePath)
+
+  $summary = [System.Collections.ArrayList]::new()
+
+  # Folder name to display name mapping (ordered by expected import sequence)
+  $folderDisplayNames = @{
+    '00_FileGroups'           = 'FileGroups'
+    '01_Security'             = 'Security (Roles, Users)'
+    '02_DatabaseConfiguration' = 'Database Configuration'
+    '03_Schemas'              = 'Schemas'
+    '04_Sequences'            = 'Sequences'
+    '05_PartitionFunctions'   = 'Partition Functions'
+    '06_PartitionSchemes'     = 'Partition Schemes'
+    '07_Types'                = 'User-Defined Types'
+    '08_XmlSchemaCollections' = 'XML Schema Collections'
+    '09_Tables_PrimaryKey'    = 'Tables (with Primary Keys)'
+    '10_Tables_ForeignKeys'   = 'Foreign Key Constraints'
+    '11_Indexes'              = 'Indexes'
+    '12_Defaults'             = 'Defaults'
+    '13_Rules'                = 'Rules'
+    '14_Programmability'      = 'Programmability (Functions, Procs)'
+    '15_Synonyms'             = 'Synonyms'
+    '16_FullTextSearch'       = 'Full-Text Search'
+    '17_ExternalData'         = 'External Data Sources'
+    '18_SearchPropertyLists'  = 'Search Property Lists'
+    '19_PlanGuides'           = 'Plan Guides'
+    '20_SecurityPolicies'     = 'Security Policies'
+    '21_Data'                 = 'Data (INSERT statements)'
+  }
+
+  $folders = Get-ChildItem $SourcePath -Directory | Sort-Object Name
+  foreach ($folder in $folders) {
+    $scripts = @(Get-ChildItem $folder.FullName -Filter '*.sql' -Recurse -File)
+    if ($scripts.Count -gt 0) {
+      $displayName = if ($folderDisplayNames.ContainsKey($folder.Name)) {
+        $folderDisplayNames[$folder.Name]
+      }
+      else {
+        $folder.Name
+      }
+      [void]$summary.Add(@{
+          FolderName   = $folder.Name
+          DisplayName  = $displayName
+          ScriptCount  = $scripts.Count
+          FolderPath   = $folder.FullName
+        })
+    }
+  }
+
+  return $summary
+}
+
+function Get-ImportPrerequisiteWarnings {
+  <#
+    .SYNOPSIS
+        Inspects an export folder for known objects that have import prerequisites.
+    .DESCRIPTION
+        Checks for CLR assemblies, AlwaysEncrypted objects, and memory-optimized tables
+        and returns warnings if the corresponding config/switches are not set.
+    .OUTPUTS
+        Array of warning strings.
+    #>
+  param(
+    [string]$SourcePath,
+    [hashtable]$Config,
+    [switch]$StripAlwaysEncrypted
+  )
+
+  $warnings = [System.Collections.ArrayList]::new()
+
+  # Check for CLR assemblies
+  $assemblyFolder = Join-Path $SourcePath '14_Programmability'
+  if (Test-Path $assemblyFolder) {
+    $clrScripts = @(Get-ChildItem $assemblyFolder -Recurse -Filter '*.sql' |
+      Where-Object { (Get-Content $_.FullName -Raw -ErrorAction SilentlyContinue) -match '\bCREATE ASSEMBLY\b' })
+    if ($clrScripts.Count -gt 0) {
+      $clrEnabled = $false
+      if ($Config -and $Config.import) {
+        $devMode = $Config.import.developerMode
+        $prodMode = $Config.import.productionMode
+        if (($devMode -is [hashtable] -and $devMode.clr.disableStrictSecurityForImport -eq $true) -or
+            ($prodMode -is [hashtable] -and $prodMode.clr.disableStrictSecurityForImport -eq $true) -or
+            ($Config.import.clr.disableStrictSecurityForImport -eq $true)) {
+          $clrEnabled = $true
+        }
+      }
+      if (-not $clrEnabled) {
+        [void]$warnings.Add("CLR assemblies found ($($clrScripts.Count) script(s)) but import.clr.disableStrictSecurityForImport is not set. CLR import may fail if 'clr strict security' is ON. Consider adding: import.developerMode.clr.disableStrictSecurityForImport: true")
+      }
+    }
+  }
+
+  # Check for AlwaysEncrypted column master/encryption keys
+  $securityFolder = Join-Path $SourcePath '01_Security'
+  if (Test-Path $securityFolder) {
+    $aeScripts = @(Get-ChildItem $securityFolder -Recurse -Filter '*.sql' |
+      Where-Object { (Get-Content $_.FullName -Raw -ErrorAction SilentlyContinue) -match '\bCREATE COLUMN (MASTER|ENCRYPTION) KEY\b' })
+    if ($aeScripts.Count -gt 0 -and -not $StripAlwaysEncrypted) {
+      $hasSecretsConfig = $Config -and ($Config.encryptionSecrets -or
+        ($Config.import -is [hashtable] -and $Config.import.encryptionSecrets))
+      if (-not $hasSecretsConfig) {
+        [void]$warnings.Add("AlwaysEncrypted keys found ($($aeScripts.Count) script(s)). Use -StripAlwaysEncrypted to remove them, or configure encryptionSecrets in config, or run -ShowRequiredSecrets to see what's needed")
+      }
+    }
+  }
+
+  # Check for memory-optimized tables (MEMORY_OPTIMIZED = ON)
+  $tablesFolder = Join-Path $SourcePath '09_Tables_PrimaryKey'
+  if (Test-Path $tablesFolder) {
+    $moScripts = @(Get-ChildItem $tablesFolder -Recurse -Filter '*.sql' |
+      Where-Object { (Get-Content $_.FullName -Raw -ErrorAction SilentlyContinue) -match 'MEMORY_OPTIMIZED\s*=\s*ON' })
+    if ($moScripts.Count -gt 0) {
+      [void]$warnings.Add("Memory-optimized tables found ($($moScripts.Count) script(s)). Ensure the target server has a MEMORY_OPTIMIZED_DATA filegroup or the import will fail")
+    }
+  }
+
+  return $warnings
+}
+
+function Invoke-ImportValidation {
+  <#
+    .SYNOPSIS
+        Validates import configuration offline without connecting to SQL Server.
+    .DESCRIPTION
+        Checks config file syntax and key validity, SourcePath accessibility and folder structure,
+        environment variables referenced by *FromEnv parameters or config, and known import
+        prerequisite mismatches. Reports all errors and warnings. Exits with non-zero code on errors.
+    #>
+  param(
+    [string]$ConfigFile,
+    [string]$SourcePath,
+    [string]$Server,
+    [string]$ServerFromEnv,
+    [string]$UsernameFromEnv,
+    [string]$PasswordFromEnv,
+    [hashtable]$Config,
+    [switch]$StripAlwaysEncrypted
+  )
+
+  $errors = [System.Collections.ArrayList]::new()
+  $warnings = [System.Collections.ArrayList]::new()
+
+  Write-Host ''
+  Write-Host '═══════════════════════════════════════════════════════════════' -ForegroundColor Cyan
+  Write-Host 'VALIDATE-ONLY MODE (Import)' -ForegroundColor Cyan
+  Write-Host 'Validating configuration without connecting to SQL Server.' -ForegroundColor Cyan
+  Write-Host '═══════════════════════════════════════════════════════════════' -ForegroundColor Cyan
+  Write-Host ''
+
+  # 1. Config file validation
+  if ($ConfigFile) {
+    Write-Host "[CHECK] Config file: $ConfigFile"
+    if (-not (Test-Path $ConfigFile)) {
+      [void]$errors.Add("Config file not found: $ConfigFile")
+      Write-Host "  [ERROR] File not found" -ForegroundColor Red
+    }
+    else {
+      try {
+        $parsedConfig = Import-YamlConfig -ConfigFilePath $ConfigFile
+        Write-Host "  [OK] Config file parses as valid YAML" -ForegroundColor Green
+        $keyResult = Test-ImportConfigKeys -Config $parsedConfig
+        foreach ($err in $keyResult.Errors) {
+          [void]$errors.Add($err)
+          Write-Host "  [ERROR] $err" -ForegroundColor Red
+        }
+        foreach ($warn in $keyResult.Warnings) {
+          [void]$warnings.Add($warn)
+          Write-Host "  [WARN] $warn" -ForegroundColor Yellow
+        }
+        if ($keyResult.Errors.Count -eq 0 -and $keyResult.Warnings.Count -eq 0) {
+          Write-Host "  [OK] Config keys and values are valid" -ForegroundColor Green
+        }
+      }
+      catch {
+        [void]$errors.Add("Config file parse error: $($_.Exception.Message)")
+        Write-Host "  [ERROR] Parse error: $($_.Exception.Message)" -ForegroundColor Red
+      }
+    }
+  }
+  else {
+    Write-Host "[INFO] No config file specified (using defaults)" -ForegroundColor Gray
+  }
+
+  # 2. SourcePath validation
+  Write-Host ''
+  Write-Host "[CHECK] Source path: $SourcePath"
+  $sourcePathValid = $false
+  if (-not (Test-Path $SourcePath -PathType Container)) {
+    [void]$errors.Add("SourcePath does not exist or is not a directory: $SourcePath")
+    Write-Host "  [ERROR] Path does not exist" -ForegroundColor Red
+  }
+  else {
+    Write-Host "  [OK] Path exists" -ForegroundColor Green
+    $sourcePathValid = $true
+
+    # 3. Folder structure analysis
+    Write-Host ''
+    Write-Host '[CHECK] Export folder structure'
+    $folderSummary = Get-ImportFolderSummary -SourcePath $SourcePath
+    if ($folderSummary.Count -eq 0) {
+      [void]$errors.Add("No SQL scripts found in SourcePath: $SourcePath")
+      Write-Host "  [ERROR] No SQL script folders found" -ForegroundColor Red
+    }
+    else {
+      Write-Host "  Object categories that would be imported:" -ForegroundColor Green
+      $totalScripts = 0
+      foreach ($entry in $folderSummary) {
+        Write-Host ("    {0,-35} {1,4} script(s)" -f $entry.DisplayName, $entry.ScriptCount) -ForegroundColor White
+        $totalScripts += $entry.ScriptCount
+      }
+      Write-Host ''
+      Write-Host ("    {0,-35} {1,4} total" -f 'TOTAL', $totalScripts) -ForegroundColor Cyan
+
+      # 4. Check for export metadata
+      $metadataFile = Join-Path $SourcePath '_export_metadata.json'
+      if (Test-Path $metadataFile) {
+        Write-Host "  [OK] Export metadata file found" -ForegroundColor Green
+      }
+      else {
+        [void]$warnings.Add("No _export_metadata.json found in SourcePath — this export may be from an older version")
+        Write-Host "  [WARN] No _export_metadata.json found (older export format)" -ForegroundColor Yellow
+      }
+
+      # 5. Prerequisite checks
+      Write-Host ''
+      Write-Host '[CHECK] Import prerequisites'
+      $prereqWarnings = Get-ImportPrerequisiteWarnings `
+        -SourcePath $SourcePath `
+        -Config $Config `
+        -StripAlwaysEncrypted:$StripAlwaysEncrypted
+      if ($prereqWarnings.Count -gt 0) {
+        foreach ($w in $prereqWarnings) {
+          [void]$warnings.Add($w)
+          Write-Host "  [WARN] $w" -ForegroundColor Yellow
+        }
+      }
+      else {
+        Write-Host "  [OK] No prerequisite issues detected" -ForegroundColor Green
+      }
+    }
+  }
+
+  # 6. Environment variable checks
+  Write-Host ''
+  Write-Host '[CHECK] Environment variables'
+
+  if ($ServerFromEnv) {
+    $val = [System.Environment]::GetEnvironmentVariable($ServerFromEnv)
+    if ([string]::IsNullOrWhiteSpace($val)) {
+      if ([string]::IsNullOrWhiteSpace($Server)) {
+        [void]$errors.Add("ServerFromEnv '$ServerFromEnv' is not set and no -Server provided")
+        Write-Host "  [ERROR] $ServerFromEnv is not set (and no -Server provided)" -ForegroundColor Red
+      }
+      else {
+        [void]$warnings.Add("ServerFromEnv '$ServerFromEnv' is not set (will use -Server instead)")
+        Write-Host "  [WARN] $ServerFromEnv is not set (will use -Server '$Server' instead)" -ForegroundColor Yellow
+      }
+    }
+    else {
+      Write-Host "  [OK] $ServerFromEnv is set" -ForegroundColor Green
+    }
+  }
+
+  if ($UsernameFromEnv) {
+    $val = [System.Environment]::GetEnvironmentVariable($UsernameFromEnv)
+    if ([string]::IsNullOrWhiteSpace($val)) {
+      [void]$warnings.Add("UsernameFromEnv '$UsernameFromEnv' is not set")
+      Write-Host "  [WARN] $UsernameFromEnv is not set" -ForegroundColor Yellow
+    }
+    else {
+      Write-Host "  [OK] $UsernameFromEnv is set" -ForegroundColor Green
+    }
+  }
+
+  if ($PasswordFromEnv) {
+    $val = [System.Environment]::GetEnvironmentVariable($PasswordFromEnv)
+    if ([string]::IsNullOrWhiteSpace($val)) {
+      [void]$warnings.Add("PasswordFromEnv '$PasswordFromEnv' is not set")
+      Write-Host "  [WARN] $PasswordFromEnv is not set" -ForegroundColor Yellow
+    }
+    else {
+      Write-Host "  [OK] $PasswordFromEnv is set (value masked)" -ForegroundColor Green
+    }
+  }
+
+  if ($Config -and $Config.connection -and $Config.connection -is [hashtable]) {
+    $connSection = $Config.connection
+    foreach ($cfgKey in @('serverFromEnv', 'usernameFromEnv', 'passwordFromEnv')) {
+      $envName = $connSection[$cfgKey]
+      if ($envName) {
+        $val = [System.Environment]::GetEnvironmentVariable($envName)
+        if ([string]::IsNullOrWhiteSpace($val)) {
+          [void]$warnings.Add("Config connection.$cfgKey references '$envName' which is not set in environment")
+          Write-Host "  [WARN] Config connection.$cfgKey → $envName is not set" -ForegroundColor Yellow
+        }
+        else {
+          Write-Host "  [OK] Config connection.$cfgKey → $envName is set" -ForegroundColor Green
+        }
+      }
+    }
+  }
+
+  if (-not $ServerFromEnv -and -not $UsernameFromEnv -and -not $PasswordFromEnv -and
+      (-not $Config -or -not $Config.connection)) {
+    Write-Host "  [INFO] No *FromEnv parameters or config connection section to validate" -ForegroundColor Gray
+  }
+
+  # Display summary
+  Write-Host ''
+  Write-Host '─────────────────────────────────────────────────────────────────' -ForegroundColor Cyan
+  Write-Host 'Validation Summary' -ForegroundColor Cyan
+  Write-Host '─────────────────────────────────────────────────────────────────' -ForegroundColor Cyan
+
+  if ($warnings.Count -gt 0) {
+    Write-Host ''
+    Write-Host "Warnings ($($warnings.Count)):" -ForegroundColor Yellow
+    foreach ($w in $warnings) {
+      Write-Host "  [WARN] $w" -ForegroundColor Yellow
+    }
+  }
+
+  if ($errors.Count -gt 0) {
+    Write-Host ''
+    Write-Host "Errors ($($errors.Count)):" -ForegroundColor Red
+    foreach ($e in $errors) {
+      Write-Host "  [ERROR] $e" -ForegroundColor Red
+    }
+    Write-Host ''
+    Write-Host '[FAILED] Validation failed. Fix the errors above before running import.' -ForegroundColor Red
+    exit 1
+  }
+
+  Write-Host ''
+  Write-Host '[SUCCESS] All validation checks passed.' -ForegroundColor Green
+  exit 0
+}
+
+#endregion Validation Functions
 
 #region Helper Functions
 
@@ -3670,7 +4117,8 @@ try {
 
       # Override ImportMode from config ONLY if not explicitly set on command line
       # Command-line parameters always take precedence over config file
-      if ($configImportMode -and -not $PSBoundParameters.ContainsKey('ImportMode')) {
+      # Skip in ValidateOnly mode — enum validation is performed by Invoke-ImportValidation using raw config
+      if ($configImportMode -and -not $PSBoundParameters.ContainsKey('ImportMode') -and -not $ValidateOnly) {
         $ImportMode = $configImportMode
         Write-Output "[INFO] Import mode set from config file: $ImportMode"
       }
@@ -3772,6 +4220,21 @@ try {
     }
   }
 
+  # Handle -ValidateOnly mode: offline validation only, no server connection
+  # Must run BEFORE Resolve-EnvCredential to avoid pair-validation of *FromEnv params
+  if ($ValidateOnly) {
+    Invoke-ImportValidation `
+      -ConfigFile $ConfigFile `
+      -SourcePath $SourcePath `
+      -Server $Server `
+      -ServerFromEnv $ServerFromEnv `
+      -UsernameFromEnv $UsernameFromEnv `
+      -PasswordFromEnv $PasswordFromEnv `
+      -Config $config `
+      -StripAlwaysEncrypted:$StripAlwaysEncrypted
+    # Invoke-ImportValidation calls exit internally
+  }
+
   # Resolve credentials from environment variables (if specified)
   # Precedence: CLI -Credential/-Server > *FromEnv CLI params > config connection: section > defaults
   $envResolved = Resolve-EnvCredential `
@@ -3786,6 +4249,12 @@ try {
   $Server = $envResolved.Server
   $Credential = $envResolved.Credential
   $script:TrustServerCertificateEnabled = $envResolved.TrustServerCertificate
+
+  # Validate SourcePath for non-ValidateOnly modes (replaces removed [ValidateScript] attribute)
+  if (-not (Test-Path $SourcePath -PathType Container)) {
+    Write-Error "SourcePath '$SourcePath' does not exist or is not a directory."
+    exit 1
+  }
 
   # Validate that Server was resolved from at least one source
   if ([string]::IsNullOrWhiteSpace($Server)) {
@@ -3932,52 +4401,77 @@ try {
   Write-Log "Connection test successful to $Server" -Severity INFO
   Write-Output ''
 
-  # Check if database exists (reuse shared connection)
-  if ($script:CollectMetrics) { Write-Verbose "[TIMING] Starting Test-DatabaseExists..." }
-  $testDbSw = [System.Diagnostics.Stopwatch]::StartNew()
-  $dbExists = Test-DatabaseExists -ServerName $Server -DatabaseName $Database -Cred $Credential -Config $config -Timeout $effectiveConnectionTimeout -Connection $script:SharedConnection
-  $testDbSw.Stop()
-  if ($script:CollectMetrics) { Write-Verbose "[TIMING] Test-DatabaseExists completed in $([math]::Round($testDbSw.Elapsed.TotalSeconds, 3))s" }
+  # Handle -TestConnection mode: verify connectivity and exit
+  if ($TestConnection) {
+    Write-Host ''
+    Write-Host '═══════════════════════════════════════════════════════════════' -ForegroundColor Cyan
+    Write-Host 'CONNECTION TEST RESULTS' -ForegroundColor Cyan
+    Write-Host '═══════════════════════════════════════════════════════════════' -ForegroundColor Cyan
+    Write-Host ''
+    Write-Host "  Server  : $Server" -ForegroundColor Green
+    Write-Host "  Database: $Database" -ForegroundColor Green
+    try {
+      $serverInfo = $script:SharedConnection.ConnectionContext.ServerVersion
+      Write-Host "  Version : $serverInfo" -ForegroundColor Green
+    }
+    catch {
+      Write-Host "  Version : (unable to retrieve)" -ForegroundColor Yellow
+    }
+    Write-Host ''
+    Write-Host '[SUCCESS] Connection test passed.' -ForegroundColor Green
+    exit 0
+  }
 
-  if (-not $dbExists) {
-    if ($CreateDatabase) {
-      if (-not (New-Database -ServerName $Server -DatabaseName $Database -Cred $Credential -Config $config -Timeout $effectiveConnectionTimeout)) {
+  # In WhatIf mode, skip database creation and schema checks — the WhatIf block below
+  # reports what would happen using its own Test-DatabaseExists call.
+  if (-not $WhatIfPreference) {
+    # Check if database exists (reuse shared connection)
+    if ($script:CollectMetrics) { Write-Verbose "[TIMING] Starting Test-DatabaseExists..." }
+    $testDbSw = [System.Diagnostics.Stopwatch]::StartNew()
+    $dbExists = Test-DatabaseExists -ServerName $Server -DatabaseName $Database -Cred $Credential -Config $config -Timeout $effectiveConnectionTimeout -Connection $script:SharedConnection
+    $testDbSw.Stop()
+    if ($script:CollectMetrics) { Write-Verbose "[TIMING] Test-DatabaseExists completed in $([math]::Round($testDbSw.Elapsed.TotalSeconds, 3))s" }
+
+    if (-not $dbExists) {
+      if ($CreateDatabase) {
+        if (-not (New-Database -ServerName $Server -DatabaseName $Database -Cred $Credential -Config $config -Timeout $effectiveConnectionTimeout)) {
+          exit 1
+        }
+        # Reconnect shared connection to the new database
+        Write-Verbose "[TIMING] Reconnecting to target database..."
+        $script:SharedConnection.ConnectionContext.Disconnect()
+        $script:SharedConnection = New-SqlServerConnection -ServerName $Server -DatabaseName $Database -Cred $Credential -Config $config -Timeout $effectiveCommandTimeout
+      }
+      else {
+        Write-Error "Database '$Database' does not exist. Use -CreateDatabase to create it."
         exit 1
       }
-      # Reconnect shared connection to the new database
-      Write-Verbose "[TIMING] Reconnecting to target database..."
-      $script:SharedConnection.ConnectionContext.Disconnect()
-      $script:SharedConnection = New-SqlServerConnection -ServerName $Server -DatabaseName $Database -Cred $Credential -Config $config -Timeout $effectiveCommandTimeout
     }
     else {
-      Write-Error "Database '$Database' does not exist. Use -CreateDatabase to create it."
-      exit 1
+      Write-Output "[SUCCESS] Target database exists: $Database"
+      # If we connected to master initially (CreateDatabase flag), reconnect to target database
+      if ($CreateDatabase) {
+        Write-Verbose "[TIMING] Reconnecting to target database..."
+        $script:SharedConnection.ConnectionContext.Disconnect()
+        $script:SharedConnection = New-SqlServerConnection -ServerName $Server -DatabaseName $Database -Cred $Credential -Config $config -Timeout $effectiveCommandTimeout
+      }
     }
-  }
-  else {
-    Write-Output "[SUCCESS] Target database exists: $Database"
-    # If we connected to master initially (CreateDatabase flag), reconnect to target database
-    if ($CreateDatabase) {
-      Write-Verbose "[TIMING] Reconnecting to target database..."
-      $script:SharedConnection.ConnectionContext.Disconnect()
-      $script:SharedConnection = New-SqlServerConnection -ServerName $Server -DatabaseName $Database -Cred $Credential -Config $config -Timeout $effectiveCommandTimeout
-    }
-  }
-  Write-Output ''
+    Write-Output ''
 
-  # Check for existing schema (reuse shared connection)
-  if ($script:CollectMetrics) { Write-Verbose "[TIMING] Starting Test-SchemaExists..." }
-  $testSchemaSw = [System.Diagnostics.Stopwatch]::StartNew()
-  if (Test-SchemaExists -ServerName $Server -DatabaseName $Database -Cred $Credential -Config $config -Timeout $effectiveConnectionTimeout -Connection $script:SharedConnection) {
-    if (-not $Force) {
-      Write-Output "[INFO] Database $Database already contains schema objects."
-      Write-Output "Use -Force to proceed with redeployment."
-      exit 0
+    # Check for existing schema (reuse shared connection)
+    if ($script:CollectMetrics) { Write-Verbose "[TIMING] Starting Test-SchemaExists..." }
+    $testSchemaSw = [System.Diagnostics.Stopwatch]::StartNew()
+    if (Test-SchemaExists -ServerName $Server -DatabaseName $Database -Cred $Credential -Config $config -Timeout $effectiveConnectionTimeout -Connection $script:SharedConnection) {
+      if (-not $Force) {
+        Write-Output "[INFO] Database $Database already contains schema objects."
+        Write-Output "Use -Force to proceed with redeployment."
+        exit 0
+      }
+      Write-Output '[INFO] Proceeding with redeployment due to -Force flag'
     }
-    Write-Output '[INFO] Proceeding with redeployment due to -Force flag'
+    $testSchemaSw.Stop()
+    if ($script:CollectMetrics) { Write-Verbose "[TIMING] Test-SchemaExists completed in $([math]::Round($testSchemaSw.Elapsed.TotalSeconds, 3))s" }
   }
-  $testSchemaSw.Stop()
-  if ($script:CollectMetrics) { Write-Verbose "[TIMING] Test-SchemaExists completed in $([math]::Round($testSchemaSw.Elapsed.TotalSeconds, 3))s" }
   Write-Output ''
 
   if ($script:CollectMetrics) { Write-Verbose "[TIMING] Preliminary checks total so far: $([math]::Round($script:PrelimStopwatch.Elapsed.TotalSeconds, 3))s" }
@@ -4002,6 +4496,60 @@ try {
   }
 
   Write-Output "Found $($scripts.Count) script(s)"
+
+  # Handle -WhatIf mode: report what would happen without executing any scripts
+  if ($WhatIfPreference) {
+    Write-Host ''
+    Write-Host '═══════════════════════════════════════════════════════════════' -ForegroundColor Cyan
+    Write-Host 'WHATIF: Import preview — no changes will be made' -ForegroundColor Cyan
+    Write-Host '═══════════════════════════════════════════════════════════════' -ForegroundColor Cyan
+    Write-Host ''
+    Write-Host "  Server  : $Server" -ForegroundColor White
+    Write-Host "  Database: $Database" -ForegroundColor White
+    Write-Host "  Source  : $(Split-Path -Leaf $SourcePath)" -ForegroundColor White
+    Write-Host "  Mode    : $ImportMode" -ForegroundColor White
+    Write-Host ''
+
+    # Database existence report
+    $dbExistsForWhatIf = Test-DatabaseExists -ServerName $Server -DatabaseName $Database -Cred $Credential -Config $config -Timeout $effectiveConnectionTimeout -Connection $script:SharedConnection
+    if ($dbExistsForWhatIf) {
+      Write-Host "  Database '$Database': already exists (would not be re-created)" -ForegroundColor White
+    }
+    elseif ($CreateDatabase) {
+      Write-Host "  Database '$Database': does not exist — would be created" -ForegroundColor White
+    }
+    else {
+      Write-Host "  Database '$Database': does not exist — import would fail without -CreateDatabase" -ForegroundColor Yellow
+    }
+
+    # Script counts by folder
+    Write-Host ''
+    Write-Host '  Scripts that would be executed (by folder):' -ForegroundColor Cyan
+    $scriptsByFolder = $scripts | Group-Object { Split-Path (Split-Path $_.FullName -Parent) -Leaf } | Sort-Object Name
+    foreach ($folderGroup in $scriptsByFolder) {
+      Write-Host ("    {0,-35} {1,4} script(s)" -f $folderGroup.Name, $folderGroup.Count) -ForegroundColor White
+    }
+    Write-Host ''
+    Write-Host ("    {0,-35} {1,4} total" -f 'TOTAL', $scripts.Count) -ForegroundColor Cyan
+
+    # FK and CLR notes
+    if ($includedFolders -contains '10_Tables_ForeignKeys') {
+      Write-Host ''
+      Write-Host '  Foreign key constraints would be disabled during data load and re-enabled after.' -ForegroundColor Gray
+    }
+
+    $hasClrInWhatIf = $scripts | Where-Object { $_.FullName -match '14_Programmability' -and (Get-Content $_.FullName -Raw -ErrorAction SilentlyContinue) -match '\bCREATE ASSEMBLY\b' }
+    if ($hasClrInWhatIf) {
+      Write-Host ''
+      Write-Host '  CLR assemblies detected — CLR strict security settings may be modified.' -ForegroundColor Yellow
+    }
+
+    Write-Host ''
+    Write-Host 'No changes were made. Remove -WhatIf to perform the actual import.' -ForegroundColor Yellow
+    # ShouldProcess call confirms WhatIf behavior (returns false, displays standard message)
+    $null = $PSCmdlet.ShouldProcess("$Database on $Server", "Import database schema from $SourcePath")
+    exit 0
+  }
 
   # Detect target server OS for path separator (reuse shared connection)
   $targetOS = Get-TargetServerOS -ServerName $Server -Cred $Credential -Config $config -Connection $script:SharedConnection
