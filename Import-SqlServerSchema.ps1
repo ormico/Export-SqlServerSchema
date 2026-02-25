@@ -3231,10 +3231,13 @@ function Resolve-LatestExportPath {
   $directMeta = Join-Path $resolvedSource '_export_metadata.json'
   if (Test-Path $directMeta) {
     try {
-      $null = Get-Content -Path $directMeta -Raw -Encoding UTF8 | ConvertFrom-Json -AsHashtable
-      Write-Warning "[UseLatestExport] -SourcePath points directly to a valid export folder. -UseLatestExport is redundant here."
-      Write-Warning "  Using: $resolvedSource"
-      return $resolvedSource
+      $directMetaObj = Get-Content -Path $directMeta -Raw -Encoding UTF8 | ConvertFrom-Json -AsHashtable
+      if ($null -ne $directMetaObj) {
+        Write-Warning "[UseLatestExport] -SourcePath points directly to a valid export folder. -UseLatestExport is redundant here."
+        Write-Warning "  Using: $resolvedSource"
+        return $resolvedSource
+      }
+      Write-Verbose "[UseLatestExport] _export_metadata.json at root is empty. Scanning children."
     }
     catch {
       # Metadata exists but is not parseable JSON — treat as non-export folder and scan children
@@ -3263,6 +3266,10 @@ function Resolve-LatestExportPath {
     }
     catch {
       Write-Verbose "[UseLatestExport] Skipping $($child.Name): _export_metadata.json is not valid JSON."
+      continue
+    }
+    if ($null -eq $meta) {
+      Write-Verbose "[UseLatestExport] Skipping $($child.Name): _export_metadata.json is empty."
       continue
     }
 
