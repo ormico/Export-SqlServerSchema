@@ -120,6 +120,11 @@ function Write-TestResult {
 function Remove-TestDatabase {
     param([string]$DatabaseName)
 
+    # Validate database name contains only safe characters (alphanumeric and underscores)
+    if ($DatabaseName -notmatch '^[A-Za-z0-9_]+$') {
+        throw "Invalid database name: '$DatabaseName'. Only alphanumeric characters and underscores are allowed."
+    }
+
     try {
         $result = Invoke-SqlCommand "SELECT COUNT(*) FROM sys.databases WHERE name = '$DatabaseName'"
         $count = @($result) | ForEach-Object { "$_".Trim() } | Where-Object { $_ -match '^\d+$' } | Select-Object -First 1
@@ -134,6 +139,12 @@ function Remove-TestDatabase {
 
 function Get-SpConfigureValue {
     param([string]$OptionName)
+
+    # Validate against known sp_configure option names to prevent SQL injection
+    $allowedOptions = @('clr enabled', 'clr strict security', 'show advanced options')
+    if ($OptionName -notin $allowedOptions) {
+        throw "Invalid sp_configure option name: '$OptionName'. Allowed: $($allowedOptions -join ', ')"
+    }
 
     try {
         # Use sys.configurations directly and output as simple text
@@ -158,6 +169,12 @@ function Set-SpConfigureValue {
         [string]$OptionName,
         [int]$Value
     )
+
+    # Validate against known sp_configure option names to prevent SQL injection
+    $allowedOptions = @('clr enabled', 'clr strict security', 'show advanced options')
+    if ($OptionName -notin $allowedOptions) {
+        throw "Invalid sp_configure option name: '$OptionName'. Allowed: $($allowedOptions -join ', ')"
+    }
 
     try {
         # Enable advanced options first (required for 'clr strict security')
