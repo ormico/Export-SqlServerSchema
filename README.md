@@ -692,6 +692,31 @@ ALL TO ([PRIMARY]);  -- ← Changed from TO ([FG_ARCHIVE], [FG_CURRENT], [PRIMAR
 
 Use a YAML configuration file instead of long command-line arguments:
 
+### Auto-Discovery
+
+When `-ConfigFile` is not specified, both scripts automatically search for a config file in the following locations and order:
+
+1. **Script directory** (`$PSScriptRoot`) — useful when the config lives alongside the scripts in a repo
+2. **Current working directory** (`$PWD`) — useful when invoking from a project root
+
+The well-known file names searched (in order) are:
+1. `export-import-config.yml`
+2. `export-import-config.yaml`
+
+The first match found is used. If no config file is found in either location, the scripts continue with defaults — no error is raised.
+
+Console output when a config file is auto-discovered:
+```
+[INFO] Using config file: /path/to/export-import-config.yml (auto-discovered)
+```
+
+Console output when no config file is found:
+```
+[INFO] No config file found, using defaults
+```
+
+An explicit `-ConfigFile` parameter always takes priority over auto-discovery.
+
 **Minimal Configuration** (all settings have sensible defaults):
 ```yaml
 # Only needed for Docker/self-signed certificates

@@ -5266,6 +5266,39 @@ function Apply-FilestreamStripping {
   return $modifiedCount
 }
 
+function Resolve-ConfigFile {
+  <#
+    .SYNOPSIS
+        Auto-discovers the config file when -ConfigFile is not provided.
+    .DESCRIPTION
+        Searches for well-known config file names in the script directory first,
+        then the current working directory. Returns the first match found, or an
+        empty string if no config file is discovered.
+    .PARAMETER ScriptRoot
+        The directory containing the script (typically $PSScriptRoot).
+    .OUTPUTS
+        The resolved absolute path to the config file, or empty string if not found.
+    #>
+  param(
+    [string]$ScriptRoot
+  )
+
+  $wellKnownNames = @('export-import-config.yml', 'export-import-config.yaml')
+  $searchPaths = @($ScriptRoot, $PWD.Path)
+
+  foreach ($searchPath in $searchPaths) {
+    if (-not $searchPath) { continue }
+    foreach ($name in $wellKnownNames) {
+      $candidate = Join-Path $searchPath $name
+      if (Test-Path $candidate) {
+        return $candidate
+      }
+    }
+  }
+
+  return ''
+}
+
 function Import-YamlConfig {
   <#
     .SYNOPSIS
@@ -6564,6 +6597,18 @@ try {
     }
   }
   $configSource = "None (using defaults)"
+
+  # Auto-discover config file when -ConfigFile is not provided
+  if (-not $ConfigFile) {
+    $autoDiscovered = Resolve-ConfigFile -ScriptRoot $PSScriptRoot
+    if ($autoDiscovered) {
+      $ConfigFile = $autoDiscovered
+      Write-Host "[INFO] Using config file: $ConfigFile (auto-discovered)"
+    }
+    else {
+      Write-Host "[INFO] No config file found, using defaults"
+    }
+  }
 
   if ($ConfigFile) {
     if (Test-Path $ConfigFile) {
