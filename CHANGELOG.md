@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [unreleased] - YYYY-MM-DD
 
+### Improved
+
+**Detailed Import Error Reporting**
+- Error log now includes the full file path (`File:`) for every failed script, eliminating the need to manually locate scripts in the export folder tree
+- Programmability retry failures now surface the actual inner SQL Server error (error number, message) instead of the generic .NET wrapper `Exception calling "ExecuteNonQuery"`
+  - Uses `$script:LastScriptError` (set by `Invoke-SqlScript`'s full exception-chain walk) rather than the shallow catch-block message
+- Memory-optimized FileGroup creation failures are now tracked in `$script:FailedScripts` and appear in the error log and final summary (previously printed to host only and lost)
+- Foreign key re-enable failures are now tracked in `$script:FailedScripts` and appear in the error log and final summary (previously printed to host only and lost)
+- Final error summary now prefixes each entry with the folder context (e.g. `[14_Programmability]`, `[ForeignKeys]`) for quicker triage
+- Error log folder attribution for programmability scripts is derived from the actual file path rather than hardcoded, correctly reflecting subfolder structure (e.g. `14_Programmability/02_Functions`)
+
 ### Added
 
 **Environment Variable Credential Injection for Containers and CI/CD (#58)**
