@@ -3102,6 +3102,19 @@ function Test-ClrAssemblyScript {
     return $true
   }
 
+  # Fallback: lightweight content check for scripts that don't follow naming conventions
+  if ($relativePath -match '14_Programmability') {
+    try {
+      $head = Get-Content -Path $ScriptFile.FullName -TotalCount 40 -ErrorAction Stop
+      if ($head -match '(?i)\bCREATE\s+ASSEMBLY\b') {
+        return $true
+      }
+    }
+    catch {
+      Write-Verbose "[CLR] Could not read '$($ScriptFile.Name)' for assembly detection: $($_.Exception.Message)"
+    }
+  }
+
   return $false
 }
 
