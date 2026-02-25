@@ -287,6 +287,16 @@ import:
     # Useful when importing to a different server without the same logins
     # convertLoginsToContained: false
 
+    # CLR Integration Settings
+    # Controls CLR assembly loading behavior during import.
+    # SQL Server 2017+ defaults to clr strict security = 1, which blocks
+    # unsigned/untrusted CLR assemblies from loading.
+    # clr:
+    #   enableClr: true                         # Enable CLR integration (sp_configure 'clr enabled')
+    #   disableStrictSecurityForImport: true     # Temporarily disable strict security during CLR import
+    #   restoreStrictSecuritySetting: true       # Restore original strict security value after import
+    #   restoreClrEnabledSetting: true           # Restore original CLR enabled value after import
+
     # Object types to exclude in developer mode
     excludeObjectTypes: []
       # - PlanGuides                   # Environment-specific query hints
@@ -370,6 +380,14 @@ import:
     # Convert login-mapped users to contained users (default: false)
     # Usually false for production - logins should exist on production servers
     # convertLoginsToContained: false
+
+    # CLR Integration Settings (production)
+    # Usually not needed in production if assemblies are properly signed
+    # clr:
+    #   enableClr: true                         # Enable CLR if target needs it
+    #   disableStrictSecurityForImport: false    # Production should use signed assemblies
+    #   restoreStrictSecuritySetting: true       # Always restore in production
+    #   restoreClrEnabledSetting: true           # Always restore in production
 
     # No object types excluded in production mode
     excludeObjectTypes: []

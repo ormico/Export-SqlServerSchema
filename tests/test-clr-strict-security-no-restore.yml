@@ -1,0 +1,7 @@
+import:
+  developerMode:
+    fileGroupStrategy: removeToPrimary
+    clr:
+      enableClr: true
+      disableStrictSecurityForImport: true
+      restoreStrictSecuritySetting: false

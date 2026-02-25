@@ -500,6 +500,33 @@
         "encryptionSecrets": {
           "$ref": "#/definitions/encryptionSecretsConfig",
           "description": "Encryption key secrets for database master keys, symmetric keys, certificates, and application roles. Required when importing databases with encryption objects."
+        },
+        "clr": {
+          "type": "object",
+          "description": "CLR integration and strict security settings for importing databases with CLR assemblies",
+          "properties": {
+            "enableClr": {
+              "type": "boolean",
+              "description": "Enable CLR integration on the target server (sp_configure 'clr enabled'). Required before loading CLR assemblies.",
+              "default": false
+            },
+            "disableStrictSecurityForImport": {
+              "type": "boolean",
+              "description": "Temporarily disable 'clr strict security' during CLR object import. Required for unsigned/untrusted assemblies on SQL Server 2017+. Requires sysadmin or serveradmin role.",
+              "default": false
+            },
+            "restoreStrictSecuritySetting": {
+              "type": "boolean",
+              "description": "Restore the original 'clr strict security' value after CLR object import completes (success or failure). When false, leaves the setting as-is after import.",
+              "default": true
+            },
+            "restoreClrEnabledSetting": {
+              "type": "boolean",
+              "description": "Restore the original 'clr enabled' value after CLR object import completes (success or failure). When false, leaves CLR enabled after import.",
+              "default": true
+            }
+          },
+          "additionalProperties": false
         }
       },
       "additionalProperties": false
