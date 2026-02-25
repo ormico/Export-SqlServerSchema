@@ -166,7 +166,7 @@ Settings can be specified via:
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `-Server` | string | *required* | SQL Server instance (e.g., 'localhost', 'server\\SQLEXPRESS') |
+| `-Server` | string | *see note* | SQL Server instance. Required via CLI, `-ServerFromEnv`, or config `connection.serverFromEnv` |
 | `-Database` | string | *required* | Database name to export |
 | `-OutputPath` | string | ./DbScripts | Output directory for exported scripts |
 | `-TargetSqlVersion` | string | Sql2022 | Target SQL version: Sql2012, Sql2014, Sql2016, Sql2017, Sql2019, Sql2022 |
@@ -188,7 +188,7 @@ Settings can be specified via:
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `-Server` | string | *required* | Target SQL Server instance |
+| `-Server` | string | *see note* | Target SQL Server instance. Required via CLI, `-ServerFromEnv`, or config `connection.serverFromEnv` |
 | `-Database` | string | *required* | Target database name |
 | `-SourcePath` | string | *required* | Path to exported schema folder |
 | `-ImportMode` | string | Dev | Import mode: Dev or Prod |
