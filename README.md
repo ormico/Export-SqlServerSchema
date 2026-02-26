@@ -191,8 +191,8 @@ DbScripts/
 
 | Parameter | Required | Description |
 |-----------|----------|-------------|
-| `-Server` | No* | SQL Server instance (*required via CLI, `-ServerFromEnv`, or config) |
-| `-Database` | Yes | Database to export |
+| `-Server` | No* | SQL Server instance (*required via CLI, `-ServerFromEnv`, `-ConnectionStringFromEnv`, or config) |
+| `-Database` | No* | Database to export (*required via CLI, `-ConnectionStringFromEnv`, or config) |
 | `-OutputPath` | No | Output directory (default: ./DbScripts) |
 | `-IncludeData` | No | Export table data as INSERT statements |
 | `-Parallel` | No | Enable parallel export using multiple threads |
@@ -202,6 +202,7 @@ DbScripts/
 | `-ServerFromEnv` | No | Env var name for server address (e.g., SQLCMD_SERVER) |
 | `-UsernameFromEnv` | No | Env var name for username (e.g., SQLCMD_USER) |
 | `-PasswordFromEnv` | No | Env var name for password (e.g., SQLCMD_PASSWORD) |
+| `-ConnectionStringFromEnv` | No | Env var name for a full ADO.NET connection string (e.g., SQLCONNSTR_Default) |
 | `-TrustServerCertificate` | No | Trust SQL Server certificate (for containers/self-signed) |
 | `-TargetSqlVersion` | No | Target SQL version (default: Sql2022) |
 | `-IncludeObjectTypes` | No | Whitelist: Only export specified types (e.g., Tables,Views) |
@@ -217,8 +218,8 @@ DbScripts/
 
 | Parameter | Required | Description |
 |-----------|----------|-------------|
-| `-Server` | No* | Target SQL Server instance (*required via CLI, `-ServerFromEnv`, or config) |
-| `-Database` | Yes | Target database name |
+| `-Server` | No* | Target SQL Server instance (*required via CLI, `-ServerFromEnv`, `-ConnectionStringFromEnv`, or config) |
+| `-Database` | No* | Target database name (*required via CLI, `-ConnectionStringFromEnv`, or config) |
 | `-SourcePath` | Yes | Path to exported schema folder |
 | `-ImportMode` | No | Dev (default) or Prod - Controls infrastructure import |
 | `-ConfigFile` | No | Path to YAML configuration file |
@@ -231,6 +232,7 @@ DbScripts/
 | `-ServerFromEnv` | No | Env var name for server address (e.g., SQLCMD_SERVER) |
 | `-UsernameFromEnv` | No | Env var name for username (e.g., SQLCMD_USER) |
 | `-PasswordFromEnv` | No | Env var name for password (e.g., SQLCMD_PASSWORD) |
+| `-ConnectionStringFromEnv` | No | Env var name for a full ADO.NET connection string (e.g., SQLCONNSTR_Default) |
 | `-TrustServerCertificate` | No | Trust SQL Server certificate (for containers/self-signed) |
 | `-Force` | No | Skip existing schema check (required for multi-pass imports) |
 | `-ContinueOnError` | No | Continue on script errors |
@@ -285,6 +287,8 @@ The toolkit supports credential injection via environment variables, making it e
 
 ### YAML Config File (connection section)
 
+Using individual env vars:
+
 ```yaml
 connection:
   serverFromEnv: SQLCMD_SERVER
@@ -293,14 +297,22 @@ connection:
   trustServerCertificate: true
 ```
 
+Using a single connection string env var (Azure App Service, GitHub Actions secrets, etc.):
+
+```yaml
+connection:
+  connectionStringFromEnv: SQLCONNSTR_Default
+```
+
 ### Credential Precedence
 
-1. Explicit `-Credential` / `-Server` command-line parameters (highest)
-2. `*FromEnv` command-line parameters
-3. Config file `connection:` section
-4. Defaults (Windows authentication)
+1. Explicit `-Credential` / `-Server` / `-Database` command-line parameters (highest)
+2. Individual `*FromEnv` CLI parameters (`-ServerFromEnv`, `-UsernameFromEnv`, `-PasswordFromEnv`)
+3. `-ConnectionStringFromEnv` CLI parameter (full ADO.NET connection string in one env var)
+4. Config file `connection:` section (`serverFromEnv`, `usernameFromEnv`, `passwordFromEnv`, `connectionStringFromEnv`)
+5. Defaults (Windows authentication)
 
-### Docker Example
+### Docker / Container Example
 
 ```bash
 export SQLCMD_USER=sa
@@ -308,6 +320,14 @@ export SQLCMD_PASSWORD=$SA_PASSWORD
 pwsh /scripts/Export-SqlServerSchema.ps1 -Server $SERVER -Database $DB \
     -UsernameFromEnv SQLCMD_USER -PasswordFromEnv SQLCMD_PASSWORD \
     -TrustServerCertificate
+```
+
+### Azure App Service / Single Connection String Example
+
+```bash
+# Azure App Service exposes SQLCONNSTR_* environment variables automatically
+pwsh /scripts/Export-SqlServerSchema.ps1 \
+    -ConnectionStringFromEnv SQLCONNSTR_myapp
 ```
 
 ## Delta Export (Incremental)

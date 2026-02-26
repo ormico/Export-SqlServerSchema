@@ -40,6 +40,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - New test suite: `tests/test-env-credentials.ps1` (18 tests)
 - Documentation updates: README container/CI-CD section, CONFIG_REFERENCE connection section, USER_GUIDE
 
+**Full ADO.NET Connection String from Environment Variable (#63)**
+- New `-ConnectionStringFromEnv` parameter on both `Export-SqlServerSchema.ps1` and `Import-SqlServerSchema.ps1`
+  - Specify the name of an environment variable that holds a complete ADO.NET connection string
+  - Escape-hatch for environments (Azure App Service `SQLCONNSTR_*`, GitHub Actions secrets) that supply a single connection string rather than individual components
+  - Parsed to extract `Server`, `Database`, credentials, and `TrustServerCertificate`; all standard SQL Server key aliases are supported (`Server`/`Data Source`, `Database`/`Initial Catalog`, `UID`/`User ID`, etc.)
+  - Passwords are never written to logs or verbose output
+- New `connection.connectionStringFromEnv` config file key as an alternative to the CLI parameter
+- Updated credential precedence: CLI params > individual `*FromEnv` > `-ConnectionStringFromEnv` > config `connection:` section > defaults
+- New unit test suite: `tests/run-unit-tests.ps1` (34 tests; no SQL Server required)
+- New integration test suite: `tests/test-connection-string-from-env.ps1` (19 tests)
+- Documentation updates: CONFIG_REFERENCE, README, example config, JSON schema
+
 ### Changed (Breaking)
 
 **`-Server` parameter is no longer mandatory**
@@ -47,6 +59,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Validation still ensures a server is resolved from at least one source; a clear error is shown if missing
 - This is a **breaking change** for scripts that relied on PowerShell's mandatory parameter prompt behavior — those scripts will now need to handle the missing-server error themselves or pass `-Server` explicitly as before
 - All existing call patterns that pass `-Server` continue to work unchanged
+
+**`-Database` parameter is no longer mandatory**
+- `-Database` can now be omitted if the database name is provided via `-ConnectionStringFromEnv` or config `connection.connectionStringFromEnv`
+- Validation still ensures a database is resolved from at least one source; a clear error is shown if missing
+- This is a **breaking change** for scripts that relied on PowerShell's mandatory parameter prompt behavior — those scripts will now need to handle the missing-database error themselves or pass `-Database` explicitly as before
+- All existing call patterns that pass `-Database` continue to work unchanged
 
 **Strip Always Encrypted for Targets Without External Key Stores**
 - New `-StripAlwaysEncrypted` parameter for Import-SqlServerSchema.ps1
