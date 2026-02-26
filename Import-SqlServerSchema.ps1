@@ -1,10 +1,6 @@
 #Requires -Version 7.0
 
 <#
-.NOTES
-    License: MIT
-    Repository: https://github.com/ormico/Export-SqlServerSchema
-
 .SYNOPSIS
     Applies SQL Server database schema from exported scripts to a target database.
 
@@ -111,10 +107,6 @@
     ./Import-SqlServerSchema.ps1 -Server localhost -Database TargetDb `
         -SourcePath ".\DbScripts\localhost_SourceDb_20251110_120000" -TestConnection
 
-.PARAMETER TestConnection
-    Test connectivity to the SQL Server and verify permissions, then exit without importing.
-    Useful for smoke-testing credentials in pipelines.
-
 .PARAMETER UseLatestExport
     When specified, treats -SourcePath as a parent directory and automatically selects the most
     recent valid export folder within it. A valid export folder must contain a parseable
@@ -132,7 +124,14 @@
     without connecting to SQL Server. Parses export folder and reports what object categories
     would be imported with counts. Flags known prerequisite mismatches (CLR, AlwaysEncrypted,
     memory-optimized tables). Exit code is non-zero if any errors are found.
+
+.PARAMETER TestConnection
+    Test connectivity to the SQL Server and verify permissions, then exit without importing.
+    Useful for smoke-testing credentials in pipelines.
+
 .NOTES
+    License: MIT
+    Repository: https://github.com/ormico/Export-SqlServerSchema
     Requires: SQL Server Management Objects (SMO), PowerShell 7.0+
     Optional: powershell-yaml module for YAML config file support
     Author: Zack Moore
@@ -230,14 +229,14 @@ param(
   [Parameter(HelpMessage = 'Trust the SQL Server certificate without validation. Required for containers with self-signed certificates.')]
   [switch]$TrustServerCertificate,
 
-  [Parameter(HelpMessage = 'Test SQL Server connectivity and permissions, then exit without importing.')]
-  [switch]$TestConnection,
-
   [Parameter(HelpMessage = 'Scan -SourcePath for valid export subfolders and auto-select the most recent one. Can also be set via config file: import.useLatestExport: true')]
   [switch]$UseLatestExport,
 
   [Parameter(HelpMessage = 'Validate config, source path, folder structure, and referenced secrets without connecting to SQL Server. Non-zero exit on errors.')]
-  [switch]$ValidateOnly
+  [switch]$ValidateOnly,
+
+  [Parameter(HelpMessage = 'Test SQL Server connectivity and permissions, then exit without importing.')]
+  [switch]$TestConnection
 )
 
 $ErrorActionPreference = if ($ContinueOnError) { 'Continue' } else { 'Stop' }
