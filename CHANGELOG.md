@@ -28,6 +28,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Explicit `-ConfigFile` parameter still takes precedence and bypasses discovery entirely
 - New test suite: `tests/test-config-auto-discovery.ps1` (18 tests; no SQL Server required)
 
+**Offline Validation, Dry Run, and Connectivity Test (#60)**
+- New `-ValidateOnly` switch on both Export and Import scripts for offline configuration checks with no server connection required
+  - Validates YAML config syntax, key names, and enum values (`targetSqlVersion`, `importMode`)
+  - Checks output/source path accessibility (existence, write permission, parent directory)
+  - Verifies environment variables referenced by `*FromEnv` parameters and config `connection:` section
+  - Import-only: parses export folder structure and displays script counts per object category
+  - Import-only: detects CLR assembly, AlwaysEncrypted key, and memory-optimized table prerequisites and warns if corresponding config/switches are not set
+  - Exit code 0 on success (warnings are non-fatal), exit code 1 if any errors are found
+  - Suitable for CI/CD pre-flight checks before attempting a live export or import
+- New `-WhatIf` dry-run support via `SupportsShouldProcess` on both scripts
+  - Connects to the server and reports what would happen without writing any files or executing any SQL
+  - Export: enumerates object counts by type (Tables, Views, Stored Procedures, etc.)
+  - Import: reports database existence status and script counts per folder that would be executed; skips database creation and schema existence checks
+- New `-TestConnection` connectivity smoke test on both scripts
+  - Connects to the server, reports version and edition, then exits 0
+  - Suitable for container health checks and pipeline pre-deployment credential validation
+- New test suite: `tests/test-validate-only.ps1` (no server connection required)
+  - Covers all ValidateOnly scenarios for both Export and Import including CLR/AlwaysEncrypted/memory-optimized prerequisite detection
+
 **Environment Variable Credential Injection for Containers and CI/CD (#58)**
 - New `-UsernameFromEnv` and `-PasswordFromEnv` parameters on both Export and Import scripts
   - Specify environment variable names containing SQL authentication credentials

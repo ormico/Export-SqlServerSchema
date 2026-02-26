@@ -75,8 +75,19 @@ Write-Host "  Prod Config: $ProdConfigFile`n" -ForegroundColor White
 function Invoke-SqlCommand {
     param(
         [string]$Query,
-        [string]$Database = "master"
+        [string]$Database = "master",
+        [hashtable]$Parameters = @{}
     )
+
+    if ($Parameters.Count -gt 0) {
+        $paramDefs  = ($Parameters.Keys | ForEach-Object { "@$_ sysname" }) -join ', '
+        $paramVals  = ($Parameters.GetEnumerator() | ForEach-Object {
+            $escaped = $_.Value.Replace("'", "''")
+            "@$($_.Key) = N'$escaped'"
+        }) -join ', '
+        $innerQuery = $Query.Replace("'", "''")
+        $Query = "EXEC sp_executesql N'$innerQuery', N'$paramDefs', $paramVals"
+    }
 
     $result = sqlcmd -S $Server -U $Username -P $Password -d $Database -C -Q $Query -h -1 2>&1
     if ($LASTEXITCODE -ne 0) {
@@ -429,14 +440,14 @@ WHERE t.is_ms_shipped = 0 AND p.index_id IN (0, 1) AND p.rows > 0
     Write-TestStep "Step 5: Preparing target databases..." -Type Info
 
     # Drop Dev database if exists
-    $dbExists = Invoke-SqlCommand "SELECT COUNT(*) FROM sys.databases WHERE name = '$TargetDatabaseDev'" "master"
+    $dbExists = Invoke-SqlCommand "SELECT COUNT(*) FROM sys.databases WHERE name = @DbName" "master" @{ DbName = $TargetDatabaseDev }
     if ($dbExists.Trim() -eq "1") {
         Write-Host "  Dropping existing Dev target database..." -ForegroundColor Gray
         Invoke-SqlCommand "ALTER DATABASE [$TargetDatabaseDev] SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE [$TargetDatabaseDev];" "master"
     }
 
     # Drop Prod database if exists
-    $dbExists = Invoke-SqlCommand "SELECT COUNT(*) FROM sys.databases WHERE name = '$TargetDatabaseProd'" "master"
+    $dbExists = Invoke-SqlCommand "SELECT COUNT(*) FROM sys.databases WHERE name = @DbName" "master" @{ DbName = $TargetDatabaseProd }
     if ($dbExists.Trim() -eq "1") {
         Write-Host "  Dropping existing Prod target database..." -ForegroundColor Gray
         Invoke-SqlCommand "ALTER DATABASE [$TargetDatabaseProd] SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE [$TargetDatabaseProd];" "master"
@@ -722,6 +733,76 @@ WHERE fg.name IN ('FG_CURRENT', 'FG_ARCHIVE')
         }
     }
 
+    # Step 11: Test -TestConnection for Export and Import
+    Write-Host "`n" -NoNewline
+    Write-TestStep "Step 11: Testing -TestConnection smoke test..." -Type Info
+
+    $tcExportOutput = & $exportScript -Server $TEST_SERVER -Database $SourceDatabase `
+        -Credential $credential -ConfigFile $exportConfigPath -TestConnection *>&1
+    $tcExportCode = $LASTEXITCODE
+    if ($tcExportCode -eq 0 -and ($tcExportOutput -join "`n") -match 'Connection test passed') {
+        Write-TestStep "Export -TestConnection: PASSED (exit 0, success message)" -Type Success
+    } else {
+        Write-TestStep "Export -TestConnection: FAILED (exit $tcExportCode)" -Type Error
+        Write-Host "  Output: $($tcExportOutput -join "`n")" -ForegroundColor Gray
+        throw "Export -TestConnection failed"
+    }
+
+    $tcImportOutput = & $importScript -Server $TEST_SERVER -Database $SourceDatabase `
+        -SourcePath $exportDir -Credential $credential -ConfigFile $DevConfigFile -TestConnection *>&1
+    $tcImportCode = $LASTEXITCODE
+    if ($tcImportCode -eq 0 -and ($tcImportOutput -join "`n") -match 'Connection test passed') {
+        Write-TestStep "Import -TestConnection: PASSED (exit 0, success message)" -Type Success
+    } else {
+        Write-TestStep "Import -TestConnection: FAILED (exit $tcImportCode)" -Type Error
+        Write-Host "  Output: $($tcImportOutput -join "`n")" -ForegroundColor Gray
+        throw "Import -TestConnection failed"
+    }
+
+    # Step 12: Test -WhatIf dry run for Export and Import
+    Write-Host "`n" -NoNewline
+    Write-TestStep "Step 12: Testing -WhatIf dry run mode..." -Type Info
+
+    $wiExportPath = Join-Path $PSScriptRoot "exports_whatif_test"
+    if (Test-Path $wiExportPath) { Remove-Item $wiExportPath -Recurse -Force }
+
+    $wiExportOutput = & $exportScript -Server $TEST_SERVER -Database $SourceDatabase `
+        -OutputPath $wiExportPath -Credential $credential -ConfigFile $exportConfigPath -WhatIf *>&1
+    $wiExportCode = $LASTEXITCODE
+
+    # Verify: exit 0, no output directory created, preview output present
+    $wiDirCreated = Test-Path $wiExportPath
+    $wiExportStr = $wiExportOutput -join "`n"
+    if ($wiExportCode -eq 0 -and -not $wiDirCreated -and $wiExportStr -match 'WHATIF') {
+        Write-TestStep "Export -WhatIf: PASSED (exit 0, no files written, preview shown)" -Type Success
+    } else {
+        Write-TestStep "Export -WhatIf: FAILED (exit $wiExportCode, dir created: $wiDirCreated)" -Type Error
+        Write-Host "  Output: $wiExportStr" -ForegroundColor Gray
+        if ($wiDirCreated) { Remove-Item $wiExportPath -Recurse -Force -ErrorAction SilentlyContinue }
+        throw "Export -WhatIf failed"
+    }
+
+    $wiTargetDb = "${SourceDatabase}_WhatIfTarget"
+    $wiImportOutput = & $importScript -Server $TEST_SERVER -Database $wiTargetDb `
+        -SourcePath $exportDir -Credential $credential -ConfigFile $DevConfigFile -WhatIf *>&1
+    $wiImportCode = $LASTEXITCODE
+
+    # Verify: exit 0, target DB not created, preview output present
+    $wiImportStr = $wiImportOutput -join "`n"
+    $wiDbCreated = $false
+    try {
+        $checkResult = Invoke-SqlCommand "SELECT COUNT(*) FROM sys.databases WHERE name = @DbName" "master" @{ DbName = $wiTargetDb }
+        $wiDbCreated = ($checkResult.Trim() -ne "0")
+    } catch { }
+
+    if ($wiImportCode -eq 0 -and -not $wiDbCreated -and $wiImportStr -match 'WHATIF') {
+        Write-TestStep "Import -WhatIf: PASSED (exit 0, no DB created, preview shown)" -Type Success
+    } else {
+        Write-TestStep "Import -WhatIf: FAILED (exit $wiImportCode, DB created: $wiDbCreated)" -Type Error
+        Write-Host "  Output: $wiImportStr" -ForegroundColor Gray
+        throw "Import -WhatIf failed"
+    }
+
     # Final Summary
     Write-Host "`n═══════════════════════════════════════════════" -ForegroundColor Cyan
     Write-Host "TEST SUMMARY" -ForegroundColor Cyan
@@ -746,6 +827,11 @@ WHERE fg.name IN ('FG_CURRENT', 'FG_ARCHIVE')
         Write-TestStep "Data Verification: FAILED" -Type Error
         throw "Data verification failed: Data counts do not match"
     }
+
+    Write-TestStep "TestConnection (Export): PASSED" -Type Success
+    Write-TestStep "TestConnection (Import): PASSED" -Type Success
+    Write-TestStep "WhatIf Dry Run (Export): PASSED" -Type Success
+    Write-TestStep "WhatIf Dry Run (Import): PASSED" -Type Success
 
     Write-Host "`n[SUCCESS] ALL TESTS PASSED!" -ForegroundColor Green
     Write-Host "`nExported schema available at: $exportDir" -ForegroundColor Cyan

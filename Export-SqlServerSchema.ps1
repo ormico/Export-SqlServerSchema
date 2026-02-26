@@ -94,13 +94,32 @@
     ./Export-SqlServerSchema.ps1 -Server $env:SQLCMD_SERVER -Database TestDb `
         -UsernameFromEnv SQLCMD_USER -PasswordFromEnv SQLCMD_PASSWORD -TrustServerCertificate
 
+    # Validate configuration offline (no server connection required)
+    ./Export-SqlServerSchema.ps1 -Server localhost -Database TestDb -ValidateOnly
+    ./Export-SqlServerSchema.ps1 -Server localhost -Database TestDb -ConfigFile myconfig.yml -ValidateOnly
+
+    # Preview what would be exported (requires server connection)
+    ./Export-SqlServerSchema.ps1 -Server localhost -Database TestDb -WhatIf
+
+    # Test server connectivity and permissions only
+    ./Export-SqlServerSchema.ps1 -Server localhost -Database TestDb -TestConnection
+
+.PARAMETER ValidateOnly
+    Validate configuration, output path, and referenced environment variables without connecting
+    to SQL Server. Reports all errors and warnings, then exits. Exit code is non-zero if any
+    errors are found. Suitable for CI pre-flight checks and config authoring feedback.
+
+.PARAMETER TestConnection
+    Test connectivity to the SQL Server and verify permissions, then exit without exporting.
+    Useful for smoke-testing credentials in pipelines.
+
 .NOTES
     Requires: SQL Server Management Objects (SMO)
     Author: Zack Moore
     Updated for PowerShell 7 and modern standards
 #>
 
-[CmdletBinding()]
+[CmdletBinding(SupportsShouldProcess)]
 param(
   [Parameter(HelpMessage = 'SQL Server instance name. Can also be provided via -ServerFromEnv or config connection.serverFromEnv')]
   [string]$Server,
@@ -184,7 +203,13 @@ param(
   [string]$ConnectionStringFromEnv,
 
   [Parameter(HelpMessage = 'Trust the SQL Server certificate without validation. Required for containers with self-signed certificates.')]
-  [switch]$TrustServerCertificate
+  [switch]$TrustServerCertificate,
+
+  [Parameter(HelpMessage = 'Validate config, output path, and referenced secrets without connecting to SQL Server. Non-zero exit on errors.')]
+  [switch]$ValidateOnly,
+
+  [Parameter(HelpMessage = 'Test SQL Server connectivity and permissions, then exit without exporting.')]
+  [switch]$TestConnection
 )
 
 $ErrorActionPreference = 'Stop'
@@ -424,6 +449,273 @@ function Resolve-EnvCredential {
 }
 
 #endregion
+
+#region Validation Functions
+
+function Test-ExportConfigKeys {
+  <#
+    .SYNOPSIS
+        Validates config hashtable keys and values for the export script.
+    .OUTPUTS
+        Hashtable with Errors and Warnings arrays.
+    #>
+  param([hashtable]$Config)
+
+  $errors = [System.Collections.ArrayList]::new()
+  $warnings = [System.Collections.ArrayList]::new()
+
+  $knownTopLevel = @(
+    'export', 'import', 'connection', 'connectionTimeout', 'commandTimeout',
+    'maxRetries', 'retryDelaySeconds', 'trustServerCertificate', 'importMode',
+    'includeData', 'collectMetrics', 'targetSqlVersion', '$schema'
+  )
+
+  foreach ($key in $Config.Keys) {
+    if ($key -notin $knownTopLevel) {
+      [void]$warnings.Add("Unknown config key at root level: '$key'")
+    }
+  }
+
+  if ($Config.targetSqlVersion) {
+    $validVersions = @('Sql2012', 'Sql2014', 'Sql2016', 'Sql2017', 'Sql2019', 'Sql2022')
+    if ($Config.targetSqlVersion -notin $validVersions) {
+      [void]$errors.Add("Invalid targetSqlVersion: '$($Config.targetSqlVersion)'. Valid values: $($validVersions -join ', ')")
+    }
+  }
+
+  if ($Config.importMode) {
+    if ($Config.importMode -notin @('Dev', 'Prod')) {
+      [void]$errors.Add("Invalid importMode: '$($Config.importMode)'. Must be 'Dev' or 'Prod'")
+    }
+  }
+
+  if ($Config.connectionTimeout -ne $null -and $Config.connectionTimeout -isnot [int]) {
+    [void]$errors.Add("connectionTimeout must be an integer (got: $($Config.connectionTimeout.GetType().Name))")
+  }
+
+  if ($Config.commandTimeout -ne $null -and $Config.commandTimeout -isnot [int]) {
+    [void]$errors.Add("commandTimeout must be an integer (got: $($Config.commandTimeout.GetType().Name))")
+  }
+
+  if ($Config.connection -and $Config.connection -is [hashtable]) {
+    $knownConnection = @('serverFromEnv', 'usernameFromEnv', 'passwordFromEnv', 'trustServerCertificate', 'server')
+    foreach ($key in $Config.connection.Keys) {
+      if ($key -notin $knownConnection) {
+        [void]$warnings.Add("Unknown config key: 'connection.$key'")
+      }
+    }
+  }
+
+  if ($Config.export -and $Config.export -is [hashtable]) {
+    $knownExport = @(
+      'includeObjectTypes', 'excludeObjectTypes', 'includeData', 'excludeObjects',
+      'excludeSchemas', 'groupByObjectTypes', 'stripFilestream', 'parallel', 'deltaFrom'
+    )
+    foreach ($key in $Config.export.Keys) {
+      if ($key -notin $knownExport) {
+        [void]$warnings.Add("Unknown config key: 'export.$key'")
+      }
+    }
+  }
+
+  return @{ Errors = $errors; Warnings = $warnings }
+}
+
+function Invoke-ExportValidation {
+  <#
+    .SYNOPSIS
+        Validates export configuration offline without connecting to SQL Server.
+    .DESCRIPTION
+        Checks config file syntax and key validity, OutputPath accessibility,
+        and environment variables referenced by *FromEnv parameters or config.
+        Reports all errors and warnings. Exits with non-zero code on errors.
+    #>
+  param(
+    [string]$ConfigFile,
+    [string]$OutputPath,
+    [string]$Server,
+    [string]$ServerFromEnv,
+    [string]$UsernameFromEnv,
+    [string]$PasswordFromEnv,
+    [hashtable]$Config
+  )
+
+  $errors = [System.Collections.ArrayList]::new()
+  $warnings = [System.Collections.ArrayList]::new()
+
+  Write-Host ''
+  Write-Host '═══════════════════════════════════════════════════════════════' -ForegroundColor Cyan
+  Write-Host 'VALIDATE-ONLY MODE (Export)' -ForegroundColor Cyan
+  Write-Host 'Validating configuration without connecting to SQL Server.' -ForegroundColor Cyan
+  Write-Host '═══════════════════════════════════════════════════════════════' -ForegroundColor Cyan
+  Write-Host ''
+
+  # 1. Config file validation
+  if ($ConfigFile) {
+    Write-Host "[CHECK] Config file: $ConfigFile"
+    if (-not (Test-Path $ConfigFile)) {
+      [void]$errors.Add("Config file not found: $ConfigFile")
+      Write-Host "  [ERROR] File not found" -ForegroundColor Red
+    }
+    else {
+      try {
+        $parsedConfig = Import-YamlConfig -ConfigFilePath $ConfigFile
+        Write-Host "  [OK] Config file parses as valid YAML" -ForegroundColor Green
+        $keyResult = Test-ExportConfigKeys -Config $parsedConfig
+        foreach ($err in $keyResult.Errors) {
+          [void]$errors.Add($err)
+          Write-Host "  [ERROR] $err" -ForegroundColor Red
+        }
+        foreach ($warn in $keyResult.Warnings) {
+          [void]$warnings.Add($warn)
+          Write-Host "  [WARN] $warn" -ForegroundColor Yellow
+        }
+        if ($keyResult.Errors.Count -eq 0 -and $keyResult.Warnings.Count -eq 0) {
+          Write-Host "  [OK] Config keys and values are valid" -ForegroundColor Green
+        }
+      }
+      catch {
+        [void]$errors.Add("Config file parse error: $($_.Exception.Message)")
+        Write-Host "  [ERROR] Parse error: $($_.Exception.Message)" -ForegroundColor Red
+      }
+    }
+  }
+  else {
+    Write-Host "[INFO] No config file specified (using defaults)" -ForegroundColor Gray
+  }
+
+  # 2. OutputPath validation
+  Write-Host ''
+  Write-Host "[CHECK] Output path: $OutputPath"
+  if (Test-Path $OutputPath -PathType Container) {
+    Write-Host "  [OK] Path exists" -ForegroundColor Green
+    $testFile = Join-Path $OutputPath ".write-access-test-$(New-Guid)"
+    try {
+      $null = New-Item $testFile -ItemType File -Force -ErrorAction Stop
+      Remove-Item $testFile -Force -ErrorAction SilentlyContinue
+      Write-Host "  [OK] Path is writable" -ForegroundColor Green
+    }
+    catch {
+      [void]$errors.Add("Output path is not writable: $OutputPath")
+      Write-Host "  [ERROR] Path is not writable" -ForegroundColor Red
+    }
+  }
+  else {
+    # Check if parent exists and directory could be created
+    $parentPath = Split-Path $OutputPath -Parent
+    if ([string]::IsNullOrWhiteSpace($parentPath)) { $parentPath = '.' }
+    if (Test-Path $parentPath -PathType Container) {
+      Write-Host "  [OK] Path does not exist yet but parent is accessible (will be created on export)" -ForegroundColor Green
+    }
+    else {
+      [void]$errors.Add("Output path parent directory does not exist: $parentPath")
+      Write-Host "  [ERROR] Parent directory does not exist: $parentPath" -ForegroundColor Red
+    }
+  }
+
+  # 3. Environment variable checks
+  Write-Host ''
+  Write-Host '[CHECK] Environment variables'
+
+  # Check *FromEnv CLI parameters
+  if ($ServerFromEnv) {
+    $val = [System.Environment]::GetEnvironmentVariable($ServerFromEnv)
+    if ([string]::IsNullOrWhiteSpace($val)) {
+      if ([string]::IsNullOrWhiteSpace($Server)) {
+        [void]$errors.Add("ServerFromEnv '$ServerFromEnv' is not set and no -Server provided")
+        Write-Host "  [ERROR] $ServerFromEnv is not set (and no -Server provided)" -ForegroundColor Red
+      }
+      else {
+        [void]$warnings.Add("ServerFromEnv '$ServerFromEnv' is not set (will use -Server instead)")
+        Write-Host "  [WARN] $ServerFromEnv is not set (will use -Server '$Server' instead)" -ForegroundColor Yellow
+      }
+    }
+    else {
+      Write-Host "  [OK] $ServerFromEnv is set" -ForegroundColor Green
+    }
+  }
+
+  if ($UsernameFromEnv) {
+    $val = [System.Environment]::GetEnvironmentVariable($UsernameFromEnv)
+    if ([string]::IsNullOrWhiteSpace($val)) {
+      [void]$warnings.Add("UsernameFromEnv '$UsernameFromEnv' is not set")
+      Write-Host "  [WARN] $UsernameFromEnv is not set" -ForegroundColor Yellow
+    }
+    else {
+      Write-Host "  [OK] $UsernameFromEnv is set" -ForegroundColor Green
+    }
+  }
+
+  if ($PasswordFromEnv) {
+    $val = [System.Environment]::GetEnvironmentVariable($PasswordFromEnv)
+    if ([string]::IsNullOrWhiteSpace($val)) {
+      [void]$warnings.Add("PasswordFromEnv '$PasswordFromEnv' is not set")
+      Write-Host "  [WARN] $PasswordFromEnv is not set" -ForegroundColor Yellow
+    }
+    else {
+      Write-Host "  [OK] $PasswordFromEnv is set (value masked)" -ForegroundColor Green
+    }
+  }
+
+  # Check env vars referenced in config file's connection section
+  if ($Config -and $Config.connection -and $Config.connection -is [hashtable]) {
+    $connSection = $Config.connection
+    $envKeyMap = @{
+      serverFromEnv   = 'serverFromEnv'
+      usernameFromEnv = 'usernameFromEnv'
+      passwordFromEnv = 'passwordFromEnv'
+    }
+    foreach ($cfgKey in $envKeyMap.Keys) {
+      $envName = $connSection[$cfgKey]
+      if ($envName) {
+        $val = [System.Environment]::GetEnvironmentVariable($envName)
+        if ([string]::IsNullOrWhiteSpace($val)) {
+          [void]$warnings.Add("Config connection.$cfgKey references '$envName' which is not set in environment")
+          Write-Host "  [WARN] Config connection.$cfgKey → $envName is not set" -ForegroundColor Yellow
+        }
+        else {
+          Write-Host "  [OK] Config connection.$cfgKey → $envName is set" -ForegroundColor Green
+        }
+      }
+    }
+  }
+
+  if (-not $ServerFromEnv -and -not $UsernameFromEnv -and -not $PasswordFromEnv -and
+      (-not $Config -or -not $Config.connection)) {
+    Write-Host "  [INFO] No *FromEnv parameters or config connection section to validate" -ForegroundColor Gray
+  }
+
+  # Display summary
+  Write-Host ''
+  Write-Host '─────────────────────────────────────────────────────────────────' -ForegroundColor Cyan
+  Write-Host 'Validation Summary' -ForegroundColor Cyan
+  Write-Host '─────────────────────────────────────────────────────────────────' -ForegroundColor Cyan
+
+  if ($warnings.Count -gt 0) {
+    Write-Host ''
+    Write-Host "Warnings ($($warnings.Count)):" -ForegroundColor Yellow
+    foreach ($w in $warnings) {
+      Write-Host "  [WARN] $w" -ForegroundColor Yellow
+    }
+  }
+
+  if ($errors.Count -gt 0) {
+    Write-Host ''
+    Write-Host "Errors ($($errors.Count)):" -ForegroundColor Red
+    foreach ($e in $errors) {
+      Write-Host "  [ERROR] $e" -ForegroundColor Red
+    }
+    Write-Host ''
+    Write-Host '[FAILED] Validation failed. Fix the errors above before running export.' -ForegroundColor Red
+    exit 1
+  }
+
+  Write-Host ''
+  Write-Host '[SUCCESS] All validation checks passed.' -ForegroundColor Green
+  exit 0
+}
+
+#endregion Validation Functions
 
 # Parallel code consolidated below
 
@@ -4865,7 +5157,7 @@ function Invoke-WithRetry {
         Write-Warning "[$OperationName] $errorType detected on attempt $attempt of $MaxAttempts"
         Write-Warning "  Error: $errorMessage"
         Write-Warning "  Retrying in $delay seconds..."
-        Write-Log "$OperationName failed (attempt $attempt): $errorType - $errorMessage" -Severity WARNING
+        Write-Log "$OperationName failed (attempt $attempt): $errorType - $errorMessage" -Level WARNING
 
         Start-Sleep -Seconds $delay
 
@@ -4876,7 +5168,7 @@ function Invoke-WithRetry {
         # Non-transient error or final attempt - rethrow
         if ($isTransient) {
           Write-Error "[$OperationName] Failed after $MaxAttempts attempts: $errorMessage"
-          Write-Log "$OperationName failed after $MaxAttempts attempts: $errorMessage" -Severity ERROR
+          Write-Log "$OperationName failed after $MaxAttempts attempts: $errorMessage" -Level ERROR
         }
         throw
       }
@@ -6752,7 +7044,8 @@ try {
       }
 
       # Override TargetSqlVersion from config ONLY if not explicitly set on command line
-      if ($config.targetSqlVersion -and -not $PSBoundParameters.ContainsKey('TargetSqlVersion')) {
+      # Skip in ValidateOnly mode — enum validation is performed by Invoke-ExportValidation using raw config
+      if ($config.targetSqlVersion -and -not $PSBoundParameters.ContainsKey('TargetSqlVersion') -and -not $ValidateOnly) {
         $TargetSqlVersion = $config.targetSqlVersion
         Write-Verbose "[INFO] Target SQL version set from config file: $TargetSqlVersion"
       }
@@ -6767,6 +7060,20 @@ try {
       Write-Warning "Config file not found: $ConfigFile"
       Write-Warning "Continuing with default settings..."
     }
+  }
+
+  # Handle -ValidateOnly mode: offline validation only, no server connection
+  # Must run BEFORE Resolve-EnvCredential to avoid pair-validation of *FromEnv params
+  if ($ValidateOnly) {
+    Invoke-ExportValidation `
+      -ConfigFile $ConfigFile `
+      -OutputPath $OutputPath `
+      -Server $Server `
+      -ServerFromEnv $ServerFromEnv `
+      -UsernameFromEnv $UsernameFromEnv `
+      -PasswordFromEnv $PasswordFromEnv `
+      -Config $config
+    # Invoke-ExportValidation calls exit internally
   }
 
   if ($script:CollectMetrics) {
@@ -6959,22 +7266,33 @@ try {
     exit 1
   }
 
-  # Initialize output directory
-  $exportDir = Initialize-OutputDirectory -Path $OutputPath
+  # In WhatIf/TestConnection mode, skip directory creation and logging setup
+  $exportDir = $null
+  if (-not $WhatIfPreference -and -not $TestConnection) {
+    # Initialize output directory
+    $exportDir = Initialize-OutputDirectory -Path $OutputPath
 
-  # Initialize log file
-  $script:LogFile = Join-Path $exportDir 'export-log.txt'
-  Write-Log "Export started" -Severity INFO
-  Write-Log "Server: $Server" -Severity INFO
-  Write-Log "Database: $Database" -Severity INFO
-  Write-Log "Output: $exportDir" -Severity INFO
-  Write-Log "Configuration source: $configSource" -Severity INFO
+    # Initialize log file
+    $script:LogFile = Join-Path $exportDir 'export-log.txt'
+    Write-Log "Export started" -Level INFO
+    Write-Log "Server: $Server" -Level INFO
+    Write-Log "Database: $Database" -Level INFO
+    Write-Log "Output: $exportDir" -Level INFO
+    Write-Log "Configuration source: $configSource" -Level INFO
+  }
 
-  # Display configuration
+  # Display configuration (in WhatIf/TestConnection modes, exportDir is null so show OutputPath with a mode label)
+  $displayOutputDir = if ($WhatIfPreference) {
+    "$OutputPath (WhatIf — directory not created)"
+  } elseif ($TestConnection) {
+    "$OutputPath (TestConnection — directory not created)"
+  } else {
+    $exportDir
+  }
   Show-ExportConfiguration `
     -ServerName $Server `
     -DatabaseName $Database `
-    -OutputDirectory $exportDir `
+    -OutputDirectory $displayOutputDir `
     -Config $config `
     -DataExport $IncludeData `
     -ConfigSource $configSource
@@ -7056,7 +7374,28 @@ For more details, see: https://go.microsoft.com/fwlink/?linkid=2226722
   }
 
   Write-Output "[SUCCESS] Connected to $Server\$Database"
-  Write-Log "Connected successfully to $Server\$Database" -Severity INFO
+  Write-Log "Connected successfully to $Server\$Database" -Level INFO
+
+  # Handle -TestConnection mode: verify connectivity and exit
+  if ($TestConnection) {
+    Write-Host ''
+    Write-Host '═══════════════════════════════════════════════════════════════' -ForegroundColor Cyan
+    Write-Host 'CONNECTION TEST RESULTS' -ForegroundColor Cyan
+    Write-Host '═══════════════════════════════════════════════════════════════' -ForegroundColor Cyan
+    Write-Host ''
+    Write-Host "  Server  : $Server" -ForegroundColor Green
+    Write-Host "  Database: $Database" -ForegroundColor Green
+    try {
+      Write-Host "  Version : $($smServer.VersionString)" -ForegroundColor Green
+      Write-Host "  Edition : $($smServer.Edition)" -ForegroundColor Green
+    }
+    catch {
+      Write-Host "  Version : (unable to retrieve)" -ForegroundColor Yellow
+    }
+    Write-Host ''
+    Write-Host '[SUCCESS] Connection test passed.' -ForegroundColor Green
+    exit 0
+  }
 
   # Initialize export metadata for delta export support
   Initialize-ExportMetadata -Database $smDatabase -ServerName $Server -DatabaseName $Database -IncludeData $IncludeData
@@ -7081,11 +7420,11 @@ For more details, see: https://go.microsoft.com/fwlink/?linkid=2226722
 
   # Log delta export settings if enabled (validation was done earlier before connection)
   if ($script:DeltaExportEnabled) {
-    Write-Log "Delta export enabled from $script:DeltaFromPath with $($script:DeltaMetadata.objectCount) objects" -Severity INFO
+    Write-Log "Delta export enabled from $script:DeltaFromPath with $($script:DeltaMetadata.objectCount) objects" -Level INFO
 
     # Perform change detection
     $script:DeltaChangeResults = Get-DeltaChangeDetection -Database $smDatabase -PreviousMetadata $script:DeltaMetadata
-    Write-Log "Delta change detection: $($script:DeltaChangeResults.ToExport.Count) to export, $($script:DeltaChangeResults.ToCopy.Count) to copy" -Severity INFO
+    Write-Log "Delta change detection: $($script:DeltaChangeResults.ToExport.Count) to export, $($script:DeltaChangeResults.ToCopy.Count) to copy" -Level INFO
 
     # Build lookup hashtable for O(1) filtering during export
     Initialize-DeltaExportLookup
@@ -7199,6 +7538,52 @@ For more details, see: https://go.microsoft.com/fwlink/?linkid=2226722
   $scripter.Options.TargetServerVersion = $sqlVersion
   $scripter.PrefetchObjects = $true  # Enable scripter-level prefetch for dependencies
 
+  # Build WhatIf summary: enumerate object counts by type (no files written)
+  if ($WhatIfPreference) {
+    Write-Host ''
+    Write-Host '═══════════════════════════════════════════════════════════════' -ForegroundColor Cyan
+    Write-Host 'WHATIF: Export preview — no files will be written' -ForegroundColor Cyan
+    Write-Host '═══════════════════════════════════════════════════════════════' -ForegroundColor Cyan
+    Write-Host ''
+    Write-Host "  Server  : $Server" -ForegroundColor White
+    Write-Host "  Database: $Database" -ForegroundColor White
+    Write-Host "  Output  : $OutputPath  (timestamped subfolder would be created)" -ForegroundColor White
+    Write-Host ''
+    Write-Host 'Object counts that would be exported:' -ForegroundColor Cyan
+
+    $whatIfCounts = [ordered]@{
+      'Schemas'                     = @($smDatabase.Schemas | Where-Object { -not $_.IsSystemObject }).Count
+      'Tables'                      = @($smDatabase.Tables | Where-Object { -not $_.IsSystemObject }).Count
+      'Views'                       = @($smDatabase.Views | Where-Object { -not $_.IsSystemObject }).Count
+      'StoredProcedures'            = @($smDatabase.StoredProcedures | Where-Object { -not $_.IsSystemObject }).Count
+      'UserDefinedFunctions'        = @($smDatabase.UserDefinedFunctions | Where-Object { -not $_.IsSystemObject }).Count
+      'Sequences'                   = @($smDatabase.Sequences).Count
+      'UserDefinedTypes'            = @($smDatabase.UserDefinedTypes | Where-Object { -not $_.IsSystemObject }).Count
+      'Synonyms'                    = @($smDatabase.Synonyms).Count
+      'DatabaseTriggers'            = @($smDatabase.Triggers | Where-Object { -not $_.IsSystemObject }).Count
+      'Assemblies'                  = @($smDatabase.Assemblies | Where-Object { -not $_.IsSystemObject }).Count
+      'ColumnMasterKeys'            = @($smDatabase.ColumnMasterKeys).Count
+      'ColumnEncryptionKeys'        = @($smDatabase.ColumnEncryptionKeys).Count
+      'SecurityPolicies'            = @($smDatabase.SecurityPolicies).Count
+    }
+
+    $totalObjects = 0
+    foreach ($objectType in $whatIfCounts.Keys) {
+      $count = $whatIfCounts[$objectType]
+      if ($count -gt 0) {
+        Write-Host ("  {0,-30} {1,5}" -f $objectType, $count) -ForegroundColor White
+        $totalObjects += $count
+      }
+    }
+    Write-Host ''
+    Write-Host ("  {0,-30} {1,5}" -f 'Total', $totalObjects) -ForegroundColor Cyan
+    Write-Host ''
+    Write-Host 'No files were written. Remove -WhatIf to perform the actual export.' -ForegroundColor Yellow
+    # ShouldProcess call confirms WhatIf behavior (returns false, displays standard message)
+    $null = $PSCmdlet.ShouldProcess("$OutputPath", "Export database schema from $Server/$Database")
+    exit 0
+  }
+
   # Export schema objects with timing
   $schemaTimer = Start-MetricsTimer -Category 'SchemaExport'
   Write-Host "═══════════════════════════════════════════════════════════════" -ForegroundColor Cyan
@@ -7244,7 +7629,7 @@ For more details, see: https://go.microsoft.com/fwlink/?linkid=2226722
     if ($copyResult.FailedCount -gt 0) {
       Write-Output "  [WARNING] Failed to copy $($copyResult.FailedCount) file(s)"
     }
-    Write-Log "Delta export copied $($copyResult.CopiedCount) unchanged files" -Severity INFO
+    Write-Log "Delta export copied $($copyResult.CopiedCount) unchanged files" -Level INFO
   }
 
   # Apply FILESTREAM stripping if enabled (post-process ALL SQL files including copied ones)
@@ -7282,16 +7667,16 @@ For more details, see: https://go.microsoft.com/fwlink/?linkid=2226722
 
   if ($totalFailures -gt 0) {
     Write-Host "[WARNING] Export completed with $totalFailures error(s)" -ForegroundColor Yellow
-    Write-Log "Export completed with $totalFailures failures" -Severity WARNING
+    Write-Log "Export completed with $totalFailures failures" -Level WARNING
     exit 1
   }
 
-  Write-Log "Export completed successfully" -Severity INFO
+  Write-Log "Export completed successfully" -Level INFO
 
 }
 catch {
   Write-Error "[ERROR] Script failed: $_"
-  Write-Log "Script failed: $_" -Severity ERROR
+  Write-Log "Script failed: $_" -Level ERROR
   exit 1
 }
 finally {
@@ -7299,7 +7684,7 @@ finally {
   if ($smServer -and $smServer.ConnectionContext.IsOpen) {
     Write-Output 'Disconnecting from SQL Server...'
     $smServer.ConnectionContext.Disconnect()
-    Write-Log "Disconnected from SQL Server" -Severity INFO
+    Write-Log "Disconnected from SQL Server" -Level INFO
   }
 }
 
