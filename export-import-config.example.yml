@@ -45,6 +45,34 @@ retryDelaySeconds: 2
 # If you get certificate verification errors, set this to true
 trustServerCertificate: false
 
+# ─────────────────────────────────────────────────────────────
+# CONNECTION SECTION (environment variable credential injection)
+# Useful for containers, CI/CD, and any environment where
+# credentials are supplied as environment variables.
+# ─────────────────────────────────────────────────────────────
+#
+# Option 1: Individual env vars for each connection component
+# connection:
+#   serverFromEnv: SQLCMD_SERVER        # name of env var holding the server address
+#   usernameFromEnv: SQLCMD_USER        # name of env var holding the username
+#   passwordFromEnv: SQLCMD_PASSWORD    # name of env var holding the password
+#   trustServerCertificate: true        # trust self-signed certs (containers)
+#
+# Option 2: Single full ADO.NET connection string in one env var
+# Useful for Azure App Service SQLCONNSTR_* variables, GitHub Actions secrets, etc.
+# The connection string is parsed to extract Server, Database, credentials, and
+# TrustServerCertificate. Individual CLI params always override connection string values.
+# connection:
+#   connectionStringFromEnv: SQLCONNSTR_Default  # name of env var with full connection string
+#
+# Precedence (high to low):
+#   -Server/-Database/-Credential (CLI) >
+#   -ServerFromEnv/-UsernameFromEnv/-PasswordFromEnv (CLI) >
+#   -ConnectionStringFromEnv (CLI) >
+#   connection.serverFromEnv / connection.usernameFromEnv / connection.passwordFromEnv (config) >
+#   connection.connectionStringFromEnv (config) >
+#   defaults
+
 # Collect performance metrics and save to JSON file (default: false)
 # Useful for benchmarking export/import operations
 # collectMetrics: false

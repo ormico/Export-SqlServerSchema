@@ -15,7 +15,8 @@
 
 .PARAMETER Database
     Target database name. Will be created if -CreateDatabase is specified and it doesn't exist.
-    Required parameter.
+    Can also be provided via -ConnectionStringFromEnv if the connection string contains an
+    Initial Catalog / Database key.
 
 .PARAMETER SourcePath
     Path to the directory containing exported schema files (timestamped folder from Export-SqlServerSchema.ps1).
@@ -36,6 +37,15 @@
     Name of an environment variable containing the SQL authentication password.
     Must be paired with -UsernameFromEnv. The password is never written to logs or verbose output.
     Example: -PasswordFromEnv SQLCMD_PASSWORD
+
+.PARAMETER ConnectionStringFromEnv
+    Name of an environment variable containing a full ADO.NET connection string. This is an
+    escape-hatch for environments (Azure App Service SQLCONNSTR_*, GitHub Actions secrets, etc.)
+    that provide a single connection string rather than individual components.
+    Connection string values are overridden by any explicitly supplied individual parameters.
+    Precedence (high to low): -Server/-Credential > -ServerFromEnv/-UsernameFromEnv/-PasswordFromEnv
+    > -ConnectionStringFromEnv > config connection: section > defaults.
+    Example: -ConnectionStringFromEnv SQLCONNSTR_Default
 
 .PARAMETER TrustServerCertificate
     Trust the SQL Server certificate without validation. Required for containers with self-signed
@@ -143,7 +153,7 @@ param(
   [Parameter(HelpMessage = 'Target SQL Server instance. Can also be provided via -ServerFromEnv or config connection.serverFromEnv')]
   [string]$Server,
 
-  [Parameter(Mandatory = $true, HelpMessage = 'Target database name')]
+  [Parameter(HelpMessage = 'Target database name. Can also be provided via -ConnectionStringFromEnv')]
   [string]$Database,
 
   [Parameter(Mandatory = $true, HelpMessage = 'Path to exported schema scripts')]
@@ -226,6 +236,9 @@ param(
   [Parameter(HelpMessage = 'Environment variable name containing the password (e.g., -PasswordFromEnv SQLCMD_PASSWORD)')]
   [string]$PasswordFromEnv,
 
+  [Parameter(HelpMessage = 'Environment variable name containing a full ADO.NET connection string (e.g., -ConnectionStringFromEnv SQLCONNSTR_Default)')]
+  [string]$ConnectionStringFromEnv,
+
   [Parameter(HelpMessage = 'Trust the SQL Server certificate without validation. Required for containers with self-signed certificates.')]
   [switch]$TrustServerCertificate,
 
@@ -296,26 +309,87 @@ $script:FKStopwatch = $null
 
 #region Credential Resolution from Environment Variables
 
+function ConvertFrom-AdoConnectionString {
+  <#
+    .SYNOPSIS
+        Parses an ADO.NET connection string into its component parts.
+    .DESCRIPTION
+        Uses System.Data.SqlClient.SqlConnectionStringBuilder to safely parse a SQL Server
+        ADO.NET connection string. Recognises all standard SQL Server key aliases including
+        alternate forms (Server/Data Source, Database/Initial Catalog, UID/User ID, etc.).
+        Throws a descriptive error for malformed strings.
+        Passwords are never emitted to verbose output or logs.
+    .PARAMETER ConnectionString
+        The ADO.NET connection string to parse.
+    .OUTPUTS
+        Hashtable: Server, Database, Username, Password (string, treat as secret),
+        TrustServerCertificate (nullable bool), IntegratedSecurity (nullable bool).
+  #>
+  param(
+    [string]$ConnectionString
+  )
+
+  $result = @{
+    Server                 = $null
+    Database               = $null
+    Username               = $null
+    Password               = $null
+    TrustServerCertificate = $null
+    IntegratedSecurity     = $null
+  }
+
+  if ([string]::IsNullOrWhiteSpace($ConnectionString)) { return $result }
+
+  $builder = $null
+  try {
+    $builder = [System.Data.SqlClient.SqlConnectionStringBuilder]::new($ConnectionString)
+  }
+  catch {
+    throw "Invalid connection string format: $($_.Exception.Message)"
+  }
+
+  if (-not [string]::IsNullOrWhiteSpace($builder.DataSource))     { $result.Server   = $builder.DataSource }
+  if (-not [string]::IsNullOrWhiteSpace($builder.InitialCatalog)) { $result.Database  = $builder.InitialCatalog }
+  if (-not [string]::IsNullOrWhiteSpace($builder.UserID))         { $result.Username  = $builder.UserID }
+  if (-not [string]::IsNullOrWhiteSpace($builder.Password))       { $result.Password  = $builder.Password }
+
+  # TrustServerCertificate: SqlConnectionStringBuilder always exposes this key with default false,
+  # so check the original string text to distinguish explicit from default.
+  if ($ConnectionString -imatch '(?:^|;)\s*TrustServerCertificate\s*=') {
+    $result.TrustServerCertificate = $builder.TrustServerCertificate
+  }
+
+  # IntegratedSecurity: only set if true (non-default), using same text-based check for consistency
+  if ($ConnectionString -imatch '(?:^|;)\s*(?:Integrated\s+Security|Trusted_Connection)\s*=') {
+    $result.IntegratedSecurity = $builder.IntegratedSecurity
+  }
+
+  return $result
+}
+
 function Resolve-EnvCredential {
   <#
     .SYNOPSIS
         Resolves credential and connection parameters from environment variables.
     .DESCRIPTION
         Builds a PSCredential from environment variable names specified via *FromEnv parameters
-        or config file connection section. Follows precedence:
-          1. Explicit -Credential / -Server command-line parameters (highest)
-          2. *FromEnv command-line parameters
-          3. Config file connection: section
-          4. Defaults (Windows auth, no overrides)
+        or config file connection section. Follows precedence (high to low):
+          1. Explicit -Credential / -Server / -Database command-line parameters
+          2. Individual *FromEnv CLI parameters (-ServerFromEnv, -UsernameFromEnv, -PasswordFromEnv)
+          3. -ConnectionStringFromEnv CLI parameter (full ADO.NET connection string in env var)
+          4. Config file connection: section equivalents
+          5. Defaults (Windows auth, no overrides)
     .OUTPUTS
-        Hashtable with resolved Server, Credential, and TrustServerCertificate values.
+        Hashtable with resolved Server, Database, Credential, and TrustServerCertificate values.
   #>
   param(
     [string]$ServerParam,
+    [string]$DatabaseParam,
     [pscredential]$CredentialParam,
     [string]$ServerFromEnvParam,
     [string]$UsernameFromEnvParam,
     [string]$PasswordFromEnvParam,
+    [string]$ConnectionStringFromEnvParam,
     [bool]$TrustServerCertificateParam,
     [hashtable]$Config,
     [hashtable]$BoundParameters
@@ -323,29 +397,34 @@ function Resolve-EnvCredential {
 
   $result = @{
     Server                 = $ServerParam
+    Database               = $DatabaseParam
     Credential             = $CredentialParam
     TrustServerCertificate = $TrustServerCertificateParam
   }
 
   # --- Resolve TrustServerCertificate ---
-  # CLI switch > config connection section > config root-level > default (false)
-  if (-not $BoundParameters.ContainsKey('TrustServerCertificate')) {
+  # CLI switch > config connection section > config root-level > connection string > default (false)
+  $trustResolvedFromHigherPriority = $BoundParameters.ContainsKey('TrustServerCertificate')
+  if (-not $trustResolvedFromHigherPriority) {
     $trustResolved = $false
     if ($Config -and $Config.ContainsKey('connection') -and $Config.connection -is [System.Collections.IDictionary]) {
       if ($Config.connection.ContainsKey('trustServerCertificate')) {
         $result.TrustServerCertificate = [bool]$Config.connection.trustServerCertificate
         $trustResolved = $true
+        $trustResolvedFromHigherPriority = $true
       }
     }
     # Only fall back to root-level if connection section didn't specify it
     if (-not $trustResolved -and $Config -and $Config.ContainsKey('trustServerCertificate')) {
       $result.TrustServerCertificate = [bool]$Config.trustServerCertificate
+      $trustResolvedFromHigherPriority = $true
     }
   }
 
-  # --- Resolve Server from env ---
+  # --- Resolve Server from individual *FromEnv ---
   # CLI -Server > -ServerFromEnv > config connection.serverFromEnv
-  if (-not $BoundParameters.ContainsKey('Server') -or [string]::IsNullOrWhiteSpace($ServerParam)) {
+  $serverResolvedFromHigherPriority = $BoundParameters.ContainsKey('Server') -and -not [string]::IsNullOrWhiteSpace($ServerParam)
+  if (-not $serverResolvedFromHigherPriority) {
     $serverEnvName = $ServerFromEnvParam
     if (-not $serverEnvName -and $Config -and $Config.ContainsKey('connection') -and $Config.connection -is [System.Collections.IDictionary]) {
       if ($Config.connection.ContainsKey('serverFromEnv')) {
@@ -359,13 +438,15 @@ function Resolve-EnvCredential {
         throw "Environment variable '$serverEnvName' (specified via ServerFromEnv) is not set or is empty."
       }
       $result.Server = $envValue
+      $serverResolvedFromHigherPriority = $true
       Write-Verbose "[ENV] Server resolved from environment variable '$serverEnvName'"
     }
   }
 
-  # --- Resolve Credential from env ---
+  # --- Resolve Credential from individual *FromEnv ---
   # CLI -Credential > *FromEnv params > config connection.*FromEnv
-  if (-not $BoundParameters.ContainsKey('Credential') -or $null -eq $CredentialParam) {
+  $credResolvedFromHigherPriority = $BoundParameters.ContainsKey('Credential') -and $null -ne $CredentialParam
+  if (-not $credResolvedFromHigherPriority) {
     $usernameEnvName = $UsernameFromEnvParam
     $passwordEnvName = $PasswordFromEnvParam
 
@@ -400,7 +481,49 @@ function Resolve-EnvCredential {
 
       $securePassword = ConvertTo-SecureString $passwordValue -AsPlainText -Force
       $result.Credential = [System.Management.Automation.PSCredential]::new($usernameValue, $securePassword)
+      $credResolvedFromHigherPriority = $true
       Write-Verbose "[ENV] Credential resolved from environment variables '$usernameEnvName' and '$passwordEnvName'"
+    }
+  }
+
+  # --- Resolve from ConnectionStringFromEnv (lower priority than individual *FromEnv params) ---
+  # CLI -ConnectionStringFromEnv > config connection.connectionStringFromEnv
+  $connStrEnvName = $ConnectionStringFromEnvParam
+  if (-not $connStrEnvName -and $Config -and $Config.ContainsKey('connection') -and $Config.connection -is [System.Collections.IDictionary]) {
+    if ($Config.connection.ContainsKey('connectionStringFromEnv')) {
+      $connStrEnvName = $Config.connection.connectionStringFromEnv
+    }
+  }
+
+  if ($connStrEnvName) {
+    $connStrValue = [System.Environment]::GetEnvironmentVariable($connStrEnvName)
+    if ([string]::IsNullOrWhiteSpace($connStrValue)) {
+      throw "Environment variable '$connStrEnvName' (specified via ConnectionStringFromEnv) is not set or is empty."
+    }
+
+    $parsed = ConvertFrom-AdoConnectionString -ConnectionString $connStrValue
+
+    # Apply connection string values only for fields not already resolved by higher-priority sources
+    if (-not $serverResolvedFromHigherPriority -and -not [string]::IsNullOrWhiteSpace($parsed.Server)) {
+      $result.Server = $parsed.Server
+      Write-Verbose "[ENV] Server resolved from connection string in environment variable '$connStrEnvName'"
+    }
+
+    $databaseResolvedFromHigherPriority = $BoundParameters.ContainsKey('Database') -and -not [string]::IsNullOrWhiteSpace($DatabaseParam)
+    if (-not $databaseResolvedFromHigherPriority -and -not [string]::IsNullOrWhiteSpace($parsed.Database)) {
+      $result.Database = $parsed.Database
+      Write-Verbose "[ENV] Database resolved from connection string in environment variable '$connStrEnvName'"
+    }
+
+    if (-not $credResolvedFromHigherPriority -and -not [string]::IsNullOrWhiteSpace($parsed.Username) -and -not [string]::IsNullOrWhiteSpace($parsed.Password)) {
+      $securePassword = ConvertTo-SecureString $parsed.Password -AsPlainText -Force
+      $result.Credential = [System.Management.Automation.PSCredential]::new($parsed.Username, $securePassword)
+      # NOTE: password is intentionally not logged
+      Write-Verbose "[ENV] Credential resolved from connection string in environment variable '$connStrEnvName' (username: $($parsed.Username))"
+    }
+
+    if (-not $trustResolvedFromHigherPriority -and $null -ne $parsed.TrustServerCertificate) {
+      $result.TrustServerCertificate = $parsed.TrustServerCertificate
     }
   }
 
@@ -4388,18 +4511,21 @@ try {
     # Invoke-ImportValidation calls exit internally
   }
 
-  # Resolve credentials from environment variables (if specified)
-  # Precedence: CLI -Credential/-Server > *FromEnv CLI params > config connection: section > defaults
+  # Resolve credentials and connection info from environment variables (if specified)
+  # Precedence: CLI params > individual *FromEnv > ConnectionStringFromEnv > config connection: section > defaults
   $envResolved = Resolve-EnvCredential `
     -ServerParam $Server `
+    -DatabaseParam $Database `
     -CredentialParam $Credential `
     -ServerFromEnvParam $ServerFromEnv `
     -UsernameFromEnvParam $UsernameFromEnv `
     -PasswordFromEnvParam $PasswordFromEnv `
+    -ConnectionStringFromEnvParam $ConnectionStringFromEnv `
     -TrustServerCertificateParam $TrustServerCertificate.IsPresent `
     -Config $config `
     -BoundParameters $PSBoundParameters
   $Server = $envResolved.Server
+  $Database = $envResolved.Database
   $Credential = $envResolved.Credential
   $script:TrustServerCertificateEnabled = $envResolved.TrustServerCertificate
 
@@ -4411,7 +4537,12 @@ try {
 
   # Validate that Server was resolved from at least one source
   if ([string]::IsNullOrWhiteSpace($Server)) {
-    throw "Server is required. Provide it via -Server, -ServerFromEnv, or config file connection.serverFromEnv."
+    throw "Server is required. Provide it via -Server, -ServerFromEnv, -ConnectionStringFromEnv, or config file connection.serverFromEnv."
+  }
+
+  # Validate that Database was resolved from at least one source
+  if ([string]::IsNullOrWhiteSpace($Database)) {
+    throw "Database is required. Provide it via -Database, -ConnectionStringFromEnv, or config file connection.connectionStringFromEnv."
   }
 
   # Resolve SourcePath when -UseLatestExport is set
