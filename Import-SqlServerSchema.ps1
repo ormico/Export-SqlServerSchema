@@ -564,15 +564,15 @@ function Get-ImportPrerequisiteWarnings {
   $assemblyFolder = Join-Path $SourcePath '14_Programmability'
   if (Test-Path $assemblyFolder) {
     $clrScripts = @(Get-ChildItem $assemblyFolder -Recurse -Filter '*.sql' |
-      Where-Object { (Get-Content $_.FullName -Raw -ErrorAction SilentlyContinue) -match '\bCREATE ASSEMBLY\b' })
+      Where-Object { Select-String -Path $_.FullName -Pattern '\bCREATE ASSEMBLY\b' -Quiet -ErrorAction SilentlyContinue })
     if ($clrScripts.Count -gt 0) {
       $clrEnabled = $false
       if ($Config -and $Config.import) {
         $devMode = $Config.import.developerMode
         $prodMode = $Config.import.productionMode
-        if (($devMode -is [hashtable] -and $devMode.clr.disableStrictSecurityForImport -eq $true) -or
-            ($prodMode -is [hashtable] -and $prodMode.clr.disableStrictSecurityForImport -eq $true) -or
-            ($Config.import.clr.disableStrictSecurityForImport -eq $true)) {
+        if (($devMode -is [hashtable] -and $devMode.ContainsKey('clr') -and $devMode.clr.disableStrictSecurityForImport -eq $true) -or
+            ($prodMode -is [hashtable] -and $prodMode.ContainsKey('clr') -and $prodMode.clr.disableStrictSecurityForImport -eq $true) -or
+            ($Config.import -is [hashtable] -and $Config.import.ContainsKey('clr') -and $Config.import.clr.disableStrictSecurityForImport -eq $true)) {
           $clrEnabled = $true
         }
       }
@@ -586,7 +586,7 @@ function Get-ImportPrerequisiteWarnings {
   $securityFolder = Join-Path $SourcePath '01_Security'
   if (Test-Path $securityFolder) {
     $aeScripts = @(Get-ChildItem $securityFolder -Recurse -Filter '*.sql' |
-      Where-Object { (Get-Content $_.FullName -Raw -ErrorAction SilentlyContinue) -match '\bCREATE COLUMN (MASTER|ENCRYPTION) KEY\b' })
+      Where-Object { Select-String -Path $_.FullName -Pattern '\bCREATE COLUMN (MASTER|ENCRYPTION) KEY\b' -Quiet -ErrorAction SilentlyContinue })
     if ($aeScripts.Count -gt 0 -and -not $StripAlwaysEncrypted) {
       $hasSecretsConfig = $Config -and ($Config.encryptionSecrets -or
         ($Config.import -is [hashtable] -and $Config.import.encryptionSecrets))
@@ -600,7 +600,7 @@ function Get-ImportPrerequisiteWarnings {
   $tablesFolder = Join-Path $SourcePath '09_Tables_PrimaryKey'
   if (Test-Path $tablesFolder) {
     $moScripts = @(Get-ChildItem $tablesFolder -Recurse -Filter '*.sql' |
-      Where-Object { (Get-Content $_.FullName -Raw -ErrorAction SilentlyContinue) -match 'MEMORY_OPTIMIZED\s*=\s*ON' })
+      Where-Object { Select-String -Path $_.FullName -Pattern 'MEMORY_OPTIMIZED\s*=\s*ON' -Quiet -ErrorAction SilentlyContinue })
     if ($moScripts.Count -gt 0) {
       [void]$warnings.Add("Memory-optimized tables found ($($moScripts.Count) script(s)). Ensure the target server has a MEMORY_OPTIMIZED_DATA filegroup or the import will fail")
     }
@@ -4703,7 +4703,7 @@ try {
       Write-Host '  Foreign key constraints would be disabled during data load and re-enabled after.' -ForegroundColor Gray
     }
 
-    $hasClrInWhatIf = $scripts | Where-Object { $_.FullName -match '14_Programmability' -and (Get-Content $_.FullName -Raw -ErrorAction SilentlyContinue) -match '\bCREATE ASSEMBLY\b' }
+    $hasClrInWhatIf = $scripts | Where-Object { $_.FullName -match '14_Programmability' -and (Select-String -Path $_.FullName -Pattern '\bCREATE ASSEMBLY\b' -Quiet -ErrorAction SilentlyContinue) }
     if ($hasClrInWhatIf) {
       Write-Host ''
       Write-Host '  CLR assemblies detected — CLR strict security settings may be modified.' -ForegroundColor Yellow
