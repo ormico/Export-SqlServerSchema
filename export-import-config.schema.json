@@ -38,6 +38,34 @@
       "description": "Trust server certificate (required for SQL Server with self-signed certificates). Set to true for local/dev environments with self-signed certs, false for production with valid certificates.",
       "default": false
     },
+    "connection": {
+      "type": "object",
+      "description": "Environment variable credential injection. Provides SQL Server connection parameters via environment variables for containers, CI/CD pipelines, and environments where secrets cannot be on the command line.",
+      "properties": {
+        "serverFromEnv": {
+          "type": "string",
+          "description": "Name of the environment variable containing the SQL Server address. Only used when -Server is not explicitly provided. Example: SQLCMD_SERVER"
+        },
+        "usernameFromEnv": {
+          "type": "string",
+          "description": "Name of the environment variable containing the SQL authentication username. Must be paired with passwordFromEnv. Example: SQLCMD_USER"
+        },
+        "passwordFromEnv": {
+          "type": "string",
+          "description": "Name of the environment variable containing the SQL authentication password. Must be paired with usernameFromEnv. The password value is never logged. Example: SQLCMD_PASSWORD"
+        },
+        "connectionStringFromEnv": {
+          "type": "string",
+          "description": "Name of the environment variable containing a full ADO.NET connection string. Escape-hatch for environments (Azure App Service SQLCONNSTR_*, GitHub Actions secrets) that provide a single connection string. Parsed to extract Server, Database, credentials, and TrustServerCertificate. Individual *FromEnv settings and explicit CLI params take precedence. Example: SQLCONNSTR_Default"
+        },
+        "trustServerCertificate": {
+          "type": "boolean",
+          "description": "Trust server certificate without validation. Alternative location to the root-level trustServerCertificate setting.",
+          "default": false
+        }
+      },
+      "additionalProperties": false
+    },
     "importMode": {
       "type": "string",
       "enum": ["Dev", "Prod"],

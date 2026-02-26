@@ -246,7 +246,35 @@ connection:
   trustServerCertificate: true
 ```
 
-#### Complete Connection Example
+#### `connection.connectionStringFromEnv`
+
+- **Type**: String
+- **Default**: none
+- **Description**: Name of an environment variable containing a **full ADO.NET connection string**.
+  This is an escape-hatch for environments that provide a single connection string rather than
+  individual components (e.g., Azure App Service `SQLCONNSTR_*` variables, GitHub Actions secrets).
+- **Parsed keys**: `Data Source`/`Server`, `Initial Catalog`/`Database`, `User ID`/`UID`,
+  `Password`/`PWD`, `TrustServerCertificate`, `Integrated Security`
+- **Precedence**: Lower priority than individual `*FromEnv` settings. Values are only applied
+  for connection attributes not already resolved by a higher-priority source.
+- **Security**: The password value extracted from the connection string is never written to
+  verbose output, error logs, or error tracking.
+
+```yaml
+connection:
+  connectionStringFromEnv: SQLCONNSTR_Default
+```
+
+Azure App Service example (uses the automatically-named env var):
+
+```yaml
+connection:
+  connectionStringFromEnv: SQLCONNSTR_myapp
+```
+
+#### Complete Connection Examples
+
+Using individual env vars:
 
 ```yaml
 connection:
@@ -256,12 +284,21 @@ connection:
   trustServerCertificate: true
 ```
 
+Using a single connection string env var:
+
+```yaml
+connection:
+  connectionStringFromEnv: SQLCONNSTR_Default
+```
+
 #### Credential Precedence
 
-1. **Explicit CLI parameters** (`-Credential`, `-Server`) — highest priority
-2. **CLI `*FromEnv` parameters** (`-UsernameFromEnv`, `-PasswordFromEnv`, `-ServerFromEnv`)
-3. **Config file `connection:` section** (`connection.usernameFromEnv`, etc.)
-4. **Default** — Windows integrated authentication
+1. **Explicit CLI parameters** (`-Credential`, `-Server`, `-Database`) — highest priority
+2. **CLI individual `*FromEnv` parameters** (`-ServerFromEnv`, `-UsernameFromEnv`, `-PasswordFromEnv`)
+3. **CLI `-ConnectionStringFromEnv`** (full ADO.NET connection string in one env var)
+4. **Config file `connection:` section** — `connection.serverFromEnv`, `connection.usernameFromEnv`,
+   `connection.passwordFromEnv`, `connection.connectionStringFromEnv` (in that order)
+5. **Default** — Windows integrated authentication
 
 #### `targetSqlVersion`
 
