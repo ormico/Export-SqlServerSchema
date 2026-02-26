@@ -314,6 +314,11 @@
           "description": "Display SQL scripts during execution for debugging.",
           "default": false
         },
+        "useLatestExport": {
+          "type": "boolean",
+          "description": "When true, treats -SourcePath as a parent directory and automatically selects the most recent valid export subfolder. Selection is based on exportStartTimeUtc from _export_metadata.json; falls back to LastWriteTime if the field is absent. Equivalent to passing -UseLatestExport on the command line.",
+          "default": false
+        },
         "includeObjectTypes": {
           "type": "array",
           "description": "Object types to include in import (if specified, only these types are imported)",

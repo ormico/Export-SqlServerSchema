@@ -232,6 +232,12 @@ import:
   # Display SQL scripts during execution for debugging (default: false)
   # showSql: false
 
+  # Auto-select the most recent valid export from a parent directory (default: false)
+  # When true, -SourcePath is treated as a parent and the latest export subfolder
+  # (by exportStartTimeUtc in _export_metadata.json, or LastWriteTime as fallback) is used.
+  # Equivalent to passing -UseLatestExport on the command line.
+  # useLatestExport: false
+
   # Object types to include in import (if specified, only these types are imported)
   # includeObjectTypes: []
 

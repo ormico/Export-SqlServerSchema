@@ -36,15 +36,16 @@ $cred = New-Object System.Management.Automation.PSCredential('sa', $securePass)
 # WRONG - missing mandatory parameters, will prompt and block
 & ./Export-SqlServerSchema.ps1
 & ./Import-SqlServerSchema.ps1
-pwsh -Command "& { . './Export-SqlServerSchema.ps1' }"
 
-# WRONG - dot-sourcing EXECUTES the script and triggers mandatory parameter prompts
+# WRONG - dot-sourcing the MAIN scripts executes them and triggers mandatory parameter prompts
 . './Export-SqlServerSchema.ps1'
 pwsh -Command ". './Export-SqlServerSchema.ps1'"
 
 # WRONG - Get-Credential prompts interactively
 $cred = Get-Credential
 ```
+
+**Note**: The "no dot-sourcing" rule applies only to the main scripts that have mandatory parameters. Dedicated helper/library files (e.g., `Common-SqlServerSchema.ps1` per issue #66) designed to be dot-sourced are a different, safe pattern. Do NOT convert shared helper files to `.psm1` modules — `$script:` variables inside a module refer to the module's scope, not the caller's scope, which would silently break all shared-state functions (`Write-Log`, metrics tracking, etc.).
 
 ### Testing Internal Functions
 To test internal functions WITHOUT triggering mandatory parameters, you CANNOT dot-source.
@@ -56,18 +57,12 @@ pwsh -NoProfile -File ./tests/test-exclude-feature.ps1
 
 # CORRECT - Validate syntax without execution
 pwsh -NoProfile -Command "Get-Command './Export-SqlServerSchema.ps1' -Syntax"
+
+# CORRECT - Test internal algorithm in isolation by re-implementing it locally in the test file
+# (see test-config-auto-discovery.ps1 for the established pattern)
 ```
 
 ---
-
-## Active Development Tasks
-
-**Parallel Export Feature**: If implementing parallel export, read these documents first:
-1. `docs/PARALLEL_EXPORT_DESIGN.md` - Architecture and decisions
-2. `docs/PARALLEL_EXPORT_IMPLEMENTATION.md` - Step-by-step implementation guide
-3. `.github/copilot-parallel-export.md` - Quick reference for AI assistants
-
-**Incremental Export Feature** (after parallel): See `docs/INCREMENTAL_EXPORT_FEASIBILITY.md`
 
 ## CRITICAL: No Shortcuts Policy
 
@@ -111,11 +106,11 @@ This is a **PowerShell 7+ toolkit** for exporting/importing SQL Server database 
 
 ### Critical Design Decisions
 
-**Dependency Ordering**: Scripts are exported in 21 numbered folders (01_Schemas → 16_Data) to ensure safe deployment. Foreign keys are separated (07_Tables_PrimaryKey, 08_Tables_ForeignKeys) to avoid circular dependencies during import.
+**Dependency Ordering**: Scripts are exported in 21 numbered folders (01_Schemas → 16_Data) to ensure safe deployment. Foreign keys are separated into separate folders (Tables_PrimaryKey before Tables_ForeignKeys) to avoid circular dependencies during import.
 
 **Object Granularity**: Each programmability object (functions, procedures, views) gets its own file named `{Schema}.{ObjectName}.sql` for Git-friendly version control. Schema-level objects (tables, indexes) are consolidated into numbered files per category.
 
-**Data Import Strategy**: Import-SqlServerSchema temporarily disables FK constraints before data load, then re-enables and validates referential integrity after completion (see `Invoke-SqlScript` function lines 264-340).
+**Data Import Strategy**: Import-SqlServerSchema temporarily disables FK constraints before data load, then re-enables and validates referential integrity after completion.
 
 ## Key Code Patterns
 
@@ -130,11 +125,11 @@ $opts = New-ScriptingOptions -TargetVersion $TargetVersion -Overrides @{
 }
 ```
 
-**Pattern**: Use `-Overrides` hashtable to control SMO ScriptingOptions. Default options are in `New-ScriptingOptions` (lines 215-267), merged with overrides. This enables precise control over what gets scripted per object type.
+**Pattern**: Use `-Overrides` hashtable to control SMO ScriptingOptions. Default options are in `New-ScriptingOptions`, merged with overrides. This enables precise control over what gets scripted per object type.
 
 ### Error Handling Convention
 
-Both scripts use `$ErrorActionPreference = 'Stop'` at the top, then structured try-catch blocks with detailed error messages:
+Both scripts use `$ErrorActionPreference = 'Stop'` at the top, then structured try-catch blocks:
 
 ```powershell
 try {
@@ -145,62 +140,67 @@ try {
 }
 ```
 
-**Convention**: Always prefix output with `[SUCCESS]`, `[ERROR]`, `[WARNING]` for parseable logs. Use colored output for readability.
+**Convention**: Always prefix output with `[SUCCESS]`, `[ERROR]`, `[WARNING]`, `[INFO]` for parseable logs. Use colored output for readability.
 
 ### Testing Approach
 
-Integration tests use **Docker Compose** with SQL Server 2022 in `tests/`. The test workflow (run-integration-test.ps1):
+**Two categories of tests:**
 
-1. Creates test database with complex schema (sequences, partitions, triggers, RLS)
-2. Exports using Export-SqlServerSchema.ps1
-3. Imports to new database using Import-SqlServerSchema.ps1
-4. Validates object counts, data integrity, FK constraints
+1. **Unit/feature tests** (no SQL Server needed): `test-*.ps1` files in `tests/` that test algorithm logic, output messages, and config handling. These should always pass regardless of environment.
 
-**Run tests**: `cd tests && docker-compose up -d && pwsh ./run-integration-test.ps1`
+2. **Integration tests** (require Docker + SQL Server): `run-integration-test.ps1` and any `test-*.ps1` with a `Requires: SQL Server container running` comment. These need a running SQL Server container.
 
 Test database credentials are in `tests/.env` (SA_PASSWORD=Test@1234). Never commit real credentials.
+
+#### Running Integration Tests — Docker Checklist
+
+Before running integration tests, verify Docker is available and properly configured:
+
+```powershell
+# 1. Check Docker is running and in Linux container mode (required for SQL Server)
+docker info 2>&1 | Select-String 'OSType'
+# Expected: OSType: linux
+# If you see 'windows', switch Docker Desktop to Linux containers mode first
+
+# 2. Check if the SQL Server container is already running (avoid redundant docker-compose up)
+docker ps --filter "name=sqlserver" --format "{{.Names}} {{.Status}}"
+# If a container shows 'Up', skip step 3
+
+# 3. Start the container only if not already running
+cd tests && docker-compose up -d
+
+# 4. Run integration tests
+pwsh ./run-integration-test.ps1
+```
+
+**Critical rules for Docker and parallel sessions:**
+
+- **No test script calls `docker-compose down`** — it is safe to have multiple test sessions running against the same container simultaneously.
+- **DO NOT call `docker-compose down`** while any test session may be running; it will cause all in-flight integration tests to fail.
+- **`tests/.env` is gitignored** and does NOT exist in worktrees. Copy it from the main repo's `tests/` directory before running integration tests from a worktree: `cp ../../../tests/.env ./tests/.env` (adjust path as needed).
+- **Parallel session collision**: Database names (`TestDb`, `TestDb_Dev`, `TestDb_Prod`) are hardcoded. Two parallel worktree sessions running integration tests simultaneously will collide. Avoid concurrent integration test runs until a `$testRunId` suffix strategy is implemented.
 
 ## Development Workflows
 
 ### Adding New Object Type Export
 
-1. Add folder to `Initialize-OutputDirectory` subdirs array (line 158+)
-2. Add export logic to `Export-DatabaseObjects` function (~line 271-683)
+1. Add folder to `Initialize-OutputDirectory` subdirs array
+2. Add export logic to `Export-DatabaseObjects` function
 3. Follow the pattern: check if collection exists, script with appropriate options, output success count
-4. Update `New-DeploymentManifest` deployment order list (line 770+)
+4. Update `New-DeploymentManifest` deployment order list
 5. Test with: `docker-compose up -d` then run export against TestDb
-
-**Example** (see lines 310-324 for Sequences):
-```powershell
-$sequences = @($Database.Sequences | Where-Object { -not $_.IsSystemObject })
-if ($sequences.Count -gt 0) {
-    $opts = New-ScriptingOptions -TargetVersion $TargetVersion
-    $opts.FileName = Join-Path $OutputDir '02_Sequences' '001_Sequences.sql'
-    $Scripter.Options = $opts
-    $Scripter.EnumScript($sequences)
-    Write-Output "  [SUCCESS] Exported $($sequences.Count) sequence(s)"
-}
-```
 
 ### Working with SMO Collections
 
 All SMO collections follow this pattern: `$Database.{CollectionName} | Where-Object { -not $_.IsSystemObject }`
 
-**System object filtering**: Essential to exclude built-in SQL Server objects. Some collections (FileGroups, PartitionFunctions) don't have `IsSystemObject` property—exclude filter for those.
+**System object filtering**: Essential to exclude built-in SQL Server objects. Some collections (FileGroups, PartitionFunctions) don't have `IsSystemObject` property — omit the filter for those.
 
 **Scriptable collections** (from Database object): Sequences, PartitionFunctions, PartitionSchemes, UserDefinedTypes, Tables, Indexes, ForeignKeys, Triggers, Views, StoredProcedures, UserDefinedFunctions, Synonyms, Schemas, Roles, Users, Certificates, AsymmetricKeys, SymmetricKeys, FullTextCatalogs, Assemblies, etc.
 
 ### Import Script Folder Processing Order
 
-Import-SqlServerSchema reads folders in `Get-ScriptFiles` (line 343+). **Critical**: Folders MUST be processed alphabetically by number prefix. The function sorts by name, then reads all .sql files within each folder:
-
-```powershell
-$scriptDirs = Get-ChildItem $SourcePath -Directory | 
-    Where-Object { $_.Name -match '^\d{2}_' } | 
-    Sort-Object Name
-```
-
-**Why numbered prefixes**: Ensures 07_Tables_PrimaryKey runs before 08_Tables_ForeignKeys, preventing FK constraint failures.
+Import-SqlServerSchema reads numbered folders in alphabetical order. **Critical**: Folders MUST be processed by number prefix. The `Get-ScriptFiles` function sorts directories by name, ensuring `07_Tables_PrimaryKey` runs before `08_Tables_ForeignKeys` to prevent FK constraint failures.
 
 ## Project-Specific Conventions
 
@@ -223,63 +223,29 @@ Both main scripts accept:
 
 `-TargetSqlVersion` parameter maps to SMO SqlServerVersion enum (Sql2012/2014/2016/2017/2019/2022). Affects syntax in generated scripts (e.g., newer features get excluded for older targets).
 
-## Critical Integration Points
-
-### SMO Dependency
-
-The SqlServer PowerShell module must be installed: `Install-Module SqlServer -Scope CurrentUser`
-
-**Compatibility**: Requires PowerShell 7.0+. Scripts check version at startup (`Test-Dependencies` function).
-
-### Authentication
-
-Both scripts support:
-- **Windows Auth**: Default if no `-Credential` specified
-- **SQL Auth**: Pass PSCredential object: `Get-Credential` or construct programmatically
-
-**Connection pattern** (used in both scripts):
-```powershell
-$serverConn = [Microsoft.SqlServer.Management.Common.ServerConnection]::new($Server)
-if ($Credential) {
-    $serverConn.LoginSecure = $false
-    $serverConn.Login = $Credential.UserName
-    $serverConn.SecurePassword = $Credential.Password
-}
-$serverConn.Connect()
-```
-
 ## Known Constraints & Workarounds
-
-### FileGroups & Physical Storage
-
-Currently **not exported** (see MISSING_OBJECTS_ANALYSIS.md). FileGroups are environment-specific and should be parameterized, not hardcoded. Future enhancement planned with `-IncludeFileGroups` switch.
 
 ### Always Encrypted Keys
 
-ColumnMasterKeys and ColumnEncryptionKeys are now fully supported for export and import. Unlike traditional encryption objects (DMK, symmetric keys, certificates), Always Encrypted keys don't require secrets during import because:
-- **CMK (Column Master Key)**: Only stores metadata (key store provider name + key path). The actual key is in an external store (Azure Key Vault, Windows Certificate Store, HSM).
-- **CEK (Column Encryption Key)**: Stores an encrypted blob that can only be decrypted by the external CMK.
-
-The T-SQL scripts exported by SMO are complete and can be imported directly without any password/secret configuration.
+ColumnMasterKeys and ColumnEncryptionKeys are fully supported. Unlike traditional encryption objects (DMK, symmetric keys, certificates), Always Encrypted keys don't require secrets during import — CMKs store only metadata (key store provider + path), CEKs store an encrypted blob decryptable only by the external CMK.
 
 ### Data Export Limitations
 
-Large tables (millions of rows) may cause memory issues with INSERT statement generation. Consider exporting data separately using BCP or SSIS for production databases.
+Large tables (millions of rows) may cause memory issues with INSERT statement generation. Consider BCP or SSIS for production-scale data.
 
 ### Cross-Database References
 
-Synonyms and views referencing other databases will script with their original references. These may need manual adjustment in target environments.
+Synonyms and views referencing other databases will script with their original references and may need manual adjustment in target environments.
 
 ## Debugging Tips
 
 - Use `-Verbose` on Import-SqlServerSchema to see full SQL script execution
 - Check `_DEPLOYMENT_README.md` in export folder for deployment order documentation
-- SQL errors during import often indicate missing dependencies—verify folder processing order
+- SQL errors during import often indicate missing dependencies — verify folder processing order
 - For SMO scripting issues, inspect `$Scripter.Options` properties in PowerShell debugger
 
 ## References
 
 - **Main docs**: README.md (usage examples, parameters)
 - **Testing**: tests/README.md (Docker setup, integration tests)
-- **Missing features**: MISSING_OBJECTS_ANALYSIS.md (future enhancements, best practices)
 - **SMO docs**: https://learn.microsoft.com/en-us/sql/relational-databases/server-management-objects-smo/
