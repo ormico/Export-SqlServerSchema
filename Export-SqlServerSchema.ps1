@@ -5034,7 +5034,7 @@ function Invoke-WithRetry {
         Write-Warning "[$OperationName] $errorType detected on attempt $attempt of $MaxAttempts"
         Write-Warning "  Error: $errorMessage"
         Write-Warning "  Retrying in $delay seconds..."
-        Write-Log "$OperationName failed (attempt $attempt): $errorType - $errorMessage" -Severity WARNING
+        Write-Log "$OperationName failed (attempt $attempt): $errorType - $errorMessage" -Level WARNING
 
         Start-Sleep -Seconds $delay
 
@@ -5045,7 +5045,7 @@ function Invoke-WithRetry {
         # Non-transient error or final attempt - rethrow
         if ($isTransient) {
           Write-Error "[$OperationName] Failed after $MaxAttempts attempts: $errorMessage"
-          Write-Log "$OperationName failed after $MaxAttempts attempts: $errorMessage" -Severity ERROR
+          Write-Log "$OperationName failed after $MaxAttempts attempts: $errorMessage" -Level ERROR
         }
         throw
       }
@@ -7135,23 +7135,23 @@ try {
     exit 1
   }
 
-  # In WhatIf mode, skip directory creation and logging setup
+  # In WhatIf/TestConnection mode, skip directory creation and logging setup
   $exportDir = $null
-  if (-not $WhatIfPreference) {
+  if (-not $WhatIfPreference -and -not $TestConnection) {
     # Initialize output directory
     $exportDir = Initialize-OutputDirectory -Path $OutputPath
 
     # Initialize log file
     $script:LogFile = Join-Path $exportDir 'export-log.txt'
-    Write-Log "Export started" -Severity INFO
-    Write-Log "Server: $Server" -Severity INFO
-    Write-Log "Database: $Database" -Severity INFO
-    Write-Log "Output: $exportDir" -Severity INFO
-    Write-Log "Configuration source: $configSource" -Severity INFO
+    Write-Log "Export started" -Level INFO
+    Write-Log "Server: $Server" -Level INFO
+    Write-Log "Database: $Database" -Level INFO
+    Write-Log "Output: $exportDir" -Level INFO
+    Write-Log "Configuration source: $configSource" -Level INFO
   }
 
   # Display configuration (in WhatIf mode, exportDir is null so show OutputPath instead)
-  $displayOutputDir = if ($WhatIfPreference) { "$OutputPath (WhatIf — directory not created)" } else { $exportDir }
+  $displayOutputDir = if ($WhatIfPreference -or $TestConnection) { "$OutputPath (WhatIf — directory not created)" } else { $exportDir }
   Show-ExportConfiguration `
     -ServerName $Server `
     -DatabaseName $Database `
@@ -7237,7 +7237,7 @@ For more details, see: https://go.microsoft.com/fwlink/?linkid=2226722
   }
 
   Write-Output "[SUCCESS] Connected to $Server\$Database"
-  Write-Log "Connected successfully to $Server\$Database" -Severity INFO
+  Write-Log "Connected successfully to $Server\$Database" -Level INFO
 
   # Handle -TestConnection mode: verify connectivity and exit
   if ($TestConnection) {
@@ -7283,11 +7283,11 @@ For more details, see: https://go.microsoft.com/fwlink/?linkid=2226722
 
   # Log delta export settings if enabled (validation was done earlier before connection)
   if ($script:DeltaExportEnabled) {
-    Write-Log "Delta export enabled from $script:DeltaFromPath with $($script:DeltaMetadata.objectCount) objects" -Severity INFO
+    Write-Log "Delta export enabled from $script:DeltaFromPath with $($script:DeltaMetadata.objectCount) objects" -Level INFO
 
     # Perform change detection
     $script:DeltaChangeResults = Get-DeltaChangeDetection -Database $smDatabase -PreviousMetadata $script:DeltaMetadata
-    Write-Log "Delta change detection: $($script:DeltaChangeResults.ToExport.Count) to export, $($script:DeltaChangeResults.ToCopy.Count) to copy" -Severity INFO
+    Write-Log "Delta change detection: $($script:DeltaChangeResults.ToExport.Count) to export, $($script:DeltaChangeResults.ToCopy.Count) to copy" -Level INFO
 
     # Build lookup hashtable for O(1) filtering during export
     Initialize-DeltaExportLookup
@@ -7492,7 +7492,7 @@ For more details, see: https://go.microsoft.com/fwlink/?linkid=2226722
     if ($copyResult.FailedCount -gt 0) {
       Write-Output "  [WARNING] Failed to copy $($copyResult.FailedCount) file(s)"
     }
-    Write-Log "Delta export copied $($copyResult.CopiedCount) unchanged files" -Severity INFO
+    Write-Log "Delta export copied $($copyResult.CopiedCount) unchanged files" -Level INFO
   }
 
   # Apply FILESTREAM stripping if enabled (post-process ALL SQL files including copied ones)
@@ -7530,16 +7530,16 @@ For more details, see: https://go.microsoft.com/fwlink/?linkid=2226722
 
   if ($totalFailures -gt 0) {
     Write-Host "[WARNING] Export completed with $totalFailures error(s)" -ForegroundColor Yellow
-    Write-Log "Export completed with $totalFailures failures" -Severity WARNING
+    Write-Log "Export completed with $totalFailures failures" -Level WARNING
     exit 1
   }
 
-  Write-Log "Export completed successfully" -Severity INFO
+  Write-Log "Export completed successfully" -Level INFO
 
 }
 catch {
   Write-Error "[ERROR] Script failed: $_"
-  Write-Log "Script failed: $_" -Severity ERROR
+  Write-Log "Script failed: $_" -Level ERROR
   exit 1
 }
 finally {
@@ -7547,7 +7547,7 @@ finally {
   if ($smServer -and $smServer.ConnectionContext.IsOpen) {
     Write-Output 'Disconnecting from SQL Server...'
     $smServer.ConnectionContext.Disconnect()
-    Write-Log "Disconnected from SQL Server" -Severity INFO
+    Write-Log "Disconnected from SQL Server" -Level INFO
   }
 }
 

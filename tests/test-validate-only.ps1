@@ -80,13 +80,13 @@ $null = New-Item $fakeExportDir -ItemType Directory -Force
 foreach ($subDir in @('03_Schemas', '09_Tables_PrimaryKey', '14_Programmability')) {
     $null = New-Item (Join-Path $fakeExportDir $subDir) -ItemType Directory -Force
 }
-Set-Content (Join-Path $fakeExportDir '03_Schemas\dbo.schema.sql') -Value 'CREATE SCHEMA [dbo]'
-Set-Content (Join-Path $fakeExportDir '09_Tables_PrimaryKey\dbo.Orders.table.sql') -Value @'
+Set-Content (Join-Path $fakeExportDir '03_Schemas' 'dbo.schema.sql') -Value 'CREATE SCHEMA [dbo]'
+Set-Content (Join-Path $fakeExportDir '09_Tables_PrimaryKey' 'dbo.Orders.table.sql') -Value @'
 CREATE TABLE [dbo].[Orders] (
     [Id] INT PRIMARY KEY
 )
 '@
-Set-Content (Join-Path $fakeExportDir '14_Programmability\dbo.GetOrder.proc.sql') -Value @'
+Set-Content (Join-Path $fakeExportDir '14_Programmability' 'dbo.GetOrder.proc.sql') -Value @'
 CREATE PROCEDURE [dbo].[GetOrder]
 AS SELECT 1
 '@
@@ -96,7 +96,7 @@ Set-Content (Join-Path $fakeExportDir '_export_metadata.json') -Value '{"version
 $fakeClrExportDir = Join-Path $tempDir 'fake-export-clr'
 $null = New-Item $fakeClrExportDir -ItemType Directory -Force
 $null = New-Item (Join-Path $fakeClrExportDir '14_Programmability') -ItemType Directory -Force
-Set-Content (Join-Path $fakeClrExportDir '14_Programmability\Assembly.MyCLR.sql') -Value @'
+Set-Content (Join-Path $fakeClrExportDir '14_Programmability' 'Assembly.MyCLR.sql') -Value @'
 CREATE ASSEMBLY [MyCLR]
     AUTHORIZATION [dbo]
     FROM 0x4D5A90000300000004000000FFFF0000
@@ -109,7 +109,7 @@ Set-Content (Join-Path $fakeClrExportDir '_export_metadata.json') -Value '{}'
 $fakeAeExportDir = Join-Path $tempDir 'fake-export-ae'
 $null = New-Item $fakeAeExportDir -ItemType Directory -Force
 $null = New-Item (Join-Path $fakeAeExportDir '01_Security') -ItemType Directory -Force
-Set-Content (Join-Path $fakeAeExportDir '01_Security\ColumnMasterKey.sql') -Value @'
+Set-Content (Join-Path $fakeAeExportDir '01_Security' 'ColumnMasterKey.sql') -Value @'
 CREATE COLUMN MASTER KEY [CMK1]
 WITH (KEY_STORE_PROVIDER_NAME = N'MSSQL_CERTIFICATE_STORE',
       KEY_PATH = N'CurrentUser/My/ABCDef')
@@ -121,7 +121,7 @@ Set-Content (Join-Path $fakeAeExportDir '_export_metadata.json') -Value '{}'
 $fakeMoExportDir = Join-Path $tempDir 'fake-export-mo'
 $null = New-Item $fakeMoExportDir -ItemType Directory -Force
 $null = New-Item (Join-Path $fakeMoExportDir '09_Tables_PrimaryKey') -ItemType Directory -Force
-Set-Content (Join-Path $fakeMoExportDir '09_Tables_PrimaryKey\dbo.InMemoryTable.sql') -Value @'
+Set-Content (Join-Path $fakeMoExportDir '09_Tables_PrimaryKey' 'dbo.InMemoryTable.sql') -Value @'
 CREATE TABLE [dbo].[InMemoryTable] (
     [Id] INT PRIMARY KEY NONCLUSTERED
 ) WITH (MEMORY_OPTIMIZED = ON, DURABILITY = SCHEMA_AND_DATA)
@@ -571,7 +571,7 @@ catch {
 Write-Host ''
 Write-Host '[INFO] Testing with existing CLR test fixture...' -ForegroundColor Cyan
 
-$clrFixtureDir = Join-Path $scriptDir 'fixtures\clr_test'
+$clrFixtureDir = Join-Path $scriptDir 'fixtures' 'clr_test'
 if (Test-Path $clrFixtureDir) {
     # Test 23: CLR test fixture → should warn about CLR strict security
     Write-Host '[INFO] Test 23: ValidateOnly with CLR fixture (no CLR config)...'
