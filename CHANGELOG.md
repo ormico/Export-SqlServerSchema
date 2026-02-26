@@ -5,7 +5,7 @@ All notable changes to Export-SqlServerSchema will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [unreleased] - YYYY-MM-DD
+## [1.8.0] - 2026-02-25
 
 ### Improved
 
@@ -19,6 +19,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Error log folder attribution for programmability scripts is derived from the actual file path rather than hardcoded, correctly reflecting subfolder structure (e.g. `14_Programmability/02_Functions`)
 
 ### Added
+
+**Auto-Select Latest Export Folder (#71)**
+- New `-UseLatestExport` switch on `Import-SqlServerSchema.ps1` allows `-SourcePath` to point at a parent directory instead of a specific timestamped export folder
+- Scans immediate children for valid export folders (those containing a parseable `_export_metadata.json`) and selects the most recent one
+- Resolution uses `exportStartTimeUtc` from metadata (preferred); falls back to folder `LastWriteTime` if the field is absent or unparseable
+- Prints the resolved folder name, timestamp, and source server/database at startup for confirmation
+- If `-SourcePath` already points directly to a valid export folder, uses it as-is with a warning that the switch is redundant
+- If no valid export folders are found, emits a clear `[ERROR]` and aborts
+- Supported via config file: `import.useLatestExport: true` — CLI switch always takes precedence
+- New test suite: `tests/test-use-latest-export.ps1` (32 tests; unit + integration + config file)
 
 **Config File Auto-Discovery (#59)**
 - Both `Export-SqlServerSchema.ps1` and `Import-SqlServerSchema.ps1` now automatically discover a config file when `-ConfigFile` is not provided
@@ -84,6 +94,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Validation still ensures a database is resolved from at least one source; a clear error is shown if missing
 - This is a **breaking change** for scripts that relied on PowerShell's mandatory parameter prompt behavior — those scripts will now need to handle the missing-database error themselves or pass `-Database` explicitly as before
 - All existing call patterns that pass `-Database` continue to work unchanged
+
+**CLR Strict Security Management for Import (#57)**
+- New `clr` config section with `enableClr`, `disableStrictSecurityForImport`, and `restoreStrictSecuritySetting` options
+- Temporarily disables CLR strict security during import to allow loading CLR assemblies on SQL Server 2017+ via `sp_configure`, restores original setting via try/finally
+- Emits `[HINT]` with config suggestions when CLR assembly scripts fail without CLR config enabled
+- Handles insufficient `sp_configure` permissions with clear warnings
+- New helper functions: `Test-ClrAssemblyScript`, `Set-ClrSpConfigure`, `Get-ClrSpConfigureValue`
+- New test suite: `tests/test-clr-strict-security.ps1` (32 tests; unit + integration)
 
 **Strip Always Encrypted for Targets Without External Key Stores**
 - New `-StripAlwaysEncrypted` parameter for Import-SqlServerSchema.ps1
