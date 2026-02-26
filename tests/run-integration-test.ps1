@@ -75,8 +75,19 @@ Write-Host "  Prod Config: $ProdConfigFile`n" -ForegroundColor White
 function Invoke-SqlCommand {
     param(
         [string]$Query,
-        [string]$Database = "master"
+        [string]$Database = "master",
+        [hashtable]$Parameters = @{}
     )
+
+    if ($Parameters.Count -gt 0) {
+        $paramDefs  = ($Parameters.Keys | ForEach-Object { "@$_ sysname" }) -join ', '
+        $paramVals  = ($Parameters.GetEnumerator() | ForEach-Object {
+            $escaped = $_.Value.Replace("'", "''")
+            "@$($_.Key) = N'$escaped'"
+        }) -join ', '
+        $innerQuery = $Query.Replace("'", "''")
+        $Query = "EXEC sp_executesql N'$innerQuery', N'$paramDefs', $paramVals"
+    }
 
     $result = sqlcmd -S $Server -U $Username -P $Password -d $Database -C -Q $Query -h -1 2>&1
     if ($LASTEXITCODE -ne 0) {
@@ -429,14 +440,14 @@ WHERE t.is_ms_shipped = 0 AND p.index_id IN (0, 1) AND p.rows > 0
     Write-TestStep "Step 5: Preparing target databases..." -Type Info
 
     # Drop Dev database if exists
-    $dbExists = Invoke-SqlCommand "SELECT COUNT(*) FROM sys.databases WHERE name = '$TargetDatabaseDev'" "master"
+    $dbExists = Invoke-SqlCommand "SELECT COUNT(*) FROM sys.databases WHERE name = @DbName" "master" @{ DbName = $TargetDatabaseDev }
     if ($dbExists.Trim() -eq "1") {
         Write-Host "  Dropping existing Dev target database..." -ForegroundColor Gray
         Invoke-SqlCommand "ALTER DATABASE [$TargetDatabaseDev] SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE [$TargetDatabaseDev];" "master"
     }
 
     # Drop Prod database if exists
-    $dbExists = Invoke-SqlCommand "SELECT COUNT(*) FROM sys.databases WHERE name = '$TargetDatabaseProd'" "master"
+    $dbExists = Invoke-SqlCommand "SELECT COUNT(*) FROM sys.databases WHERE name = @DbName" "master" @{ DbName = $TargetDatabaseProd }
     if ($dbExists.Trim() -eq "1") {
         Write-Host "  Dropping existing Prod target database..." -ForegroundColor Gray
         Invoke-SqlCommand "ALTER DATABASE [$TargetDatabaseProd] SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE [$TargetDatabaseProd];" "master"
@@ -780,7 +791,7 @@ WHERE fg.name IN ('FG_CURRENT', 'FG_ARCHIVE')
     $wiImportStr = $wiImportOutput -join "`n"
     $wiDbCreated = $false
     try {
-        $checkResult = Invoke-SqlCommand "SELECT COUNT(*) FROM sys.databases WHERE name = '$wiTargetDb'" "master"
+        $checkResult = Invoke-SqlCommand "SELECT COUNT(*) FROM sys.databases WHERE name = @DbName" "master" @{ DbName = $wiTargetDb }
         $wiDbCreated = ($checkResult.Trim() -ne "0")
     } catch { }
 
