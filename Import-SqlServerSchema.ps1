@@ -588,11 +588,7 @@ function Get-ImportPrerequisiteWarnings {
     $aeScripts = @(Get-ChildItem $securityFolder -Recurse -Filter '*.sql' |
       Where-Object { Select-String -Path $_.FullName -Pattern '\bCREATE COLUMN (MASTER|ENCRYPTION) KEY\b' -Quiet -ErrorAction SilentlyContinue })
     if ($aeScripts.Count -gt 0 -and -not $StripAlwaysEncrypted) {
-      $hasSecretsConfig = $Config -and ($Config.encryptionSecrets -or
-        ($Config.import -is [hashtable] -and $Config.import.encryptionSecrets))
-      if (-not $hasSecretsConfig) {
-        [void]$warnings.Add("AlwaysEncrypted keys found ($($aeScripts.Count) script(s)). Use -StripAlwaysEncrypted to remove them, or configure encryptionSecrets in config, or run -ShowRequiredSecrets to see what's needed")
-      }
+      [void]$warnings.Add("Always Encrypted column master/encryption keys found ($($aeScripts.Count) script(s)). Ensure the target server has the appropriate key store provider and key path configured (Azure Key Vault, Windows Certificate Store, or HSM), or use -StripAlwaysEncrypted to remove them from the import.")
     }
   }
 
@@ -4539,8 +4535,8 @@ try {
   }
   try {
     # Connect to master first for preliminary checks - reconnect to target DB later if needed
-    # Also use master in WhatIf mode since the target DB may not exist yet
-    $initialDb = if ($CreateDatabase -or $WhatIfPreference) { 'master' } else { $Database }
+    # Also use master in WhatIf/TestConnection mode since the target DB may not exist yet
+    $initialDb = if ($CreateDatabase -or $WhatIfPreference -or $TestConnection) { 'master' } else { $Database }
     $script:SharedConnection = New-SqlServerConnection -ServerName $Server -DatabaseName $initialDb -Cred $Credential -Config $config -Timeout $effectiveCommandTimeout
   }
   catch {

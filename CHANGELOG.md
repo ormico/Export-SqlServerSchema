@@ -44,7 +44,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - New `-TestConnection` connectivity smoke test on both scripts
   - Connects to the server, reports version and edition, then exits 0
   - Suitable for container health checks and pipeline pre-deployment credential validation
-- New test suite: `tests/test-validate-only.ps1` (39 tests, no server connection required)
+- New test suite: `tests/test-validate-only.ps1` (no server connection required)
   - Covers all ValidateOnly scenarios for both Export and Import including CLR/AlwaysEncrypted/memory-optimized prerequisite detection
 
 **Environment Variable Credential Injection for Containers and CI/CD (#58)**

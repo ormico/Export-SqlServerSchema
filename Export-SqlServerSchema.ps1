@@ -7150,8 +7150,14 @@ try {
     Write-Log "Configuration source: $configSource" -Level INFO
   }
 
-  # Display configuration (in WhatIf mode, exportDir is null so show OutputPath instead)
-  $displayOutputDir = if ($WhatIfPreference -or $TestConnection) { "$OutputPath (WhatIf — directory not created)" } else { $exportDir }
+  # Display configuration (in WhatIf/TestConnection modes, exportDir is null so show OutputPath with a mode label)
+  $displayOutputDir = if ($WhatIfPreference) {
+    "$OutputPath (WhatIf — directory not created)"
+  } elseif ($TestConnection) {
+    "$OutputPath (TestConnection — directory not created)"
+  } else {
+    $exportDir
+  }
   Show-ExportConfiguration `
     -ServerName $Server `
     -DatabaseName $Database `
