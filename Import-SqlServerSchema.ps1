@@ -4511,6 +4511,14 @@ try {
     # Invoke-ImportValidation calls exit internally
   }
 
+  # Validate SourcePath early — before credential resolution — to fail fast on invalid paths.
+  # This replaces the removed [ValidateScript] attribute and preserves its fail-fast ordering:
+  # the original attribute would have rejected the path before any script body code executed.
+  if (-not (Test-Path $SourcePath -PathType Container)) {
+    Write-Error "SourcePath '$SourcePath' does not exist or is not a directory."
+    exit 1
+  }
+
   # Resolve credentials and connection info from environment variables (if specified)
   # Precedence: CLI params > individual *FromEnv > ConnectionStringFromEnv > config connection: section > defaults
   $envResolved = Resolve-EnvCredential `
@@ -4528,12 +4536,6 @@ try {
   $Database = $envResolved.Database
   $Credential = $envResolved.Credential
   $script:TrustServerCertificateEnabled = $envResolved.TrustServerCertificate
-
-  # Validate SourcePath for non-ValidateOnly modes (replaces removed [ValidateScript] attribute)
-  if (-not (Test-Path $SourcePath -PathType Container)) {
-    Write-Error "SourcePath '$SourcePath' does not exist or is not a directory."
-    exit 1
-  }
 
   # Validate that Server was resolved from at least one source
   if ([string]::IsNullOrWhiteSpace($Server)) {
