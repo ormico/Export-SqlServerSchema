@@ -103,12 +103,15 @@ function Invoke-SqlCommand {
 
 function Drop-TestDatabase {
     param([string]$DbName)
+    # Escape for T-SQL string literal (single quote) and bracketed identifier (closing bracket)
+    $safeForString  = $DbName.Replace("'", "''")
+    $safeForBracket = $DbName.Replace("]", "]]")
     try {
         Invoke-SqlCommand @"
-IF EXISTS (SELECT 1 FROM sys.databases WHERE name = '$DbName')
+IF EXISTS (SELECT 1 FROM sys.databases WHERE name = '$safeForString')
 BEGIN
-    ALTER DATABASE [$DbName] SET SINGLE_USER WITH ROLLBACK IMMEDIATE;
-    DROP DATABASE [$DbName];
+    ALTER DATABASE [$safeForBracket] SET SINGLE_USER WITH ROLLBACK IMMEDIATE;
+    DROP DATABASE [$safeForBracket];
 END
 "@ "master"
     } catch { }
@@ -116,48 +119,42 @@ END
 
 # ==============================================================
 # UNIT TESTS: ConvertFrom-AdoConnectionString
-# These dot-source the script and call the function directly,
-# using a sub-process to isolate side effects.
+# Loads the production function from Export-SqlServerSchema.ps1 so
+# tests exercise the real implementation, not a duplicate.
 # ==============================================================
 
 Write-Host "[INFO] Unit Tests: ConvertFrom-AdoConnectionString parser" -ForegroundColor Cyan
 Write-Host "---------------------------------------------------" -ForegroundColor Cyan
 
-# Helper: parse a connection string using SqlConnectionStringBuilder (same implementation as production code)
-function Invoke-ParseConnectionString {
-    param([string]$ConnStr)
-    $result = @{
-        Server = $null; Database = $null; Username = $null
-        Password = $null; TrustServerCertificate = $null; IntegratedSecurity = $null
+# Load ConvertFrom-AdoConnectionString directly from the production script using brace-counting
+# extraction (same approach used by run-unit-tests.ps1). This ensures tests stay in sync with
+# production code and catch regressions introduced there rather than exercising a duplicate.
+$exportScriptContent = Get-Content $exportScript -Raw
+function Get-FunctionBlock {
+    param([string]$Content, [string]$FunctionName)
+    $startPattern = "function $FunctionName "
+    $startIndex = $Content.IndexOf($startPattern)
+    if ($startIndex -lt 0) { throw "Function '$FunctionName' not found in Export script" }
+    $depth = 0; $inFunction = $false; $end = $startIndex
+    for ($i = $startIndex; $i -lt $Content.Length; $i++) {
+        if ($Content[$i] -eq '{') { $depth++; $inFunction = $true }
+        elseif ($Content[$i] -eq '}') {
+            $depth--
+            if ($inFunction -and $depth -eq 0) { $end = $i; break }
+        }
     }
-    if ([string]::IsNullOrWhiteSpace($ConnStr)) { return $result }
-
-    $b = $null
-    try {
-        $b = [System.Data.SqlClient.SqlConnectionStringBuilder]::new($ConnStr)
-    } catch {
-        throw "Invalid connection string format: $($_.Exception.Message)"
-    }
-
-    if (-not [string]::IsNullOrWhiteSpace($b.DataSource))     { $result.Server   = $b.DataSource }
-    if (-not [string]::IsNullOrWhiteSpace($b.InitialCatalog)) { $result.Database  = $b.InitialCatalog }
-    if (-not [string]::IsNullOrWhiteSpace($b.UserID))         { $result.Username  = $b.UserID }
-    if (-not [string]::IsNullOrWhiteSpace($b.Password))       { $result.Password  = $b.Password }
-
-    if ($ConnStr -imatch '(?:^|;)\s*TrustServerCertificate\s*=') {
-        $result.TrustServerCertificate = $b.TrustServerCertificate
-    }
-    if ($ConnStr -imatch '(?:^|;)\s*(?:Integrated\s+Security|Trusted_Connection)\s*=') {
-        $result.IntegratedSecurity = $b.IntegratedSecurity
-    }
-    return $result
+    return $Content.Substring($startIndex, $end - $startIndex + 1)
 }
+$tempFuncFile = Join-Path $env:TEMP "test-ado-parser-$([System.Guid]::NewGuid().ToString('N')).ps1"
+Get-FunctionBlock $exportScriptContent 'ConvertFrom-AdoConnectionString' | Set-Content $tempFuncFile -Encoding UTF8
+. $tempFuncFile
+Remove-Item $tempFuncFile -ErrorAction SilentlyContinue
 
 # --- Unit Test 1: Standard Data Source / Initial Catalog keys ---
 Write-Host "`n[INFO] Unit Test 1: Parse standard SQL Server keys" -ForegroundColor Cyan
 
 try {
-    $parsed = Invoke-ParseConnectionString "Data Source=myserver,1433;Initial Catalog=mydb;User ID=myuser;Password=mypass;TrustServerCertificate=true"
+    $parsed = ConvertFrom-AdoConnectionString "Data Source=myserver,1433;Initial Catalog=mydb;User ID=myuser;Password=mypass;TrustServerCertificate=true"
     $ok = $parsed.Server -eq 'myserver,1433' -and
           $parsed.Database -eq 'mydb' -and
           $parsed.Username -eq 'myuser' -and
@@ -172,7 +169,7 @@ try {
 Write-Host "`n[INFO] Unit Test 2: Parse alternate key aliases" -ForegroundColor Cyan
 
 try {
-    $parsed = Invoke-ParseConnectionString "Server=myserver2;Database=mydb2;UID=u2;PWD=p2"
+    $parsed = ConvertFrom-AdoConnectionString "Server=myserver2;Database=mydb2;UID=u2;PWD=p2"
     $ok = $parsed.Server -eq 'myserver2' -and
           $parsed.Database -eq 'mydb2' -and
           $parsed.Username -eq 'u2' -and
@@ -186,7 +183,7 @@ try {
 Write-Host "`n[INFO] Unit Test 3: Parse TrustServerCertificate=false" -ForegroundColor Cyan
 
 try {
-    $parsed = Invoke-ParseConnectionString "Data Source=srv;Initial Catalog=db;TrustServerCertificate=false"
+    $parsed = ConvertFrom-AdoConnectionString "Data Source=srv;Initial Catalog=db;TrustServerCertificate=false"
     $ok = $parsed.TrustServerCertificate -eq $false
     Write-TestResult "Parse TrustServerCertificate=false" $ok
 } catch {
@@ -197,7 +194,7 @@ try {
 Write-Host "`n[INFO] Unit Test 4: Parse Integrated Security=SSPI" -ForegroundColor Cyan
 
 try {
-    $parsed = Invoke-ParseConnectionString "Data Source=srv;Initial Catalog=db;Integrated Security=SSPI"
+    $parsed = ConvertFrom-AdoConnectionString "Data Source=srv;Initial Catalog=db;Integrated Security=SSPI"
     $ok = ($parsed.IntegratedSecurity -eq $true) -and
           [string]::IsNullOrEmpty($parsed.Username) -and
           [string]::IsNullOrEmpty($parsed.Password)
@@ -210,21 +207,11 @@ try {
 Write-Host "`n[INFO] Unit Test 5: Malformed connection string error" -ForegroundColor Cyan
 
 try {
-    $block = {
-        $builder = [System.Data.Common.DbConnectionStringBuilder]::new()
-        try {
-            $builder.ConnectionString = ";;;=bad;=value"
-        } catch {
-            throw "Invalid connection string format: $($_.Exception.Message)"
-        }
-    }
-    try { & $block }
-    catch {
-        $hasError = $_.Exception.Message -match 'Invalid connection string'
-        Write-TestResult "Malformed connection string produces descriptive error" $hasError
-    }
+    ConvertFrom-AdoConnectionString '=bad key' | Out-Null
+    Write-TestResult "Malformed connection string produces descriptive error" $false "Expected exception not thrown"
 } catch {
-    Write-TestResult "Malformed connection string produces descriptive error" $false "Error: $_"
+    $hasError = $_.Exception.Message -match 'Invalid connection string'
+    Write-TestResult "Malformed connection string produces descriptive error" $hasError "got: $_"
 }
 
 # ==============================================================
@@ -529,6 +516,28 @@ try {
     [System.Environment]::SetEnvironmentVariable($connStrVar16, $null, [System.EnvironmentVariableTarget]::Process)
 }
 
+# --- Test 17: Missing Server from all sources produces clear error ---
+Write-Host "`n[INFO] Test 17: Missing Server from all sources produces clear error" -ForegroundColor Cyan
+
+try {
+    $connStrVar17 = "TEST_CONNSTR_$(Get-Random)"
+    # Connection string has no Data Source / Server key — only Database and credentials
+    $connStr17NoServer = "Initial Catalog=$SourceDatabase;User ID=$Username;Password=$Password;TrustServerCertificate=true"
+    [System.Environment]::SetEnvironmentVariable($connStrVar17, $connStr17NoServer, [System.EnvironmentVariableTarget]::Process)
+
+    $output = & $exportScript `
+        -ConnectionStringFromEnv $connStrVar17 `
+        -OutputPath (Join-Path $ExportPath "should_not_exist") 2>&1
+    $errorOutput = $output | Out-String
+    $hasError = $errorOutput -match 'Server is required'
+    Write-TestResult "Missing Server produces clear error" $hasError
+} catch {
+    $hasError = $_.Exception.Message -match 'Server is required'
+    Write-TestResult "Missing Server produces clear error" $hasError
+} finally {
+    [System.Environment]::SetEnvironmentVariable($connStrVar17, $null, [System.EnvironmentVariableTarget]::Process)
+}
+
 # ==============================================================
 # INTEGRATION TESTS: Import Script with ConnectionStringFromEnv
 # ==============================================================
@@ -536,41 +545,41 @@ try {
 Write-Host "`n[INFO] Import Script Tests" -ForegroundColor Cyan
 Write-Host "---------------------------------------------------" -ForegroundColor Cyan
 
-# --- Test 17: Import with ConnectionStringFromEnv ---
-Write-Host "`n[INFO] Test 17: Import using ConnectionStringFromEnv" -ForegroundColor Cyan
+# --- Test 18: Import with ConnectionStringFromEnv ---
+Write-Host "`n[INFO] Test 18: Import using ConnectionStringFromEnv" -ForegroundColor Cyan
 
 # First export to get source scripts
-$testExportPath17 = Join-Path $ExportPath "connstr_import_source"
+$testExportPath18 = Join-Path $ExportPath "connstr_import_source"
 $importTargetDb = "TestConnStrImport_$(Get-Random)"
-$connStrVar17 = "TEST_CONNSTR_$(Get-Random)"
+$connStrVar18 = "TEST_CONNSTR_$(Get-Random)"
 
 try {
     # Export to get source scripts
-    if (Test-Path $testExportPath17) { Remove-Item $testExportPath17 -Recurse -Force }
+    if (Test-Path $testExportPath18) { Remove-Item $testExportPath18 -Recurse -Force }
     & $exportScript -Server $Server -Database $SourceDatabase `
         -Credential $credential -TrustServerCertificate `
-        -OutputPath $testExportPath17 | Out-Null
+        -OutputPath $testExportPath18 | Out-Null
 
-    $exportedDir17 = Get-ChildItem $testExportPath17 -Directory | Select-Object -First 1
-    if ($null -eq $exportedDir17) { throw "Export failed — cannot run import test" }
+    $exportedDir18 = Get-ChildItem $testExportPath18 -Directory | Select-Object -First 1
+    if ($null -eq $exportedDir18) { throw "Export failed — cannot run import test" }
 
     # Set up import connection string pointing to the target database
-    $connStr17 = "Data Source=$Server;Initial Catalog=$importTargetDb;User ID=$Username;Password=$Password;TrustServerCertificate=true"
-    [System.Environment]::SetEnvironmentVariable($connStrVar17, $connStr17, [System.EnvironmentVariableTarget]::Process)
+    $connStr18 = "Data Source=$Server;Initial Catalog=$importTargetDb;User ID=$Username;Password=$Password;TrustServerCertificate=true"
+    [System.Environment]::SetEnvironmentVariable($connStrVar18, $connStr18, [System.EnvironmentVariableTarget]::Process)
 
     # Import using only ConnectionStringFromEnv (no -Server, -Database, or -Credential)
     $output = & $importScript `
-        -SourcePath $exportedDir17.FullName `
-        -ConnectionStringFromEnv $connStrVar17 `
+        -SourcePath $exportedDir18.FullName `
+        -ConnectionStringFromEnv $connStrVar18 `
         -CreateDatabase 2>&1
 
     $importOutput = $output | Out-String
     $importSuccess = $importOutput -match 'Import complete|completed successfully|objects imported' -or
-                     (Invoke-SqlCommand "SELECT 1 FROM sys.databases WHERE name='$importTargetDb'" 2>$null) -ne $null
+                     (Invoke-SqlCommand "SELECT 1 FROM sys.databases WHERE name='$($importTargetDb.Replace("'","''"))'" 2>$null) -ne $null
 
     # Verify database was created
     try {
-        $dbCheck = Invoke-SqlCommand "SELECT name FROM sys.databases WHERE name='$importTargetDb'"
+        $dbCheck = Invoke-SqlCommand "SELECT name FROM sys.databases WHERE name='$($importTargetDb.Replace("'","''"))'"
         $importSuccess = ($dbCheck | Where-Object { $_ -match $importTargetDb }) -ne $null
     } catch { $importSuccess = $false }
 
@@ -578,18 +587,18 @@ try {
 } catch {
     Write-TestResult "Import using ConnectionStringFromEnv" $false "Error: $_"
 } finally {
-    [System.Environment]::SetEnvironmentVariable($connStrVar17, $null, [System.EnvironmentVariableTarget]::Process)
+    [System.Environment]::SetEnvironmentVariable($connStrVar18, $null, [System.EnvironmentVariableTarget]::Process)
     Drop-TestDatabase $importTargetDb
 }
 
-# --- Test 18: Import CLI -Database overrides connection string database ---
-Write-Host "`n[INFO] Test 18: Import -Database overrides connection string database" -ForegroundColor Cyan
+# --- Test 19: Import CLI -Database overrides connection string database ---
+Write-Host "`n[INFO] Test 19: Import -Database overrides connection string database" -ForegroundColor Cyan
 
 $connStrVar18 = "TEST_CONNSTR_$(Get-Random)"
 $importTargetDb18 = "TestConnStrOverride_$(Get-Random)"
 
 try {
-    $exportedDir18 = Get-ChildItem $testExportPath17 -Directory -ErrorAction SilentlyContinue | Select-Object -First 1
+    $exportedDir18 = Get-ChildItem $testExportPath18 -Directory -ErrorAction SilentlyContinue | Select-Object -First 1
     if ($null -eq $exportedDir18) { throw "Need export from test 17 — skipping" }
 
     # Connection string has WRONG database; correct one via -Database
@@ -603,7 +612,7 @@ try {
         -CreateDatabase 2>&1
 
     try {
-        $dbCheck = Invoke-SqlCommand "SELECT name FROM sys.databases WHERE name='$importTargetDb18'"
+        $dbCheck = Invoke-SqlCommand "SELECT name FROM sys.databases WHERE name='$($importTargetDb18.Replace("'","''"))'"
         $importSuccess = ($dbCheck | Where-Object { $_ -match $importTargetDb18 }) -ne $null
     } catch { $importSuccess = $false }
 
@@ -615,14 +624,14 @@ try {
     Drop-TestDatabase $importTargetDb18
 }
 
-# --- Test 19: Import with config connection.connectionStringFromEnv ---
-Write-Host "`n[INFO] Test 19: Import with config connection.connectionStringFromEnv" -ForegroundColor Cyan
+# --- Test 20: Import with config connection.connectionStringFromEnv ---
+Write-Host "`n[INFO] Test 20: Import with config connection.connectionStringFromEnv" -ForegroundColor Cyan
 
 $connStrVar19 = "TEST_CONNSTR_$(Get-Random)"
 $importTargetDb19 = "TestConnStrConfig_$(Get-Random)"
 
 try {
-    $exportedDir19 = Get-ChildItem $testExportPath17 -Directory -ErrorAction SilentlyContinue | Select-Object -First 1
+    $exportedDir19 = Get-ChildItem $testExportPath18 -Directory -ErrorAction SilentlyContinue | Select-Object -First 1
     if ($null -eq $exportedDir19) { throw "Need export from test 17 — skipping" }
 
     $connStr19 = "Data Source=$Server;Initial Catalog=$importTargetDb19;User ID=$Username;Password=$Password;TrustServerCertificate=true"
@@ -641,7 +650,7 @@ connection:
         -CreateDatabase 2>&1
 
     try {
-        $dbCheck = Invoke-SqlCommand "SELECT name FROM sys.databases WHERE name='$importTargetDb19'"
+        $dbCheck = Invoke-SqlCommand "SELECT name FROM sys.databases WHERE name='$($importTargetDb19.Replace("'","''"))'"
         $importSuccess = ($dbCheck | Where-Object { $_ -match $importTargetDb19 }) -ne $null
     } catch { $importSuccess = $false }
 

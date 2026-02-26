@@ -240,6 +240,21 @@ try {
         [System.Environment]::SetEnvironmentVariable($envVarName16, $null, [System.EnvironmentVariableTarget]::Process)
     }
 
+    # Test 17: Connection string with no Server key -> Server remains null/empty
+    $envVarName17 = "TEST_CONNSTR_$(Get-Random)"
+    [System.Environment]::SetEnvironmentVariable($envVarName17, 'Initial Catalog=db;User ID=u;Password=p', [System.EnvironmentVariableTarget]::Process)
+    try {
+        $r = Resolve-EnvCredential `
+            -ServerParam '' -DatabaseParam '' -CredentialParam $null `
+            -ServerFromEnvParam '' -UsernameFromEnvParam '' -PasswordFromEnvParam '' `
+            -ConnectionStringFromEnvParam $envVarName17 `
+            -TrustServerCertificateParam $false `
+            -Config @{} -BoundParameters @{}
+        Assert-True 'ConnStr without Server key -> Server remains null/empty' ([string]::IsNullOrEmpty($r.Server)) "got '$($r.Server)'"
+    } finally {
+        [System.Environment]::SetEnvironmentVariable($envVarName17, $null, [System.EnvironmentVariableTarget]::Process)
+    }
+
     # Summary
     Write-Host "`n=== Summary ===" -ForegroundColor Cyan
     Write-Host "Passed: $passed" -ForegroundColor Green
