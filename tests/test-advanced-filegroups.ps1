@@ -531,7 +531,7 @@ $importOutput4c = & $importScript -Server $Server -Database $targetDb4c `
 # Verify import succeeded
 $success4c = $importOutput4c -match "Import completed successfully"
 Write-TestResult -TestName "Import succeeds with removeToPrimary + partitioned table" -Passed $success4c `
-    -Message "Import should succeed. Output: $($importOutput4c | Select-Object -Last 5)"
+    -Message "Import should succeed. Output: $(($importOutput4c -split "`r?`n" | Select-Object -Last 5) -join "`n")"
 
 if ($success4c) {
     # Verify partitioned table exists

@@ -307,9 +307,10 @@ Write-TestResult -TestName "Partitioned table scheme preserved" `
 Write-Host "`n[INFO] Test 11: Index ON [FileGroup] replacement" -ForegroundColor Cyan
 
 $sql11 = @"
-CREATE NONCLUSTERED INDEX [IX_Orders_Date]
-    ON [dbo].[Orders] ([OrderDate])
-) ON [FG_INDEX]
+CREATE NONCLUSTERED INDEX [IX_Orders_Date] ON [dbo].[Orders]
+(
+	[OrderDate] DESC
+)WITH (PAD_INDEX = OFF, STATISTICS_NORECOMPUTE = OFF) ON [FG_INDEX]
 "@
 
 $result11 = Invoke-RemoveToPrimaryTransform -Sql $sql11
