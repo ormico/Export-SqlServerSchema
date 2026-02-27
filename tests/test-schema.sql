@@ -530,6 +530,11 @@ VALUES
     ('Charlie Brown', 'charlie.brown@example.com', '555-0104', GETDATE());
 GO
 
+-- #93: ProductCategories must be populated before Products due to FK_Products_CategoryCode
+INSERT INTO dbo.ProductCategories (CategoryCode)
+VALUES ('WDG-001'), ('WDG-002'), ('GDG-001'), ('GDG-002'), ('TL-001'), ('TL-002');
+GO
+
 INSERT INTO dbo.Products (ProductName, ProductCode, Price, StockQuantity, CategoryId)
 VALUES 
     ('Widget A', 'WDG-001', 19.99, 100, 1),
