@@ -60,6 +60,7 @@ If you want to test individual components:
 - **setup-test-db.ps1** - Creates test database with sample schema
 - **test-schema.sql** - Test database schema definition with comprehensive object coverage
 - **test-validate-only.ps1** - Offline -ValidateOnly tests (no server required)
+- **test-import-integrity-report.ps1** - Post-import integrity report unit tests (77 tests; no SQL Server required)
 - **.env** - Configuration file (copy from .env.example)
 
 ## Test Database Coverage

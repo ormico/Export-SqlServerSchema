@@ -100,6 +100,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - New integration test suite: `tests/test-connection-string-from-env.ps1` (19 tests)
 - Documentation updates: CONFIG_REFERENCE, README, example config, JSON schema
 
+**Post-Import Integrity Report (#67)**
+- Every import run now generates `import-report-<yyyyMMdd_HHmmss>.json` in the source path folder
+- Report provides a unified view of what was imported, skipped, and failed — replacing the need to manually correlate `import-log.txt`, `import_errors_*.log`, and `import-metrics-*.json`
+- Tracks effective configuration sources for all 15 tracked parameters (cli, configFile, envVar, default)
+- Enumerates exported objects from `_export_metadata.json` (falls back to `.sql` file counting when metadata is missing)
+- Records imported objects with type, schema, name, and file path
+- Records skipped objects with reason codes: `DevMode_SecurityPolicy`, `DevMode_DatabaseConfiguration`, `DevMode_ExternalData`, `DevMode_AlwaysEncrypted`, `DevMode_FileStream`, `EmptyScript`
+- Records failed objects with SQL error details
+- Aggregates skip reasons into a `skippedReasons` summary map for quick triage
+- Includes import duration, timestamp, target server/database, and source path
+- Credentials and secrets are explicitly excluded from the report
+- No new parameters required — report is always generated automatically
+- New test suite: `tests/test-import-integrity-report.ps1` (77 tests; no SQL Server required)
+
 ### Changed (Breaking)
 
 **`-Server` parameter is no longer mandatory**
