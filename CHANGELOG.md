@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+**Extract Shared Functions into Common Helper Library (#66)**
+- Created `Common-SqlServerSchema.ps1` containing 7 functions previously duplicated across Export and Import scripts
+- Extracted: `Write-Log`, `Get-EscapedSqlIdentifier`, `Invoke-WithRetry`, `Read-ExportMetadata`, `ConvertFrom-AdoConnectionString`, `Resolve-EnvCredential`, `Resolve-ConfigFile`
+- Both main scripts now dot-source the common helper at startup
+- Standardized `Write-Log` parameter name to `-Level` (Import previously used `-Severity`)
+- Standardized `Read-ExportMetadata` parameter name to `-Path` (Export used `-ExportPath`, Import used `-SourcePath`)
+- Net reduction of ~400 lines of duplicated code
+- Added `tests/test-common-functions.ps1` with 25 unit tests for all extracted functions
+
 ### Fixed
 
 **Partition Scheme Corruption in removeToPrimary Mode (#80)**

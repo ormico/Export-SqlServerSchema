@@ -9,10 +9,13 @@
     identical or near-identical between Export and Import, extracted to eliminate duplication.
 
     Functions provided:
-      - Write-Log              : Console + file logging with severity levels
-      - Get-EscapedSqlIdentifier : Escapes ] in SQL identifiers for bracketed notation
-      - Invoke-WithRetry       : Exponential backoff retry for transient SQL errors
-      - Read-ExportMetadata    : Reads _export_metadata.json from an export directory
+      - Write-Log                    : Console + file logging with severity levels
+      - Get-EscapedSqlIdentifier     : Escapes ] in SQL identifiers for bracketed notation
+      - Invoke-WithRetry             : Exponential backoff retry for transient SQL errors
+      - Read-ExportMetadata          : Reads _export_metadata.json from an export directory
+      - ConvertFrom-AdoConnectionString : Parses ADO.NET connection strings
+      - Resolve-EnvCredential        : Resolves credentials from environment variables
+      - Resolve-ConfigFile           : Auto-discovers YAML config files
 
     This file has no param() block and no mandatory parameters, making it safe to dot-source.
 
