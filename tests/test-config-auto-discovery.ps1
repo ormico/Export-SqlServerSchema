@@ -118,7 +118,8 @@ function Invoke-ScriptForOutput {
         "-$($_.Key) $(ConvertTo-Json ($_.Value.ToString()) -Compress)"
     }) -join ' '
 
-    $wrapperPs1 = Join-Path $env:TEMP ([System.IO.Path]::GetRandomFileName() + '.ps1')
+    $wrapperTempDir = if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { [System.IO.Path]::GetTempPath() }
+    $wrapperPs1 = Join-Path $wrapperTempDir ([System.IO.Path]::GetRandomFileName() + '.ps1')
     @"
 Set-Location $(ConvertTo-Json $WorkingDirectory -Compress)
 try { & $(ConvertTo-Json $ScriptPath -Compress) $argStr *>&1 } catch {}

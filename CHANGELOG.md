@@ -5,7 +5,26 @@ All notable changes to Export-SqlServerSchema will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [unreleased] - YYYY-MM-DD
+## [Unreleased]
+
+### Fixed
+
+**Partition Scheme Corruption in removeToPrimary Mode (#80)**
+- The `removeToPrimary` filegroup strategy incorrectly rewrote partition scheme references (`ON [PS_Name]([Column])`) to `ON [PRIMARY]`, breaking partitioned tables entirely
+- Added negative lookahead `(?!\s*\()` to the filegroup replacement regex so partition scheme syntax (bracket followed by parenthesized column) is preserved
+- Non-partitioned tables on custom filegroups are still correctly remapped to PRIMARY
+
+**Prod Mode Missing fileGroupStrategy Support (#80)**
+- `productionMode` config block never set the `__RemapFileGroupsToPrimary__` flag when `fileGroupStrategy: removeToPrimary` was configured, causing the strategy to silently do nothing in Prod mode
+- Added fileGroupStrategy handling to the Prod mode block, matching the existing Dev mode pattern (including memory-optimized FileGroup preservation)
+
+**ValidateOnly false 'Unknown config key' warnings (#77)**
+- `connection.connectionStringFromEnv` no longer triggers an unknown-key warning in both Export and Import `-ValidateOnly` checks
+- `import.dependencyRetries`, `import.showSql`, and `import.useLatestExport` no longer trigger unknown-key warnings in Import `-ValidateOnly` checks
+- Root cause: the `$knownConnection` and `$knownImport` allowlists in `Test-ExportConfigKeys` / `Test-ImportConfigKeys` were incomplete when added in v1.8.0
+- New tests in `test-validate-only.ps1` (tests 25–30) verify each previously-missing key is recognized
+
+## [1.8.0] - 2026-02-25
 
 ### Improved
 
@@ -20,6 +39,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+**Auto-Select Latest Export Folder (#71)**
+- New `-UseLatestExport` switch on `Import-SqlServerSchema.ps1` allows `-SourcePath` to point at a parent directory instead of a specific timestamped export folder
+- Scans immediate children for valid export folders (those containing a parseable `_export_metadata.json`) and selects the most recent one
+- Resolution uses `exportStartTimeUtc` from metadata (preferred); falls back to folder `LastWriteTime` if the field is absent or unparseable
+- Prints the resolved folder name, timestamp, and source server/database at startup for confirmation
+- If `-SourcePath` already points directly to a valid export folder, uses it as-is with a warning that the switch is redundant
+- If no valid export folders are found, emits a clear `[ERROR]` and aborts
+- Supported via config file: `import.useLatestExport: true` — CLI switch always takes precedence
+- New test suite: `tests/test-use-latest-export.ps1` (32 tests; unit + integration + config file)
+
 **Config File Auto-Discovery (#59)**
 - Both `Export-SqlServerSchema.ps1` and `Import-SqlServerSchema.ps1` now automatically discover a config file when `-ConfigFile` is not provided
 - Search order: script directory first, then current working directory
@@ -27,6 +56,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A clear `[INFO]` message is printed indicating whether a config was auto-discovered or defaults are being used
 - Explicit `-ConfigFile` parameter still takes precedence and bypasses discovery entirely
 - New test suite: `tests/test-config-auto-discovery.ps1` (18 tests; no SQL Server required)
+
+**Offline Validation, Dry Run, and Connectivity Test (#60)**
+- New `-ValidateOnly` switch on both Export and Import scripts for offline configuration checks with no server connection required
+  - Validates YAML config syntax, key names, and enum values (`targetSqlVersion`, `importMode`)
+  - Checks output/source path accessibility (existence, write permission, parent directory)
+  - Verifies environment variables referenced by `*FromEnv` parameters and config `connection:` section
+  - Import-only: parses export folder structure and displays script counts per object category
+  - Import-only: detects CLR assembly, AlwaysEncrypted key, and memory-optimized table prerequisites and warns if corresponding config/switches are not set
+  - Exit code 0 on success (warnings are non-fatal), exit code 1 if any errors are found
+  - Suitable for CI/CD pre-flight checks before attempting a live export or import
+- New `-WhatIf` dry-run support via `SupportsShouldProcess` on both scripts
+  - Connects to the server and reports what would happen without writing any files or executing any SQL
+  - Export: enumerates object counts by type (Tables, Views, Stored Procedures, etc.)
+  - Import: reports database existence status and script counts per folder that would be executed; skips database creation and schema existence checks
+- New `-TestConnection` connectivity smoke test on both scripts
+  - Connects to the server, reports version and edition, then exits 0
+  - Suitable for container health checks and pipeline pre-deployment credential validation
+- New test suite: `tests/test-validate-only.ps1` (no server connection required)
+  - Covers all ValidateOnly scenarios for both Export and Import including CLR/AlwaysEncrypted/memory-optimized prerequisite detection
 
 **Environment Variable Credential Injection for Containers and CI/CD (#58)**
 - New `-UsernameFromEnv` and `-PasswordFromEnv` parameters on both Export and Import scripts
@@ -79,6 +127,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Validation still ensures a database is resolved from at least one source; a clear error is shown if missing
 - This is a **breaking change** for scripts that relied on PowerShell's mandatory parameter prompt behavior — those scripts will now need to handle the missing-database error themselves or pass `-Database` explicitly as before
 - All existing call patterns that pass `-Database` continue to work unchanged
+
+**CLR Strict Security Management for Import (#57)**
+- New `clr` config section with `enableClr`, `disableStrictSecurityForImport`, and `restoreStrictSecuritySetting` options
+- Temporarily disables CLR strict security during import to allow loading CLR assemblies on SQL Server 2017+ via `sp_configure`, restores original setting via try/finally
+- Emits `[HINT]` with config suggestions when CLR assembly scripts fail without CLR config enabled
+- Handles insufficient `sp_configure` permissions with clear warnings
+- New helper functions: `Test-ClrAssemblyScript`, `Set-ClrSpConfigure`, `Get-ClrSpConfigureValue`
+- New test suite: `tests/test-clr-strict-security.ps1` (32 tests; unit + integration)
 
 **Strip Always Encrypted for Targets Without External Key Stores**
 - New `-StripAlwaysEncrypted` parameter for Import-SqlServerSchema.ps1
@@ -359,7 +415,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 **Simplified FileGroup Configuration**
 - Replaced confusing `includeFileGroups` boolean with `fileGroupStrategy` setting
 - `fileGroupStrategy: autoRemap` (default) - imports FileGroups with auto-detected paths using `SERVERPROPERTY('InstanceDefaultDataPath')`
-- `fileGroupStrategy: removeToPrimary` - skips FileGroups (has known limitation with partitioned tables)
+- `fileGroupStrategy: removeToPrimary` - skips FileGroups, remaps references to PRIMARY (partition schemes preserved)
 - Both Dev and Prod modes now default to `autoRemap`
 - Updated config schema, example files, and documentation
 
@@ -371,14 +427,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Export: `targetSqlVersion` (default: Sql2022), `collectMetrics` (default: false), `export.includeObjectTypes`
   - Import: `import.createDatabase` (default: false), `import.force` (default: false), `import.continueOnError` (default: false), `import.showSql` (default: false), `import.includeObjectTypes`
 - **Minimal Config Support**: Empty config files now work correctly; all properties have sensible defaults
-
-### Known Issues
-
-**removeToPrimary FileGroup Strategy Limitation**
-- The `fileGroupStrategy: removeToPrimary` option does not work with databases containing partitioned tables
-- **Root Cause**: Partition schemes cannot reference PRIMARY directly; they require a valid partition scheme
-- **Workaround**: Use `fileGroupStrategy: autoRemap` (the default) which imports FileGroups with auto-detected paths
-- **Impact**: Dev mode still works correctly with `autoRemap`; only affects users who explicitly set `removeToPrimary`
 
 
 ## [1.6.0] - 2026-01-27
