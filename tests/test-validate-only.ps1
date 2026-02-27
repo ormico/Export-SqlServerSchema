@@ -40,7 +40,8 @@ function Write-TestResult {
 # Setup: Create temporary test fixtures
 # ─────────────────────────────────────────────────────────────────────────────
 
-$tempDir = Join-Path $env:TEMP "validate-only-tests-$(New-Guid)"
+$baseTempDir = if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { [System.IO.Path]::GetTempPath() }
+$tempDir = Join-Path $baseTempDir "validate-only-tests-$(New-Guid)"
 $null = New-Item $tempDir -ItemType Directory -Force
 
 # Valid minimal config file
