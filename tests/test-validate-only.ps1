@@ -616,6 +616,167 @@ else {
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Tests for known config keys (issue #77 — no false 'Unknown config key' warnings)
+# ─────────────────────────────────────────────────────────────────────────────
+
+Write-Host ''
+Write-Host '[INFO] Known config key validation tests (issue #77)...' -ForegroundColor Cyan
+Write-Host ''
+
+# Test 25: connection.connectionStringFromEnv should NOT produce a warning in Export
+Write-Host '[INFO] Test 25: Export config connection.connectionStringFromEnv is recognized...'
+$connStrEnvConfigPath = Join-Path $tempDir 'connstr-env-config.yml'
+Set-Content $connStrEnvConfigPath -Value @'
+connection:
+  connectionStringFromEnv: SQLCONNSTR_Default
+'@
+try {
+    $output = & $exportScript `
+        -Database 'TestDb' `
+        -Server 'localhost' `
+        -OutputPath $writableOutputDir `
+        -ConfigFile $connStrEnvConfigPath `
+        -ValidateOnly *>&1
+    $exitCode = $LASTEXITCODE
+    $outStr = $output -join "`n"
+    Write-TestResult 'Export ValidateOnly: connection.connectionStringFromEnv → exit 0' ($exitCode -eq 0) `
+        "Exit code: $exitCode`nOutput: $outStr"
+    Write-TestResult 'Export ValidateOnly: connection.connectionStringFromEnv → no unknown key warning' (-not ($outStr -match 'Unknown config key.*connectionStringFromEnv')) `
+        "Output: $outStr"
+}
+catch {
+    Write-TestResult 'Export ValidateOnly: connection.connectionStringFromEnv' $false $_.Exception.Message
+}
+
+# Test 26: connection.connectionStringFromEnv should NOT produce a warning in Import
+Write-Host '[INFO] Test 26: Import config connection.connectionStringFromEnv is recognized...'
+try {
+    $output = & $importScript `
+        -Database 'TestDb' `
+        -Server 'localhost' `
+        -SourcePath $fakeExportDir `
+        -ConfigFile $connStrEnvConfigPath `
+        -ValidateOnly *>&1
+    $exitCode = $LASTEXITCODE
+    $outStr = $output -join "`n"
+    Write-TestResult 'Import ValidateOnly: connection.connectionStringFromEnv → exit 0' ($exitCode -eq 0) `
+        "Exit code: $exitCode`nOutput: $outStr"
+    Write-TestResult 'Import ValidateOnly: connection.connectionStringFromEnv → no unknown key warning' (-not ($outStr -match 'Unknown config key.*connectionStringFromEnv')) `
+        "Output: $outStr"
+}
+catch {
+    Write-TestResult 'Import ValidateOnly: connection.connectionStringFromEnv' $false $_.Exception.Message
+}
+
+# Test 27: import.dependencyRetries should NOT produce a warning
+Write-Host '[INFO] Test 27: Import config import.dependencyRetries is recognized...'
+$depRetriesConfigPath = Join-Path $tempDir 'dep-retries-config.yml'
+Set-Content $depRetriesConfigPath -Value @'
+import:
+  dependencyRetries:
+    enabled: true
+    maxRetries: 5
+'@
+try {
+    $output = & $importScript `
+        -Database 'TestDb' `
+        -Server 'localhost' `
+        -SourcePath $fakeExportDir `
+        -ConfigFile $depRetriesConfigPath `
+        -ValidateOnly *>&1
+    $exitCode = $LASTEXITCODE
+    $outStr = $output -join "`n"
+    Write-TestResult 'Import ValidateOnly: import.dependencyRetries → exit 0' ($exitCode -eq 0) `
+        "Exit code: $exitCode`nOutput: $outStr"
+    Write-TestResult 'Import ValidateOnly: import.dependencyRetries → no unknown key warning' (-not ($outStr -match 'Unknown config key.*dependencyRetries')) `
+        "Output: $outStr"
+}
+catch {
+    Write-TestResult 'Import ValidateOnly: import.dependencyRetries' $false $_.Exception.Message
+}
+
+# Test 28: import.showSql should NOT produce a warning
+Write-Host '[INFO] Test 28: Import config import.showSql is recognized...'
+$showSqlConfigPath = Join-Path $tempDir 'showsql-config.yml'
+Set-Content $showSqlConfigPath -Value @'
+import:
+  showSql: true
+'@
+try {
+    $output = & $importScript `
+        -Database 'TestDb' `
+        -Server 'localhost' `
+        -SourcePath $fakeExportDir `
+        -ConfigFile $showSqlConfigPath `
+        -ValidateOnly *>&1
+    $exitCode = $LASTEXITCODE
+    $outStr = $output -join "`n"
+    Write-TestResult 'Import ValidateOnly: import.showSql → exit 0' ($exitCode -eq 0) `
+        "Exit code: $exitCode`nOutput: $outStr"
+    Write-TestResult 'Import ValidateOnly: import.showSql → no unknown key warning' (-not ($outStr -match 'Unknown config key.*showSql')) `
+        "Output: $outStr"
+}
+catch {
+    Write-TestResult 'Import ValidateOnly: import.showSql' $false $_.Exception.Message
+}
+
+# Test 29: import.useLatestExport should NOT produce a warning
+Write-Host '[INFO] Test 29: Import config import.useLatestExport is recognized...'
+$useLatestConfigPath = Join-Path $tempDir 'uselatest-config.yml'
+Set-Content $useLatestConfigPath -Value @'
+import:
+  useLatestExport: true
+'@
+try {
+    $output = & $importScript `
+        -Database 'TestDb' `
+        -Server 'localhost' `
+        -SourcePath $fakeExportDir `
+        -ConfigFile $useLatestConfigPath `
+        -ValidateOnly *>&1
+    $exitCode = $LASTEXITCODE
+    $outStr = $output -join "`n"
+    Write-TestResult 'Import ValidateOnly: import.useLatestExport → exit 0' ($exitCode -eq 0) `
+        "Exit code: $exitCode`nOutput: $outStr"
+    Write-TestResult 'Import ValidateOnly: import.useLatestExport → no unknown key warning' (-not ($outStr -match 'Unknown config key.*useLatestExport')) `
+        "Output: $outStr"
+}
+catch {
+    Write-TestResult 'Import ValidateOnly: import.useLatestExport' $false $_.Exception.Message
+}
+
+# Test 30: Combined config with ALL previously-missing keys → no warnings
+Write-Host '[INFO] Test 30: Import config with all previously-missing keys → no unknown key warnings...'
+$allKeysConfigPath = Join-Path $tempDir 'all-keys-config.yml'
+Set-Content $allKeysConfigPath -Value @'
+connection:
+  connectionStringFromEnv: SQLCONNSTR_Default
+import:
+  dependencyRetries:
+    enabled: true
+    maxRetries: 5
+  showSql: false
+  useLatestExport: false
+'@
+try {
+    $output = & $importScript `
+        -Database 'TestDb' `
+        -Server 'localhost' `
+        -SourcePath $fakeExportDir `
+        -ConfigFile $allKeysConfigPath `
+        -ValidateOnly *>&1
+    $exitCode = $LASTEXITCODE
+    $outStr = $output -join "`n"
+    Write-TestResult 'Import ValidateOnly: all issue #77 keys → exit 0' ($exitCode -eq 0) `
+        "Exit code: $exitCode`nOutput: $outStr"
+    Write-TestResult 'Import ValidateOnly: all issue #77 keys → no unknown key warnings' (-not ($outStr -match 'Unknown config key')) `
+        "Output: $outStr"
+}
+catch {
+    Write-TestResult 'Import ValidateOnly: all issue #77 keys combined' $false $_.Exception.Message
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Cleanup
 # ─────────────────────────────────────────────────────────────────────────────
 
