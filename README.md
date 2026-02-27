@@ -855,7 +855,7 @@ Usage:
 
 **FileGroup Strategies**:
 - **`autoRemap`** (default): Imports FileGroups with auto-detected paths using `SERVERPROPERTY('InstanceDefaultDataPath')`
-- **`removeToPrimary`**: Skips FileGroups (note: has known limitations with partitioned tables)
+- **`removeToPrimary`**: Skips FileGroups, remaps all references to PRIMARY (partition schemes are preserved)
 
 For complete configuration reference including all options, see the [User Guide](docs/USER_GUIDE.md#3-configuration-reference).
 
