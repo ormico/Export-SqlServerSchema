@@ -200,7 +200,7 @@ All SMO collections follow this pattern: `$Database.{CollectionName} | Where-Obj
 
 ### Import Script Folder Processing Order
 
-Import-SqlServerSchema reads numbered folders in alphabetical order. **Critical**: Folders MUST be processed by number prefix. The `Get-ScriptFiles` function sorts directories by name, ensuring `07_Tables_PrimaryKey` runs before `08_Tables_ForeignKeys` to prevent FK constraint failures.
+Import-SqlServerSchema reads numbered folders in alphabetical order. **Critical**: Folders MUST be processed by number prefix. The `Get-ScriptFiles` function sorts directories by name, ensuring `09_Tables_PrimaryKey` runs before `10_Indexes` and `11_Tables_ForeignKeys` to prevent constraint failures. Indexes must load before foreign keys because FKs can reference columns made unique by standalone indexes.
 
 ## Project-Specific Conventions
 

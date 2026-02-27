@@ -173,8 +173,8 @@ DbScripts/
     07_Types/                     # User-defined types
     08_XmlSchemaCollections/      # XML schema collections
     09_Tables_PrimaryKey/         # Tables with primary keys
-    10_Tables_ForeignKeys/        # Foreign key constraints
-    11_Indexes/                   # Indexes
+    10_Indexes/                   # Indexes
+    11_Tables_ForeignKeys/        # Foreign key constraints
     12_Defaults/                  # Default constraints
     13_Rules/                     # Rule constraints
     14_Programmability/           # Functions, procedures, triggers, views

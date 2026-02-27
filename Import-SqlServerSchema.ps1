@@ -350,8 +350,8 @@ function Get-ObjectInfoFromPath {
     '07_Types'                 = 'UserDefinedType'
     '08_XmlSchemaCollections'  = 'XmlSchemaCollection'
     '09_Tables_PrimaryKey'     = 'Table'
-    '10_Tables_ForeignKeys'    = 'ForeignKey'
-    '11_Indexes'               = 'Index'
+    '10_Indexes'               = 'Index'
+    '11_Tables_ForeignKeys'    = 'ForeignKey'
     '12_Defaults'              = 'Default'
     '13_Rules'                 = 'Rule'
     '14_Programmability'       = 'Programmability'
@@ -660,8 +660,8 @@ function Get-ImportFolderSummary {
     '07_Types'                = 'User-Defined Types'
     '08_XmlSchemaCollections' = 'XML Schema Collections'
     '09_Tables_PrimaryKey'    = 'Tables (with Primary Keys)'
-    '10_Tables_ForeignKeys'   = 'Foreign Key Constraints'
-    '11_Indexes'              = 'Indexes'
+    '10_Indexes'              = 'Indexes'
+    '11_Tables_ForeignKeys'   = 'Foreign Key Constraints'
     '12_Defaults'             = 'Defaults'
     '13_Rules'                = 'Rules'
     '14_Programmability'      = 'Programmability (Functions, Procs)'
@@ -1553,7 +1553,7 @@ function Get-RequiredEncryptionSecrets {
   if ($encryptionObjects.columnMasterKeys.Count -eq 0 -and $encryptionObjects.columnEncryptionKeys.Count -eq 0) {
     $tableDirs = @(
       (Join-Path $SourcePath '09_Tables_PrimaryKey'),
-      (Join-Path $SourcePath '10_Tables_ForeignKeys')
+      (Join-Path $SourcePath '11_Tables_ForeignKeys')
     )
     $tableFiles = @()
     foreach ($dir in $tableDirs) {
@@ -3076,8 +3076,8 @@ function Test-SchemaExcluded {
   # This prevents false positives like user "cdc.user.sql" being treated as schema "cdc"
   # Note: Programmability has nested subfolders (02_Functions, 03_StoredProcedures, etc.)
   $schemaBoundFolders = @(
-    'Tables',           # Matches 09_Tables_PrimaryKey, 10_Tables_ForeignKeys, etc.
-    'Indexes',          # Matches 11_Indexes
+    'Tables',           # Matches 09_Tables_PrimaryKey, 11_Tables_ForeignKeys, etc.
+    'Indexes',          # Matches 10_Indexes
     'Views',            # Matches 05_Views (nested under 14_Programmability)
     'Functions',        # Matches 02_Functions (nested under 14_Programmability)
     'StoredProcedures', # Matches 03_StoredProcedures (nested under 14_Programmability)
@@ -3178,13 +3178,13 @@ function Test-ScriptExcluded {
         if ($relativePath -match '08_XmlSchemaCollections') { return $true }
       }
       'Tables' {
-        if ($relativePath -match '09_Tables|10_Tables') { return $true }
+        if ($relativePath -match '09_Tables|11_Tables') { return $true }
       }
       'ForeignKeys' {
-        if ($relativePath -match '10_Tables.*ForeignKeys') { return $true }
+        if ($relativePath -match '11_Tables.*ForeignKeys') { return $true }
       }
       'Indexes' {
-        if ($relativePath -match '11_Indexes') { return $true }
+        if ($relativePath -match '10_Indexes') { return $true }
       }
       'Defaults' {
         if ($relativePath -match '12_Defaults') { return $true }
@@ -3424,8 +3424,8 @@ function Get-ScriptFiles {
     '07_Types',
     '08_XmlSchemaCollections',
     '09_Tables_PrimaryKey',
-    '10_Tables_ForeignKeys',
-    '11_Indexes',
+    '10_Indexes',
+    '11_Tables_ForeignKeys',
     '12_Defaults',
     '13_Rules',
     '14_Programmability',
@@ -3476,9 +3476,9 @@ function Get-ScriptFiles {
       'PartitionSchemes'      = '06_PartitionSchemes'
       'Types'                 = '07_Types'
       'XmlSchemaCollections'  = '08_XmlSchemaCollections'
-      'Tables'                = @('09_Tables_PrimaryKey', '10_Tables_ForeignKeys')
-      'ForeignKeys'           = '10_Tables_ForeignKeys'
-      'Indexes'               = '11_Indexes'
+      'Tables'                = @('09_Tables_PrimaryKey', '11_Tables_ForeignKeys')
+      'ForeignKeys'           = '11_Tables_ForeignKeys'
+      'Indexes'               = '10_Indexes'
       'Defaults'              = '12_Defaults'
       'Rules'                 = '13_Rules'
       'Programmability'       = '14_Programmability'
@@ -4763,7 +4763,7 @@ try {
     Write-Host ("    {0,-35} {1,4} total" -f 'TOTAL', $scripts.Count) -ForegroundColor Cyan
 
     # FK and CLR notes
-    if ($includedFolders -contains '10_Tables_ForeignKeys') {
+    if ($includedFolders -contains '11_Tables_ForeignKeys') {
       Write-Host ''
       Write-Host '  Foreign key constraints would be disabled during data load and re-enabled after.' -ForegroundColor Gray
     }
