@@ -293,7 +293,7 @@ try {
     # Test 4a: Verify Tables filter collects only table scripts
     Write-TestInfo "Test 4a: Verifying Tables filter collects correct scripts..."
     $tableScripts = Get-ChildItem (Join-Path $exportSubDir.FullName "09_Tables_PrimaryKey") -Filter "*.sql" -Recurse
-    $fkScripts = Get-ChildItem (Join-Path $exportSubDir.FullName "10_Tables_ForeignKeys") -Filter "*.sql" -Recurse
+    $fkScripts = Get-ChildItem (Join-Path $exportSubDir.FullName "11_Tables_ForeignKeys") -Filter "*.sql" -Recurse
     $expectedTableScriptCount = $tableScripts.Count + $fkScripts.Count
 
     Write-TestInfo "  Expected script count for Tables filter: $expectedTableScriptCount (Tables: $($tableScripts.Count), FKs: $($fkScripts.Count))"

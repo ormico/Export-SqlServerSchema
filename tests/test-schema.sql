@@ -206,6 +206,13 @@ CREATE TABLE Warehouse.Inventory (
 ) ON [FG_ARCHIVE];
 GO
 
+-- Test case for #93: FK referencing a column made unique by a standalone index (not a constraint)
+CREATE TABLE dbo.ProductCategories (
+    CategoryId INT PRIMARY KEY IDENTITY(1,1),
+    CategoryCode NVARCHAR(20) NOT NULL
+);
+GO
+
 -- Add XML schema typed columns
 ALTER TABLE dbo.Customers ADD ProfileXml XML (CONTENT dbo.CustomerXmlSchema);
 GO
@@ -240,9 +247,21 @@ CREATE NONCLUSTERED INDEX IX_Orders_CustomerId
     ON Sales.Orders(CustomerId);
 GO
 
-CREATE NONCLUSTERED INDEX IX_Orders_OrderDate 
+CREATE NONCLUSTERED INDEX IX_Orders_OrderDate
     ON Sales.Orders(OrderDate DESC)
     ON [FG_CURRENT];
+GO
+
+-- #93: Standalone unique index (not a UNIQUE constraint) - FK below depends on this
+CREATE UNIQUE NONCLUSTERED INDEX UX_ProductCategories_Code
+    ON dbo.ProductCategories(CategoryCode);
+GO
+
+-- #93: FK referencing a column whose uniqueness comes from a standalone index
+ALTER TABLE dbo.Products
+    ADD CONSTRAINT FK_Products_CategoryCode
+    FOREIGN KEY (ProductCode)
+    REFERENCES dbo.ProductCategories(CategoryCode);
 GO
 
 -- Create a view

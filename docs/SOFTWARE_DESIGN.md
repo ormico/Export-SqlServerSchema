@@ -105,7 +105,7 @@ flowchart TB
         FS[Timestamped Folder]
         F00[00_FileGroups]
         F09[09_Tables_PrimaryKey]
-        F10[10_Tables_ForeignKeys]
+        F10[10_Indexes]
         F14[14_Programmability]
         F21[21_Data]
         MAN[_DEPLOYMENT_README.md]
@@ -155,8 +155,8 @@ Export Output/
 ├── 07_Types/                   # UDTs, table types, CLR types
 ├── 08_XmlSchemaCollections/    # XML validation schemas
 ├── 09_Tables_PrimaryKey/       # Tables with PKs, no FKs
-├── 10_Tables_ForeignKeys/      # FK constraints only
-├── 11_Indexes/                 # Non-clustered, filtered, XML indexes
+├── 10_Indexes/                 # Non-clustered, filtered, XML indexes
+├── 11_Tables_ForeignKeys/      # FK constraints only
 ├── 12_Defaults/                # Legacy bound defaults
 ├── 13_Rules/                   # Legacy bound rules
 ├── 14_Programmability/         # Functions, procs, views, triggers

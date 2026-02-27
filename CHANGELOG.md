@@ -5,6 +5,18 @@ All notable changes to Export-SqlServerSchema will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+**Unique indexes must load before foreign key constraints (#93)**
+- Foreign keys can reference columns made unique by a standalone `CREATE UNIQUE INDEX` (not just inline `UNIQUE` constraints)
+- These standalone unique indexes were exported to `11_Indexes`, which loaded after `10_Tables_ForeignKeys`, causing FK creation failures during import
+- Swapped folder numbering: indexes are now `10_Indexes` and foreign keys are `11_Tables_ForeignKeys`
+- Updated both Export and Import scripts, all folder-to-type mappings, deployment manifest, and processing order
+- Added test coverage: `tests/test-index-before-fk.ps1` (21 assertions)
+- Added integration test case: `dbo.ProductCategories` with standalone unique index referenced by FK
+
 ## [1.8.1] - 2026-02-26
 
 ### Added

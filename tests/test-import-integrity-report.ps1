@@ -74,8 +74,8 @@ function Invoke-GetObjectInfoFromPath {
     '07_Types'                 = 'UserDefinedType'
     '08_XmlSchemaCollections'  = 'XmlSchemaCollection'
     '09_Tables_PrimaryKey'     = 'Table'
-    '10_Tables_ForeignKeys'    = 'ForeignKey'
-    '11_Indexes'               = 'Index'
+    '10_Indexes'               = 'Index'
+    '11_Tables_ForeignKeys'    = 'ForeignKey'
     '12_Defaults'              = 'Default'
     '13_Rules'                 = 'Rule'
     '14_Programmability'       = 'Programmability'
@@ -207,8 +207,8 @@ $mockSourcePath = Join-Path $tempRoot 'export'
 $foldersToCreate = @(
   '03_Schemas'
   '09_Tables_PrimaryKey'
-  '10_Tables_ForeignKeys'
-  '11_Indexes'
+  '10_Indexes'
+  '11_Tables_ForeignKeys'
   '14_Programmability/02_Functions'
   '14_Programmability/03_StoredProcedures'
   '14_Programmability/05_Views'
@@ -226,8 +226,8 @@ $mockFiles = @{
   '09_Tables_PrimaryKey/dbo.Customers.sql'                 = 'CREATE TABLE [dbo].[Customers] (Id INT PRIMARY KEY)'
   '09_Tables_PrimaryKey/dbo.Orders.sql'                    = 'CREATE TABLE [dbo].[Orders] (Id INT PRIMARY KEY)'
   '09_Tables_PrimaryKey/sales.Products.sql'                = 'CREATE TABLE [sales].[Products] (Id INT PRIMARY KEY)'
-  '10_Tables_ForeignKeys/dbo.Orders.sql'                   = 'ALTER TABLE [dbo].[Orders] ADD CONSTRAINT FK_Orders FOREIGN KEY (CustomerId) REFERENCES [dbo].[Customers](Id)'
-  '11_Indexes/dbo.Customers.IX_Name.sql'                   = 'CREATE INDEX IX_Name ON [dbo].[Customers](Name)'
+  '10_Indexes/dbo.Customers.IX_Name.sql'                   = 'CREATE INDEX IX_Name ON [dbo].[Customers](Name)'
+  '11_Tables_ForeignKeys/dbo.Orders.sql'                   = 'ALTER TABLE [dbo].[Orders] ADD CONSTRAINT FK_Orders FOREIGN KEY (CustomerId) REFERENCES [dbo].[Customers](Id)'
   '14_Programmability/02_Functions/dbo.GetTotal.sql'        = 'CREATE FUNCTION [dbo].[GetTotal]() RETURNS INT AS BEGIN RETURN 0 END'
   '14_Programmability/03_StoredProcedures/dbo.usp_Test.sql' = 'CREATE PROCEDURE [dbo].[usp_Test] AS SELECT 1'
   '14_Programmability/05_Views/dbo.vw_Customers.sql'       = 'CREATE VIEW [dbo].[vw_Customers] AS SELECT * FROM [dbo].[Customers]'
@@ -273,7 +273,7 @@ try {
   Write-TestResult 'Table (sales schema): name is Products' ($info.name -eq 'Products') "got '$($info.name)'"
 
   # Test: ForeignKey folder maps correctly
-  $info = Invoke-GetObjectInfoFromPath -FilePath "$mockSourcePath/10_Tables_ForeignKeys/dbo.Orders.sql" -SourcePath $mockSourcePath
+  $info = Invoke-GetObjectInfoFromPath -FilePath "$mockSourcePath/11_Tables_ForeignKeys/dbo.Orders.sql" -SourcePath $mockSourcePath
   Write-TestResult 'FK: type is ForeignKey' ($info.type -eq 'ForeignKey') "got '$($info.type)'"
 
   # Test: Programmability subfolder (Functions)
@@ -283,7 +283,7 @@ try {
   Write-TestResult 'Function: name is GetTotal' ($info.name -eq 'GetTotal') "got '$($info.name)'"
 
   # Test: Index folder
-  $info = Invoke-GetObjectInfoFromPath -FilePath "$mockSourcePath/11_Indexes/dbo.Customers.IX_Name.sql" -SourcePath $mockSourcePath
+  $info = Invoke-GetObjectInfoFromPath -FilePath "$mockSourcePath/10_Indexes/dbo.Customers.IX_Name.sql" -SourcePath $mockSourcePath
   Write-TestResult 'Index: type is Index' ($info.type -eq 'Index') "got '$($info.type)'"
   Write-TestResult 'Index: schema is dbo' ($info.schema -eq 'dbo') "got '$($info.schema)'"
   Write-TestResult 'Index: name is Customers.IX_Name' ($info.name -eq 'Customers.IX_Name') "got '$($info.name)'"

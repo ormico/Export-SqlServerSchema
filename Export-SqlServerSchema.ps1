@@ -1589,7 +1589,7 @@ function Build-WorkItems-ForeignKeys {
   .DESCRIPTION
   Creates export work items for FK constraints as ALTER TABLE ADD CONSTRAINT statements.
   Exported separately from tables to avoid circular reference issues during import.
-  Output: 10_Tables_ForeignKeys folder.
+  Output: 11_Tables_ForeignKeys folder.
   #>
   param($Database, $OutputDir)
 
@@ -1614,7 +1614,7 @@ function Build-WorkItems-ForeignKeys {
 
   $workItems = @()
   $groupBy = Get-ObjectGroupingMode -ObjectType 'ForeignKeys'
-  $baseDir = Join-Path $OutputDir '10_Tables_ForeignKeys'
+  $baseDir = Join-Path $OutputDir '11_Tables_ForeignKeys'
 
   # For FKs, we script tables with FK-only options
   $scriptOpts = @{
@@ -1682,7 +1682,7 @@ function Build-WorkItems-Indexes {
   .DESCRIPTION
   Creates export work items for individual indexes (excludes primary key indexes).
   Each index gets its own work item with TableSchema, TableName, and IndexName identifiers.
-  Output: 11_Indexes folder.
+  Output: 10_Indexes folder.
   #>
   param($Database, $OutputDir)
 
@@ -1712,7 +1712,7 @@ function Build-WorkItems-Indexes {
 
   $workItems = @()
   $groupBy = Get-ObjectGroupingMode -ObjectType 'Indexes'
-  $baseDir = Join-Path $OutputDir '11_Indexes'
+  $baseDir = Join-Path $OutputDir '10_Indexes'
 
   # Script tables with index-only options
   $scriptOpts = @{
@@ -3253,8 +3253,8 @@ function Build-ParallelWorkQueue {
     { Build-WorkItems-UserDefinedTypes $Database $OutputDir }
     { Build-WorkItems-XmlSchemaCollections $Database $OutputDir }
     { Build-WorkItems-Tables $Database $OutputDir }
-    { Build-WorkItems-ForeignKeys $Database $OutputDir }
     { Build-WorkItems-Indexes $Database $OutputDir }
+    { Build-WorkItems-ForeignKeys $Database $OutputDir }
     { Build-WorkItems-Defaults $Database $OutputDir }
     { Build-WorkItems-Rules $Database $OutputDir }
     { Build-WorkItems-Assemblies $Database $OutputDir }
@@ -3973,8 +3973,8 @@ function Save-ExportMetadata {
     '07_Types'                 = 'UserDefinedType'
     '08_XmlSchemaCollections'  = 'XmlSchemaCollection'
     '09_Tables_PrimaryKey'     = 'Table'
-    '10_Tables_ForeignKeys'    = 'ForeignKey'
-    '11_Indexes'               = 'Index'
+    '10_Indexes'               = 'Index'
+    '11_Tables_ForeignKeys'    = 'ForeignKey'
     '12_Defaults'              = 'Default'
     '13_Rules'                 = 'Rule'
     '14_Programmability'       = 'Programmability'
@@ -5445,8 +5445,8 @@ function Initialize-OutputDirectory {
     '07_Types',
     '08_XmlSchemaCollections',
     '09_Tables_PrimaryKey',
-    '10_Tables_ForeignKeys',
-    '11_Indexes',
+    '10_Indexes',
+    '11_Tables_ForeignKeys',
     '12_Defaults',
     '13_Rules',
     '14_Programmability/01_Assemblies',
@@ -6517,7 +6517,7 @@ function Export-DatabaseObjects {
     $objectTypeOrder = @(
       'Schema', 'Sequence', 'PartitionFunction', 'PartitionScheme',
       'UserDefinedType', 'UserDefinedDataType', 'UserDefinedTableType', 'XmlSchemaCollection',
-      'Table', 'ForeignKey', 'Index', 'Default', 'Rule', 'SqlAssembly',
+      'Table', 'Index', 'ForeignKey', 'Default', 'Rule', 'SqlAssembly',
       'UserDefinedFunction', 'UserDefinedAggregate', 'StoredProcedure', 'ExtendedStoredProcedure',
       'DatabaseTrigger', 'TableTrigger', 'View', 'Synonym',
       'FullTextCatalog', 'FullTextStopList', 'ExternalDataSource', 'ExternalFileFormat',
@@ -6550,8 +6550,8 @@ function Export-DatabaseObjects {
         'UserDefinedTableType' { 'User-Defined Table Types' }
         'XmlSchemaCollection' { 'XML Schema Collections' }
         'Table' { 'Tables (PKs only)' }
-        'ForeignKey' { 'Foreign Keys' }
         'Index' { 'Indexes' }
+        'ForeignKey' { 'Foreign Keys' }
         'Default' { 'Defaults' }
         'Rule' { 'Rules' }
         'SqlAssembly' { 'Assemblies' }
@@ -6811,8 +6811,8 @@ function New-DeploymentManifest {
   [void]$sb.AppendLine("7. 07_Types - Create user-defined types")
   [void]$sb.AppendLine("8. 08_XmlSchemaCollections - Create XML schema collections")
   [void]$sb.AppendLine("9. 09_Tables_PrimaryKey - Create tables with primary keys (no foreign keys)")
-  [void]$sb.AppendLine("10. 10_Tables_ForeignKeys - Add foreign key constraints")
-  [void]$sb.AppendLine("11. 11_Indexes - Create indexes")
+  [void]$sb.AppendLine("10. 10_Indexes - Create indexes")
+  [void]$sb.AppendLine("11. 11_Tables_ForeignKeys - Add foreign key constraints")
   [void]$sb.AppendLine("12. 12_Defaults - Create default constraints")
   [void]$sb.AppendLine("13. 13_Rules - Create rules")
   [void]$sb.AppendLine("14. 14_Programmability - Create assemblies, functions, procedures, triggers, views (in subfolder order)")
