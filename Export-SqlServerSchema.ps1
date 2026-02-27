@@ -498,7 +498,7 @@ function Test-ExportConfigKeys {
   }
 
   if ($Config.connection -and $Config.connection -is [hashtable]) {
-    $knownConnection = @('serverFromEnv', 'usernameFromEnv', 'passwordFromEnv', 'trustServerCertificate', 'server')
+    $knownConnection = @('serverFromEnv', 'usernameFromEnv', 'passwordFromEnv', 'connectionStringFromEnv', 'trustServerCertificate', 'server')
     foreach ($key in $Config.connection.Keys) {
       if ($key -notin $knownConnection) {
         [void]$warnings.Add("Unknown config key: 'connection.$key'")

@@ -5,6 +5,25 @@ All notable changes to Export-SqlServerSchema will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+**Partition Scheme Corruption in removeToPrimary Mode (#80)**
+- The `removeToPrimary` filegroup strategy incorrectly rewrote partition scheme references (`ON [PS_Name]([Column])`) to `ON [PRIMARY]`, breaking partitioned tables entirely
+- Added negative lookahead `(?!\s*\()` to the filegroup replacement regex so partition scheme syntax (bracket followed by parenthesized column) is preserved
+- Non-partitioned tables on custom filegroups are still correctly remapped to PRIMARY
+
+**Prod Mode Missing fileGroupStrategy Support (#80)**
+- `productionMode` config block never set the `__RemapFileGroupsToPrimary__` flag when `fileGroupStrategy: removeToPrimary` was configured, causing the strategy to silently do nothing in Prod mode
+- Added fileGroupStrategy handling to the Prod mode block, matching the existing Dev mode pattern (including memory-optimized FileGroup preservation)
+
+**ValidateOnly false 'Unknown config key' warnings (#77)**
+- `connection.connectionStringFromEnv` no longer triggers an unknown-key warning in both Export and Import `-ValidateOnly` checks
+- `import.dependencyRetries`, `import.showSql`, and `import.useLatestExport` no longer trigger unknown-key warnings in Import `-ValidateOnly` checks
+- Root cause: the `$knownConnection` and `$knownImport` allowlists in `Test-ExportConfigKeys` / `Test-ImportConfigKeys` were incomplete when added in v1.8.0
+- New tests in `test-validate-only.ps1` (tests 25–30) verify each previously-missing key is recognized
+
 ## [1.8.0] - 2026-02-25
 
 ### Improved
@@ -382,7 +401,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 **Simplified FileGroup Configuration**
 - Replaced confusing `includeFileGroups` boolean with `fileGroupStrategy` setting
 - `fileGroupStrategy: autoRemap` (default) - imports FileGroups with auto-detected paths using `SERVERPROPERTY('InstanceDefaultDataPath')`
-- `fileGroupStrategy: removeToPrimary` - skips FileGroups (has known limitation with partitioned tables)
+- `fileGroupStrategy: removeToPrimary` - skips FileGroups, remaps references to PRIMARY (partition schemes preserved)
 - Both Dev and Prod modes now default to `autoRemap`
 - Updated config schema, example files, and documentation
 
@@ -394,14 +413,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Export: `targetSqlVersion` (default: Sql2022), `collectMetrics` (default: false), `export.includeObjectTypes`
   - Import: `import.createDatabase` (default: false), `import.force` (default: false), `import.continueOnError` (default: false), `import.showSql` (default: false), `import.includeObjectTypes`
 - **Minimal Config Support**: Empty config files now work correctly; all properties have sensible defaults
-
-### Known Issues
-
-**removeToPrimary FileGroup Strategy Limitation**
-- The `fileGroupStrategy: removeToPrimary` option does not work with databases containing partitioned tables
-- **Root Cause**: Partition schemes cannot reference PRIMARY directly; they require a valid partition scheme
-- **Workaround**: Use `fileGroupStrategy: autoRemap` (the default) which imports FileGroups with auto-detected paths
-- **Impact**: Dev mode still works correctly with `autoRemap`; only affects users who explicitly set `removeToPrimary`
 
 
 ## [1.6.0] - 2026-01-27
