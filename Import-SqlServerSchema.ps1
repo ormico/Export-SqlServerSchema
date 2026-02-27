@@ -581,7 +581,7 @@ function Test-ImportConfigKeys {
   }
 
   if ($Config.connection -and $Config.connection -is [hashtable]) {
-    $knownConnection = @('serverFromEnv', 'usernameFromEnv', 'passwordFromEnv', 'trustServerCertificate', 'server')
+    $knownConnection = @('serverFromEnv', 'usernameFromEnv', 'passwordFromEnv', 'connectionStringFromEnv', 'trustServerCertificate', 'server')
     foreach ($key in $Config.connection.Keys) {
       if ($key -notin $knownConnection) {
         [void]$warnings.Add("Unknown config key: 'connection.$key'")
@@ -593,6 +593,7 @@ function Test-ImportConfigKeys {
     $knownImport = @(
       'defaultMode', 'createDatabase', 'force', 'continueOnError', 'includeData',
       'includeObjectTypes', 'excludeObjectTypes', 'excludeSchemas',
+      'dependencyRetries', 'showSql', 'useLatestExport',
       'developerMode', 'productionMode', 'encryptionSecrets', 'clr',
       'fileGroupFileSizeDefaults'
     )
