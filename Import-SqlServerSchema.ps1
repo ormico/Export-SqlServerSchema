@@ -2492,7 +2492,8 @@ function Invoke-SqlScript {
       # 1. Tables/Indexes: Replace ) ON [FileGroup] with ) ON [PRIMARY]
       #    Pattern: closing paren followed by ON [anything-except-PRIMARY]
       #    Uses (?i) for case-insensitive PRIMARY match (SQL identifiers are case-insensitive)
-      $sql = $sql -replace '\)\s*ON\s*\[(?!(?i)PRIMARY\])[^\]]+\]', ') ON [PRIMARY]'
+      #    Negative lookahead (?!\s*\() prevents matching partition schemes: ON [PS_Name]([Column])
+      $sql = $sql -replace '\)\s*ON\s*\[(?!(?i)PRIMARY\])[^\]]+\](?!\s*\()', ') ON [PRIMARY]'
 
       # 1b. TEXTIMAGE_ON [FileGroup] -> TEXTIMAGE_ON [PRIMARY]
       #     For LOB data (text, ntext, image, varchar(max), etc.)
@@ -5278,9 +5279,66 @@ try {
       @{}
     }
 
-    if ($prodSettings.ContainsKey('convertLoginsToContained') -and $prodSettings.convertLoginsToContained -eq $true) {
+    # Use Get-SafeProperty for compatibility with both hashtables and PSCustomObjects from YAML
+    $convertLoginsToContained = Get-SafeProperty -Object $prodSettings -PropertyName 'convertLoginsToContained'
+    if ($convertLoginsToContained -eq $true) {
       $sqlCmdVars['__ConvertLoginsToContained__'] = $true
       Write-Output "[INFO] Login conversion: enabled - FOR LOGIN users will be converted to WITHOUT LOGIN (contained)"
+    }
+
+    # Check for fileGroupStrategy in Prod mode (matches Dev mode pattern)
+    $fileGroupStrategy = Get-SafeProperty -Object $prodSettings -PropertyName 'fileGroupStrategy'
+    if ($fileGroupStrategy -eq 'removeToPrimary') {
+      $sqlCmdVars['__RemapFileGroupsToPrimary__'] = $true
+      Write-Output "[INFO] FileGroup strategy: removeToPrimary - all FileGroup references will map to PRIMARY"
+
+      # Memory-optimized FileGroups cannot be remapped to PRIMARY - they must be created
+      $fileGroupScript = Join-Path $SourcePath '00_FileGroups' '001_FileGroups.sql'
+      if (Test-Path $fileGroupScript) {
+        $memoryOptimizedSql = Get-MemoryOptimizedFileGroupSql -FilePath $fileGroupScript
+        if ($memoryOptimizedSql.Count -gt 0) {
+          Write-Output "[INFO] Found $($memoryOptimizedSql.Count) memory-optimized FileGroup block(s) - these cannot be remapped to PRIMARY"
+          Write-Output "[INFO] Creating required memory-optimized FileGroups..."
+
+          $memOptDataPath = Get-DefaultDataPath -Connection $script:SharedConnection
+          if (-not $memOptDataPath) {
+            Write-Warning "[WARNING] Could not detect default data path - memory-optimized FileGroup may fail"
+            $memOptDataPath = 'C:\Data'
+          }
+
+          $memOptPathSep = if ($memOptDataPath -match '^/') { '/' } else { '\' }
+          $sanitizedDbName = $Database -replace '[^a-zA-Z0-9_-]', '_'
+
+          foreach ($sqlBlock in $memoryOptimizedSql) {
+            $escapedDbName = Get-EscapedSqlIdentifier -Name $Database
+            $sql = $sqlBlock -replace '\bALTER\s+DATABASE\s+CURRENT\b', "ALTER DATABASE [$escapedDbName]"
+
+            if ($sql -match '\$\(([A-Za-z0-9_]+)_PATH_FILE\)') {
+              $fgName = $matches[1]
+              $containerPath = "${memOptDataPath}${memOptPathSep}${sanitizedDbName}_${fgName}"
+              $varPattern = [regex]::Escape("`$(" + $fgName + "_PATH_FILE)")
+              $sql = $sql -replace $varPattern, $containerPath
+
+              $sql = $sql -replace ',?\s*SIZE\s*=\s*\$\([A-Za-z0-9_]+_SIZE\)', ''
+              $sql = $sql -replace ',?\s*FILEGROWTH\s*=\s*\$\([A-Za-z0-9_]+_GROWTH\)', ''
+            }
+
+            try {
+              $script:SharedConnection.ConnectionContext.ExecuteNonQuery($sql) | Out-Null
+              Write-Verbose "  Executed memory-optimized FileGroup SQL block"
+            }
+            catch {
+              $fgError = "Failed to create memory-optimized FileGroup: $($_.Exception.Message)"
+              if ($_.Exception.InnerException) {
+                $fgError += "`n  Inner: $($_.Exception.InnerException.Message)"
+              }
+              Write-Host "  [ERROR] $fgError" -ForegroundColor Red
+              Add-FailedScript -ScriptName 'MemoryOptimized_FileGroup' -ErrorMessage $fgError -Folder '00_FileGroups'
+            }
+          }
+          Write-Output "[SUCCESS] Memory-optimized FileGroup(s) created"
+        }
+      }
     }
   }
 

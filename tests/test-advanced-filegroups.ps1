@@ -9,7 +9,7 @@
     1. TEXTIMAGE_ON/FILESTREAM_ON clause remapping (Bug #4)
     2. Memory-optimized FileGroup export syntax (Bug #5)
     3. Memory-optimized FileGroups in removeToPrimary mode (Bug #6)
-    4. Partition schemes with FileGroup handling
+    4. Partition scheme preservation in removeToPrimary mode (Bug #80)
 
 .NOTES
     Requires: SQL Server container running (docker-compose up -d)
@@ -236,6 +236,36 @@ GO
 
 Invoke-SqlCommand $createTableSql $SourceDatabase
 
+# Create partition function, scheme, and partitioned table (tests Bug #80)
+$createPartitionSql = @"
+-- Partition function for order dates
+CREATE PARTITION FUNCTION [PF_OrderYear](datetime)
+AS RANGE RIGHT FOR VALUES ('2025-01-01', '2026-01-01');
+GO
+
+-- Partition scheme using custom FileGroups
+CREATE PARTITION SCHEME [PS_OrderYear]
+AS PARTITION [PF_OrderYear]
+TO ([FG_ARCHIVE], [FG_LOB], [PRIMARY]);
+GO
+
+-- Partitioned table referencing the partition scheme
+CREATE TABLE dbo.OrderHistory (
+    OrderHistoryId INT IDENTITY(1,1),
+    OrderDate DATETIME NOT NULL,
+    CustomerId INT NOT NULL,
+    Amount DECIMAL(12,2),
+    CONSTRAINT PK_OrderHistory PRIMARY KEY CLUSTERED (OrderHistoryId, OrderDate)
+) ON [PS_OrderYear](OrderDate);
+GO
+
+INSERT INTO dbo.OrderHistory (OrderDate, CustomerId, Amount)
+VALUES ('2024-06-15', 1, 100.00), ('2025-03-20', 2, 250.00), ('2026-09-01', 3, 75.50);
+GO
+"@
+
+Invoke-SqlCommand $createPartitionSql $SourceDatabase
+
 # Add memory-optimized FileGroup if supported
 if ($supportsMemoryOptimized) {
     Write-Host "  Adding memory-optimized FileGroup..." -ForegroundColor Gray
@@ -447,6 +477,124 @@ import:
 
     Drop-TestDatabase -DbName $targetDb3
 }
+
+# ═══════════════════════════════════════════════════════════════
+# TEST 4: PARTITION SCHEME WITH removeToPrimary (Bug #80)
+# ═══════════════════════════════════════════════════════════════
+
+Write-Host "`n[INFO] Test 4: Partition Scheme with removeToPrimary (Bug #80)" -ForegroundColor Cyan
+
+# Test 4a: Verify export preserves partition scheme reference on table
+$tableScript4a = Get-ChildItem -Path (Join-Path $exportedDir1.FullName "09_Tables_PrimaryKey") -Filter "dbo.OrderHistory.sql" -ErrorAction SilentlyContinue | Select-Object -First 1
+if ($tableScript4a) {
+    $tableContent4a = Get-Content $tableScript4a.FullName -Raw
+
+    $hasPartitionSchemeRef = $tableContent4a -match '\[PS_OrderYear\]\s*\(\s*\[?OrderDate\]?\s*\)'
+    Write-TestResult -TestName "Export preserves partition scheme ON [PS_OrderYear](OrderDate)" -Passed $hasPartitionSchemeRef `
+        -Message "Partitioned table should reference partition scheme in ON clause"
+} else {
+    Write-TestResult -TestName "Export preserves partition scheme ON [PS_OrderYear](OrderDate)" -Passed $false `
+        -Message "Could not find dbo.OrderHistory.sql in 09_Tables_PrimaryKey"
+}
+
+# Test 4b: Verify partition scheme script exported correctly
+$partSchemeScript = Get-ChildItem -Path (Join-Path $exportedDir1.FullName "06_PartitionSchemes") -Filter "*.sql" -ErrorAction SilentlyContinue | Select-Object -First 1
+if ($partSchemeScript) {
+    $partSchemeContent = Get-Content $partSchemeScript.FullName -Raw
+    $hasToClause = $partSchemeContent -match 'TO\s*\('
+    Write-TestResult -TestName "Export contains partition scheme with TO clause" -Passed $hasToClause `
+        -Message "Partition scheme should have TO ([filegroup], ...) clause"
+} else {
+    Write-TestResult -TestName "Export contains partition scheme with TO clause" -Passed $false `
+        -Message "Could not find partition scheme script in 06_PartitionSchemes"
+}
+
+# Test 4c: Import with removeToPrimary - partitioned table should survive
+Write-Host "[INFO] Test 4c: Import with removeToPrimary preserves partitioned table..." -ForegroundColor Gray
+$targetDb4c = "TestDb_PartitionRemove"
+Drop-TestDatabase -DbName $targetDb4c
+
+$configContent4c = @"
+import:
+  importMode: Dev
+  createDatabase: true
+  developerMode:
+    fileGroupStrategy: removeToPrimary
+"@
+$configPath4c = Join-Path $ExportPath "test-partition-remove.yml"
+$configContent4c | Set-Content -Path $configPath4c
+
+$importOutput4c = & $importScript -Server $Server -Database $targetDb4c `
+    -SourcePath $exportedDir1.FullName -ConfigFile $configPath4c `
+    -Credential $credential 2>&1 | Out-String
+
+# Verify import succeeded
+$success4c = $importOutput4c -match "Import completed successfully"
+Write-TestResult -TestName "Import succeeds with removeToPrimary + partitioned table" -Passed $success4c `
+    -Message "Import should succeed. Output: $($importOutput4c | Select-Object -Last 5)"
+
+if ($success4c) {
+    # Verify partitioned table exists
+    $partTableExists = Invoke-SqlCommand "SELECT COUNT(*) FROM sys.tables WHERE name = 'OrderHistory' AND schema_id = SCHEMA_ID('dbo')" $targetDb4c
+    Write-TestResult -TestName "Partitioned table imported" -Passed ((Get-SqlScalarValue $partTableExists) -eq 1) `
+        -Message "OrderHistory table should exist in target database"
+
+    # Verify partition scheme exists (should be created with ALL TO ([PRIMARY]))
+    $partSchemeExists = Invoke-SqlCommand "SELECT COUNT(*) FROM sys.partition_schemes WHERE name = 'PS_OrderYear'" $targetDb4c
+    Write-TestResult -TestName "Partition scheme exists after removeToPrimary" -Passed ((Get-SqlScalarValue $partSchemeExists) -eq 1) `
+        -Message "PS_OrderYear partition scheme should exist (mapped to PRIMARY)"
+
+    # Verify partition function exists
+    $partFuncExists = Invoke-SqlCommand "SELECT COUNT(*) FROM sys.partition_functions WHERE name = 'PF_OrderYear'" $targetDb4c
+    Write-TestResult -TestName "Partition function exists after removeToPrimary" -Passed ((Get-SqlScalarValue $partFuncExists) -eq 1) `
+        -Message "PF_OrderYear partition function should exist"
+
+    # Verify the table is actually partitioned (uses partition scheme, not just ON [PRIMARY])
+    $isPartitioned = Invoke-SqlCommand @"
+SELECT COUNT(*) FROM sys.tables t
+JOIN sys.indexes i ON t.object_id = i.object_id AND i.index_id <= 1
+JOIN sys.partition_schemes ps ON i.data_space_id = ps.data_space_id
+WHERE t.name = 'OrderHistory'
+"@ $targetDb4c
+    Write-TestResult -TestName "Table is partitioned (not placed on PRIMARY)" -Passed ((Get-SqlScalarValue $isPartitioned) -eq 1) `
+        -Message "OrderHistory should reference partition scheme, not [PRIMARY] filegroup"
+}
+
+Drop-TestDatabase -DbName $targetDb4c
+
+# Test 4d: Import with autoRemap - partitioned table should also work
+Write-Host "[INFO] Test 4d: Import with autoRemap preserves partitioned table..." -ForegroundColor Gray
+$targetDb4d = "TestDb_PartitionAutoRemap"
+Drop-TestDatabase -DbName $targetDb4d
+
+$configContent4d = @"
+import:
+  importMode: Dev
+  createDatabase: true
+  developerMode:
+    fileGroupStrategy: autoRemap
+"@
+$configPath4d = Join-Path $ExportPath "test-partition-autoremap.yml"
+$configContent4d | Set-Content -Path $configPath4d
+
+& $importScript -Server $Server -Database $targetDb4d `
+    -SourcePath $exportedDir1.FullName -ConfigFile $configPath4d `
+    -Credential $credential -Verbose:$false 2>&1 | Out-Null
+
+$partTableExists4d = Invoke-SqlCommand "SELECT COUNT(*) FROM sys.tables WHERE name = 'OrderHistory' AND schema_id = SCHEMA_ID('dbo')" $targetDb4d
+Write-TestResult -TestName "Partitioned table imported with autoRemap" -Passed ((Get-SqlScalarValue $partTableExists4d) -eq 1) `
+    -Message "OrderHistory table should exist with autoRemap strategy"
+
+$isPartitioned4d = Invoke-SqlCommand @"
+SELECT COUNT(*) FROM sys.tables t
+JOIN sys.indexes i ON t.object_id = i.object_id AND i.index_id <= 1
+JOIN sys.partition_schemes ps ON i.data_space_id = ps.data_space_id
+WHERE t.name = 'OrderHistory'
+"@ $targetDb4d
+Write-TestResult -TestName "Table is partitioned with autoRemap" -Passed ((Get-SqlScalarValue $isPartitioned4d) -eq 1) `
+    -Message "OrderHistory should reference partition scheme with autoRemap"
+
+Drop-TestDatabase -DbName $targetDb4d
 
 # ═══════════════════════════════════════════════════════════════
 # CLEANUP
