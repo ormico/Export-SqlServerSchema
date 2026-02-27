@@ -137,6 +137,13 @@ jobs:
           # Final check
           docker compose exec -T sqlserver /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P Test@1234 -C -Q "SELECT 1"
 
+      - name: Run common function tests
+        shell: pwsh
+        working-directory: ./tests
+        run: |
+          Write-Host "Running common function tests..."
+          ./test-common-functions.ps1
+
       - name: Run integration tests
         shell: pwsh
         working-directory: ./tests
@@ -216,6 +223,7 @@ jobs:
           cp docs/CONFIG_REFERENCE.md release/CONFIG_REFERENCE.md
           cp export-import-config.example.yml release/
           cp export-import-config.schema.json release/
+          cp Common-SqlServerSchema.ps1 release/
           cp Export-SqlServerSchema.ps1 release/
           cp Import-SqlServerSchema.ps1 release/
           cp LICENSE.md release/

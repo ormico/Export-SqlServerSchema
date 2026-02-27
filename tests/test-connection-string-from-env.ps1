@@ -126,15 +126,16 @@ END
 Write-Host "[INFO] Unit Tests: ConvertFrom-AdoConnectionString parser" -ForegroundColor Cyan
 Write-Host "---------------------------------------------------" -ForegroundColor Cyan
 
-# Load ConvertFrom-AdoConnectionString directly from the production script using brace-counting
+# Load ConvertFrom-AdoConnectionString directly from the production Common helper using brace-counting
 # extraction (same approach used by run-unit-tests.ps1). This ensures tests stay in sync with
 # production code and catch regressions introduced there rather than exercising a duplicate.
-$exportScriptContent = Get-Content $exportScript -Raw
+$commonScript = Join-Path $projectRoot "Common-SqlServerSchema.ps1"
+$exportScriptContent = Get-Content $commonScript -Raw
 function Get-FunctionBlock {
     param([string]$Content, [string]$FunctionName)
     $startPattern = "function $FunctionName "
     $startIndex = $Content.IndexOf($startPattern)
-    if ($startIndex -lt 0) { throw "Function '$FunctionName' not found in Export script" }
+    if ($startIndex -lt 0) { throw "Function '$FunctionName' not found in Common helper script" }
     $depth = 0; $inFunction = $false; $end = $startIndex
     for ($i = $startIndex; $i -lt $Content.Length; $i++) {
         if ($Content[$i] -eq '{') { $depth++; $inFunction = $true }
