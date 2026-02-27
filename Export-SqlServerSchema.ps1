@@ -916,7 +916,8 @@ $script:ParallelWorkerScriptBlock = {
       $scripter.Options.ToFileOnly = $true
       $scripter.Options.FileName = $workItem.OutputPath
       $scripter.Options.AppendToFile = $workItem.AppendToFile
-      $scripter.Options.AnsiFile = $true
+      $scripter.Options.AnsiFile = $false
+      $scripter.Options.Encoding = [System.Text.UTF8Encoding]::new($true)
       $scripter.Options.IncludeHeaders = $false  # Match sequential export (no date-stamped headers)
       $scripter.Options.NoCollation = $true       # Match sequential export (omit explicit collation)
       $scripter.Options.ScriptBatchTerminator = $true
@@ -941,7 +942,7 @@ $script:ParallelWorkerScriptBlock = {
         }
         else { "Unknown" }
         $header = "-- Row-Level Security Policy: $policyName`r`n-- NOTE: Ensure predicate functions are created before applying this policy`r`n`r`n"
-        [System.IO.File]::WriteAllText($workItem.OutputPath, $header, (New-Object System.Text.UTF8Encoding $false))
+        [System.IO.File]::WriteAllText($workItem.OutputPath, $header, [System.Text.UTF8Encoding]::new($true))
         $scripter.Options.AppendToFile = $true
       }
 
@@ -950,7 +951,7 @@ $script:ParallelWorkerScriptBlock = {
 
       # Add trailing newline for SecurityPolicy to match sequential format
       if ($workItem.SpecialHandler -eq 'SecurityPolicy') {
-        [System.IO.File]::AppendAllText($workItem.OutputPath, "`r`n", (New-Object System.Text.UTF8Encoding $false))
+        [System.IO.File]::AppendAllText($workItem.OutputPath, "`r`n", [System.Text.UTF8Encoding]::new($true))
       }
 
       $result.Success = $true
@@ -3447,7 +3448,7 @@ function Export-NonParallelizableObjects {
           New-Item -ItemType Directory -Path $fgDir -Force | Out-Null
         }
 
-        $fgScript.ToString() | Out-File -FilePath $fgFilePath -Encoding UTF8
+        $fgScript.ToString() | Out-File -FilePath $fgFilePath -Encoding utf8BOM
         $results.FileGroups = $fileGroups.Count
         if (-not $Quiet) {
           Write-Host "  [SUCCESS] Exported $($fileGroups.Count) filegroup(s)" -ForegroundColor Green
@@ -3487,7 +3488,7 @@ function Export-NonParallelizableObjects {
           New-Item -ItemType Directory -Path $configDir -Force | Out-Null
         }
 
-        $configScript.ToString() | Out-File -FilePath $configFilePath -Encoding UTF8
+        $configScript.ToString() | Out-File -FilePath $configFilePath -Encoding utf8BOM
         $results.DatabaseScopedConfigurations = $dbConfigs.Count
         if (-not $Quiet) {
           Write-Host "  [SUCCESS] Exported $($dbConfigs.Count) database scoped configuration(s)" -ForegroundColor Green
@@ -3535,7 +3536,7 @@ function Export-NonParallelizableObjects {
           New-Item -ItemType Directory -Path $credDir -Force | Out-Null
         }
 
-        $credScript.ToString() | Out-File -FilePath $credFilePath -Encoding UTF8
+        $credScript.ToString() | Out-File -FilePath $credFilePath -Encoding utf8BOM
         $results.DatabaseScopedCredentials = $dbScopedCreds.Count
         if (-not $Quiet) {
           Write-Host "  [SUCCESS] Documented $($dbScopedCreds.Count) database scoped credential(s) (structure only)" -ForegroundColor Green
@@ -5662,7 +5663,7 @@ function Apply-FilestreamStripping {
 
     # Write back if modified
     if ($modified -and $content -ne $originalContent) {
-      $content | Set-Content -Path $file.FullName -Encoding UTF8 -NoNewline
+      $content | Set-Content -Path $file.FullName -Encoding utf8BOM -NoNewline
       $modifiedCount++
       Write-Verbose "  [STRIP] Modified: $($file.Name)"
     }
@@ -5888,7 +5889,8 @@ function New-ScriptingOptions {
   # Default options for schema export
   $defaults = @{
     AllowSystemObjects       = $false
-    AnsiFile                 = $true
+    AnsiFile                 = $false
+    Encoding                 = [System.Text.UTF8Encoding]::new($true)
     AnsiPadding              = $true
     AppendToFile             = $false
     ContinueScriptingOnError = $true
@@ -6369,7 +6371,8 @@ function Process-ExportWorkItem {
     $Scripter.Options.ToFileOnly = $true
     $Scripter.Options.FileName = $WorkItem.OutputPath
     $Scripter.Options.AppendToFile = $WorkItem.AppendToFile
-    $Scripter.Options.AnsiFile = $true
+    $Scripter.Options.AnsiFile = $false
+    $Scripter.Options.Encoding = [System.Text.UTF8Encoding]::new($true)
     $Scripter.Options.IncludeHeaders = $false    # No date-stamped headers for clean diffs
     $Scripter.Options.NoCollation = $true        # Omit explicit collation for portability
     $Scripter.Options.ScriptBatchTerminator = $true
@@ -6393,7 +6396,7 @@ function Process-ExportWorkItem {
       }
       else { "Unknown" }
       $header = "-- Row-Level Security Policy: $policyName`r`n-- NOTE: Ensure predicate functions are created before applying this policy`r`n`r`n"
-      [System.IO.File]::WriteAllText($WorkItem.OutputPath, $header, (New-Object System.Text.UTF8Encoding $false))
+      [System.IO.File]::WriteAllText($WorkItem.OutputPath, $header, [System.Text.UTF8Encoding]::new($true))
       $Scripter.Options.AppendToFile = $true
     }
 
@@ -6402,7 +6405,7 @@ function Process-ExportWorkItem {
 
     # Add trailing newline for SecurityPolicy to match sequential format
     if ($WorkItem.SpecialHandler -eq 'SecurityPolicy') {
-      [System.IO.File]::AppendAllText($WorkItem.OutputPath, "`r`n", (New-Object System.Text.UTF8Encoding $false))
+      [System.IO.File]::AppendAllText($WorkItem.OutputPath, "`r`n", [System.Text.UTF8Encoding]::new($true))
     }
 
     $result.Success = $true
@@ -6868,7 +6871,7 @@ function New-DeploymentManifest {
   $manifestContent = $sb.ToString()
 
   $manifestPath = Join-Path $OutputDir '_DEPLOYMENT_README.md'
-  $manifestContent | Out-File -FilePath $manifestPath -Encoding UTF8
+  $manifestContent | Out-File -FilePath $manifestPath -Encoding utf8BOM
   Write-Output "[SUCCESS] Deployment manifest created: $(Split-Path -Leaf $manifestPath)"
 }
 

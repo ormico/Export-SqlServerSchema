@@ -12,7 +12,8 @@ $worktreeRoot = Split-Path $PSScriptRoot -Parent
 $scriptContent = Get-Content (Join-Path $worktreeRoot 'Export-SqlServerSchema.ps1') -Raw
 
 # Write a temp file with just the two functions we want to test
-$tempFile = Join-Path $env:TEMP "test-connstr-functions-$([System.Guid]::NewGuid().ToString('N')).ps1"
+$baseTempDir = if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { [System.IO.Path]::GetTempPath() }
+$tempFile = Join-Path $baseTempDir "test-connstr-functions-$([System.Guid]::NewGuid().ToString('N')).ps1"
 try {
     # Extract function blocks using brace counting
     function Get-FunctionBlock {

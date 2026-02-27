@@ -82,6 +82,34 @@ jobs:
           docker compose ps
           docker compose logs sqlserver
 
+      - name: Run UTF-8 BOM encoding tests
+        shell: pwsh
+        working-directory: ./tests
+        run: |
+          Write-Host "Running UTF-8 BOM encoding tests..."
+          ./test-utf8-bom-encoding.ps1
+
+      - name: Run unit tests
+        shell: pwsh
+        working-directory: ./tests
+        run: |
+          Write-Host "Running unit tests..."
+          ./run-unit-tests.ps1
+
+      - name: Run validate-only tests
+        shell: pwsh
+        working-directory: ./tests
+        run: |
+          Write-Host "Running validate-only tests..."
+          ./test-validate-only.ps1
+
+      - name: Run config auto-discovery tests
+        shell: pwsh
+        working-directory: ./tests
+        run: |
+          Write-Host "Running config auto-discovery tests..."
+          ./test-config-auto-discovery.ps1
+
       - name: Run integration tests
         shell: pwsh
         working-directory: ./tests
