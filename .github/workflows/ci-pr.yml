@@ -89,6 +89,13 @@ jobs:
           Write-Host "Running UTF-8 BOM encoding tests..."
           ./test-utf8-bom-encoding.ps1
 
+      - name: Run common function tests
+        shell: pwsh
+        working-directory: ./tests
+        run: |
+          Write-Host "Running common function tests..."
+          ./test-common-functions.ps1
+
       - name: Run unit tests
         shell: pwsh
         working-directory: ./tests
