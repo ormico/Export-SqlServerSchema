@@ -39,6 +39,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `import.dependencyRetries`, `import.showSql`, and `import.useLatestExport` no longer trigger unknown-key warnings in Import `-ValidateOnly` checks
 - Root cause: the `$knownConnection` and `$knownImport` allowlists in `Test-ExportConfigKeys` / `Test-ImportConfigKeys` were incomplete when added in v1.8.0
 - New tests in `test-validate-only.ps1` (tests 25–30) verify each previously-missing key is recognized
+
 ## [1.8.0] - 2026-02-25
 
 ### Improved
