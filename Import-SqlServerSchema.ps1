@@ -282,6 +282,257 @@ $script:ScriptCollectStopwatch = $null
 $script:ScriptStopwatch = $null
 $script:FKStopwatch = $null
 
+# Integrity report tracking
+$script:ImportedObjects = [System.Collections.ArrayList]::new()
+$script:SkippedObjects = [System.Collections.ArrayList]::new()
+$script:ConfigSources = [ordered]@{}
+$script:ImportStartTime = $null
+$script:ReportSourcePath = $null  # Set during main execution for use by Invoke-SqlScript
+
+#region Integrity Report Functions
+
+function Get-ObjectInfoFromPath {
+  <#
+    .SYNOPSIS
+        Parses object type, schema, and name from a SQL script file path.
+    .PARAMETER FilePath
+        Full path to the SQL script file.
+    .PARAMETER SourcePath
+        Root source path of the export directory.
+    .OUTPUTS
+        Ordered hashtable with type, schema, name, and filePath keys.
+  #>
+  param(
+    [Parameter(Mandatory)]
+    [string]$FilePath,
+
+    [Parameter(Mandatory)]
+    [string]$SourcePath
+  )
+
+  $folderTypeMap = @{
+    '00_FileGroups'            = 'FileGroup'
+    '01_Security'              = 'Security'
+    '02_DatabaseConfiguration' = 'DatabaseConfiguration'
+    '03_Schemas'               = 'Schema'
+    '04_Sequences'             = 'Sequence'
+    '05_PartitionFunctions'    = 'PartitionFunction'
+    '06_PartitionSchemes'      = 'PartitionScheme'
+    '07_Types'                 = 'UserDefinedType'
+    '08_XmlSchemaCollections'  = 'XmlSchemaCollection'
+    '09_Tables_PrimaryKey'     = 'Table'
+    '10_Tables_ForeignKeys'    = 'ForeignKey'
+    '11_Indexes'               = 'Index'
+    '12_Defaults'              = 'Default'
+    '13_Rules'                 = 'Rule'
+    '14_Programmability'       = 'Programmability'
+    '15_Synonyms'              = 'Synonym'
+    '16_FullTextSearch'        = 'FullTextCatalog'
+    '17_ExternalData'          = 'ExternalData'
+    '18_SearchPropertyLists'   = 'SearchPropertyList'
+    '19_PlanGuides'            = 'PlanGuide'
+    '20_SecurityPolicies'      = 'SecurityPolicy'
+    '21_Data'                  = 'Data'
+  }
+
+  $relativePath = $FilePath.Substring($SourcePath.Length).TrimStart('\', '/')
+  $pathParts = $relativePath -split '[\\/]'
+
+  # Determine object type from the first folder segment
+  $folderName = $pathParts[0]
+  $objectType = if ($folderTypeMap.ContainsKey($folderName)) { $folderTypeMap[$folderName] } else { $folderName -replace '^\d{2}_', '' }
+
+  # Parse schema.name from filename (e.g., "dbo.Customers.sql" -> schema=dbo, name=Customers)
+  $fileName = [System.IO.Path]::GetFileName($FilePath)
+  $baseName = [System.IO.Path]::GetFileNameWithoutExtension($fileName)
+  $schema = $null
+  $name = $baseName
+
+  if ($baseName -match '^([^.]+)\.(.+)$') {
+    $schema = $matches[1]
+    $name = $matches[2]
+  }
+
+  return [ordered]@{
+    type     = $objectType
+    schema   = $schema
+    name     = $name
+    filePath = $relativePath
+  }
+}
+
+function Add-ImportedObject {
+  <#
+    .SYNOPSIS
+        Records a successfully imported object for the integrity report.
+    .PARAMETER FilePath
+        Full path to the SQL script file.
+    .PARAMETER SourcePath
+        Root source path of the export directory.
+  #>
+  param(
+    [Parameter(Mandatory)]
+    [string]$FilePath,
+
+    [Parameter(Mandatory)]
+    [string]$SourcePath
+  )
+
+  $info = Get-ObjectInfoFromPath -FilePath $FilePath -SourcePath $SourcePath
+  [void]$script:ImportedObjects.Add($info)
+}
+
+function Add-SkippedObject {
+  <#
+    .SYNOPSIS
+        Records a skipped object with reason code for the integrity report.
+    .PARAMETER FilePath
+        Full path to the SQL script file.
+    .PARAMETER SourcePath
+        Root source path of the export directory.
+    .PARAMETER Reason
+        Reason code for the skip (e.g., DevMode_SecurityPolicy, EmptyScript).
+  #>
+  param(
+    [Parameter(Mandatory)]
+    [string]$FilePath,
+
+    [Parameter(Mandatory)]
+    [string]$SourcePath,
+
+    [Parameter(Mandatory)]
+    [string]$Reason
+  )
+
+  $info = Get-ObjectInfoFromPath -FilePath $FilePath -SourcePath $SourcePath
+  $info.reason = $Reason
+  [void]$script:SkippedObjects.Add($info)
+}
+
+function Export-IntegrityReport {
+  <#
+    .SYNOPSIS
+        Builds and writes the post-import integrity report JSON file.
+    .PARAMETER SourcePath
+        Root source path of the export directory.
+    .PARAMETER Server
+        Target SQL Server instance name.
+    .PARAMETER Database
+        Target database name.
+  #>
+  param(
+    [Parameter(Mandatory)]
+    [string]$SourcePath,
+
+    [Parameter(Mandatory)]
+    [string]$Server,
+
+    [Parameter(Mandatory)]
+    [string]$Database
+  )
+
+  # Calculate duration
+  $duration = $null
+  if ($script:ImportStartTime) {
+    $elapsed = (Get-Date) - $script:ImportStartTime
+    $duration = $elapsed.ToString('hh\:mm\:ss')
+  }
+
+  # Read export metadata to get exported object count and list
+  $metadata = Read-ExportMetadata -SourcePath $SourcePath
+  $exportedObjects = @()
+  $exportedObjectCount = 0
+  $metadataSource = $null
+
+  if ($metadata) {
+    $metadataSource = '_export_metadata.json'
+    if ($metadata.ContainsKey('objectCount')) {
+      $exportedObjectCount = $metadata.objectCount
+    }
+    if ($metadata.ContainsKey('objects') -and $metadata.objects) {
+      $exportedObjects = @($metadata.objects)
+      if ($exportedObjectCount -eq 0) {
+        $exportedObjectCount = $exportedObjects.Count
+      }
+    }
+  }
+
+  # Fallback: count .sql files in SourcePath if no metadata
+  if ($exportedObjectCount -eq 0) {
+    $sqlFiles = Get-ChildItem -Path $SourcePath -Filter '*.sql' -Recurse -ErrorAction SilentlyContinue
+    $exportedObjectCount = $sqlFiles.Count
+  }
+
+  # Build failed objects from $script:FailedScripts
+  $failedObjects = @()
+  foreach ($failure in $script:FailedScripts) {
+    $failedInfo = [ordered]@{
+      name         = $failure.ScriptName
+      filePath     = $failure.FilePath
+      folder       = $failure.Folder
+      reason       = 'SqlError'
+      errorMessage = $failure.ErrorMessage
+    }
+
+    # Try to extract type/schema/name if we have a file path
+    if ($failure.FilePath -and $failure.FilePath.StartsWith($SourcePath)) {
+      $parsedInfo = Get-ObjectInfoFromPath -FilePath $failure.FilePath -SourcePath $SourcePath
+      $failedInfo.type = $parsedInfo.type
+      $failedInfo.schema = $parsedInfo.schema
+      $failedInfo.name = $parsedInfo.name
+      $failedInfo.filePath = $parsedInfo.filePath
+    }
+
+    $failedObjects += $failedInfo
+  }
+
+  # Build skippedReasons aggregation
+  $skippedReasons = [ordered]@{}
+  foreach ($skip in $script:SkippedObjects) {
+    $reason = $skip.reason
+    if ($skippedReasons.Contains($reason)) {
+      $skippedReasons[$reason]++
+    }
+    else {
+      $skippedReasons[$reason] = 1
+    }
+  }
+
+  # Build the report
+  $report = [ordered]@{
+    exportedObjectCount    = $exportedObjectCount
+    importedObjectCount    = $script:ImportedObjects.Count
+    skippedObjectCount     = $script:SkippedObjects.Count
+    failedObjectCount      = $failedObjects.Count
+    skippedReasons         = $skippedReasons
+    duration               = $duration
+    timestamp              = (Get-Date).ToString('o')
+    sourcePath             = $SourcePath
+    exportMetadataSource   = $metadataSource
+    targetServer           = $Server
+    targetDatabase         = $Database
+    effectiveConfiguration = $script:ConfigSources
+    exportedObjects        = $exportedObjects
+    importedObjects        = @($script:ImportedObjects)
+    skippedObjects         = @($script:SkippedObjects)
+    failedObjects          = $failedObjects
+  }
+
+  # Write report file
+  $timestamp = Get-Date -Format 'yyyyMMdd_HHmmss'
+  $reportPath = Join-Path $SourcePath "import-report-${timestamp}.json"
+
+  try {
+    $report | ConvertTo-Json -Depth 10 | Set-Content -Path $reportPath -Encoding UTF8
+    Write-Output "[INFO] Integrity report saved to: $reportPath"
+  }
+  catch {
+    Write-Warning "[WARNING] Failed to write integrity report: $_"
+  }
+}
+
+#endregion
+
 #region Credential Resolution from Environment Variables
 
 function ConvertFrom-AdoConnectionString {
@@ -2026,7 +2277,10 @@ function Invoke-SqlScript {
   try {
     if ([string]::IsNullOrWhiteSpace($sql)) {
       Write-Output "  [INFO] Skipped (empty): $scriptName"
-      return $true
+      if ($FilePath -and $script:ReportSourcePath) {
+        Add-SkippedObject -FilePath $FilePath -SourcePath $script:ReportSourcePath -Reason 'EmptyScript'
+      }
+      return $false
     }
 
     # Replace SQLCMD variables in script content
@@ -2192,7 +2446,10 @@ function Invoke-SqlScript {
         else {
           # All batches were FILESTREAM - skip entire script
           Write-Verbose "  [TRANSFORM] Skipping entire FILESTREAM FileGroup script (no regular FileGroups): $scriptName"
-          return $true
+          if ($FilePath -and $script:ReportSourcePath) {
+            Add-SkippedObject -FilePath $FilePath -SourcePath $script:ReportSourcePath -Reason 'DevMode_FileStream'
+          }
+          return $false
         }
       }
 
@@ -2248,7 +2505,10 @@ function Invoke-SqlScript {
         else {
           # All batches were CMK/CEK - skip entire script
           Write-Verbose "  [TRANSFORM] Skipping entire script (all batches are CMK/CEK): $scriptName"
-          return $true
+          if ($FilePath -and $script:ReportSourcePath) {
+            Add-SkippedObject -FilePath $FilePath -SourcePath $script:ReportSourcePath -Reason 'DevMode_AlwaysEncrypted'
+          }
+          return $false
         }
       }
 
@@ -2631,6 +2891,8 @@ function Invoke-ScriptsWithDependencyRetries {
         if ($failedScriptErrors.ContainsKey($scriptFile.Name)) {
           $failedScriptErrors.Remove($scriptFile.Name)
         }
+        # Track for integrity report
+        Add-ImportedObject -FilePath $scriptFile.FullName -SourcePath $SourcePath
       }
       elseif ($result -eq -1) {
         # Script failed - add to retry list and track error
@@ -3892,12 +4154,51 @@ function Show-ImportConfiguration {
 #region Main Script
 
 try {
+  # Capture start time for integrity report
+  $script:ImportStartTime = Get-Date
+
   # Start overall timing if collecting metrics (CLI switch, config applied later)
   $script:CollectMetrics = $CollectMetrics.IsPresent
   if ($script:CollectMetrics) {
     $script:ImportStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
     $script:InitStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
   }
+
+  # Initialize effective configuration sources with defaults
+  $script:ConfigSources = [ordered]@{
+    importMode         = [ordered]@{ value = $ImportMode;         source = 'default' }
+    continueOnError    = [ordered]@{ value = $false;              source = 'default' }
+    createDatabase     = [ordered]@{ value = $false;              source = 'default' }
+    includeData        = [ordered]@{ value = $false;              source = 'default' }
+    maxRetries         = [ordered]@{ value = 3;                   source = 'default' }
+    retryDelaySeconds  = [ordered]@{ value = 2;                   source = 'default' }
+    connectionTimeout  = [ordered]@{ value = 30;                  source = 'default' }
+    commandTimeout     = [ordered]@{ value = 300;                 source = 'default' }
+    configFile         = [ordered]@{ value = $null;               source = 'default' }
+    server             = [ordered]@{ value = $null;               source = 'default' }
+    database           = [ordered]@{ value = $null;               source = 'default' }
+    excludeObjectTypes = [ordered]@{ value = @();                 source = 'default' }
+    excludeSchemas     = [ordered]@{ value = @();                 source = 'default' }
+    stripFilestream    = [ordered]@{ value = $false;              source = 'default' }
+    stripAlwaysEncrypted = [ordered]@{ value = $false;            source = 'default' }
+  }
+
+  # Track CLI parameter overrides
+  if ($PSBoundParameters.ContainsKey('ImportMode'))         { $script:ConfigSources.importMode.source         = 'cli'; $script:ConfigSources.importMode.value         = $ImportMode }
+  if ($PSBoundParameters.ContainsKey('ContinueOnError'))    { $script:ConfigSources.continueOnError.source    = 'cli'; $script:ConfigSources.continueOnError.value    = $ContinueOnError.IsPresent }
+  if ($PSBoundParameters.ContainsKey('CreateDatabase'))     { $script:ConfigSources.createDatabase.source     = 'cli'; $script:ConfigSources.createDatabase.value     = $CreateDatabase.IsPresent }
+  if ($PSBoundParameters.ContainsKey('IncludeData'))        { $script:ConfigSources.includeData.source        = 'cli'; $script:ConfigSources.includeData.value        = $IncludeData.IsPresent }
+  if ($PSBoundParameters.ContainsKey('MaxRetries'))         { $script:ConfigSources.maxRetries.source         = 'cli'; $script:ConfigSources.maxRetries.value         = $MaxRetries }
+  if ($PSBoundParameters.ContainsKey('RetryDelaySeconds'))  { $script:ConfigSources.retryDelaySeconds.source  = 'cli'; $script:ConfigSources.retryDelaySeconds.value  = $RetryDelaySeconds }
+  if ($PSBoundParameters.ContainsKey('ConnectionTimeout'))  { $script:ConfigSources.connectionTimeout.source  = 'cli'; $script:ConfigSources.connectionTimeout.value  = $ConnectionTimeout }
+  if ($PSBoundParameters.ContainsKey('CommandTimeout'))     { $script:ConfigSources.commandTimeout.source     = 'cli'; $script:ConfigSources.commandTimeout.value     = $CommandTimeout }
+  if ($PSBoundParameters.ContainsKey('ConfigFile'))         { $script:ConfigSources.configFile.source         = 'cli'; $script:ConfigSources.configFile.value         = $ConfigFile }
+  if ($PSBoundParameters.ContainsKey('Server'))             { $script:ConfigSources.server.source             = 'cli'; $script:ConfigSources.server.value             = $Server }
+  if ($PSBoundParameters.ContainsKey('Database'))           { $script:ConfigSources.database.source           = 'cli'; $script:ConfigSources.database.value           = $Database }
+  if ($PSBoundParameters.ContainsKey('ExcludeObjectTypes')) { $script:ConfigSources.excludeObjectTypes.source = 'cli'; $script:ConfigSources.excludeObjectTypes.value = $ExcludeObjectTypes }
+  if ($PSBoundParameters.ContainsKey('ExcludeSchemas'))     { $script:ConfigSources.excludeSchemas.source     = 'cli'; $script:ConfigSources.excludeSchemas.value     = $ExcludeSchemas }
+  if ($PSBoundParameters.ContainsKey('StripFilestream'))    { $script:ConfigSources.stripFilestream.source    = 'cli'; $script:ConfigSources.stripFilestream.value    = $StripFilestream.IsPresent }
+  if ($PSBoundParameters.ContainsKey('StripAlwaysEncrypted')) { $script:ConfigSources.stripAlwaysEncrypted.source = 'cli'; $script:ConfigSources.stripAlwaysEncrypted.value = $StripAlwaysEncrypted.IsPresent }
 
   # Load configuration if provided
   $config = @{
@@ -3945,6 +4246,7 @@ try {
       # Command-line parameters always take precedence over config file
       if ($configImportMode -and -not $PSBoundParameters.ContainsKey('ImportMode')) {
         $ImportMode = $configImportMode
+        $script:ConfigSources.importMode = [ordered]@{ value = $ImportMode; source = 'configFile' }
         Write-Output "[INFO] Import mode set from config file: $ImportMode"
       }
 
@@ -3957,6 +4259,7 @@ try {
         # Check root-level includeData first
         if ($configIncludeData) {
           $IncludeData = $configIncludeData
+          $script:ConfigSources.includeData = [ordered]@{ value = $true; source = 'configFile' }
           Write-Output "[INFO] Data import enabled from config file"
         }
         # Then check mode-specific settings
@@ -3965,6 +4268,7 @@ try {
           $modeIncludeData = if ($modeSettings -and $modeSettings -is [hashtable]) { $modeSettings['includeData'] } elseif ($modeSettings -and $modeSettings.PSObject.Properties.Name -contains 'includeData') { $modeSettings.includeData } else { $null }
           if ($modeIncludeData) {
             $IncludeData = $modeIncludeData
+            $script:ConfigSources.includeData = [ordered]@{ value = $true; source = 'configFile' }
             Write-Output "[INFO] Data import enabled from config file ($ImportMode mode)"
           }
         }
@@ -3991,6 +4295,7 @@ try {
         if ($config.import.continueOnError) {
           $ContinueOnError = $config.import.continueOnError
           $ErrorActionPreference = 'Continue'
+          $script:ConfigSources.continueOnError = [ordered]@{ value = $true; source = 'configFile' }
           Write-Verbose "[INFO] ContinueOnError set from config file: $ContinueOnError"
         }
       }
@@ -4027,6 +4332,7 @@ try {
       if (-not $PSBoundParameters.ContainsKey('ExcludeObjectTypes')) {
         if ($config.import.excludeObjectTypes -and $config.import.excludeObjectTypes.Count -gt 0) {
           $script:ExcludeObjectTypesFilter = $config.import.excludeObjectTypes
+          $script:ConfigSources.excludeObjectTypes = [ordered]@{ value = $config.import.excludeObjectTypes; source = 'configFile' }
           Write-Verbose "[INFO] ExcludeObjectTypes set from config file: $($config.import.excludeObjectTypes -join ', ')"
         }
       }
@@ -4035,6 +4341,7 @@ try {
       if (-not $PSBoundParameters.ContainsKey('ExcludeSchemas')) {
         if ($config.import.excludeSchemas -and $config.import.excludeSchemas.Count -gt 0) {
           $script:ExcludeSchemasFilter = $config.import.excludeSchemas
+          $script:ConfigSources.excludeSchemas = [ordered]@{ value = $config.import.excludeSchemas; source = 'configFile' }
           Write-Verbose "[INFO] ExcludeSchemas set from config file: $($config.import.excludeSchemas -join ', ')"
         }
       }
@@ -4071,6 +4378,26 @@ try {
   $Database = $envResolved.Database
   $Credential = $envResolved.Credential
   $script:TrustServerCertificateEnabled = $envResolved.TrustServerCertificate
+
+  # Track server/database resolution source for integrity report
+  # Only update if not already set to 'cli' (CLI takes precedence)
+  if ($script:ConfigSources.server.source -eq 'default' -and -not [string]::IsNullOrWhiteSpace($Server)) {
+    # Determine which source resolved the server
+    if ($ServerFromEnv -or ($config.connection -and $config.connection.serverFromEnv)) {
+      $envVarName = if ($ServerFromEnv) { $ServerFromEnv } else { $config.connection.serverFromEnv }
+      $script:ConfigSources.server = [ordered]@{ value = $Server; source = "envVar:$envVarName" }
+    }
+    elseif ($ConnectionStringFromEnv -or ($config.connection -and $config.connection.connectionStringFromEnv)) {
+      $envVarName = if ($ConnectionStringFromEnv) { $ConnectionStringFromEnv } else { $config.connection.connectionStringFromEnv }
+      $script:ConfigSources.server = [ordered]@{ value = $Server; source = "envVar:$envVarName" }
+    }
+  }
+  if ($script:ConfigSources.database.source -eq 'default' -and -not [string]::IsNullOrWhiteSpace($Database)) {
+    if ($ConnectionStringFromEnv -or ($config.connection -and $config.connection.connectionStringFromEnv)) {
+      $envVarName = if ($ConnectionStringFromEnv) { $ConnectionStringFromEnv } else { $config.connection.connectionStringFromEnv }
+      $script:ConfigSources.database = [ordered]@{ value = $Database; source = "envVar:$envVarName" }
+    }
+  }
 
   # Validate that Server was resolved from at least one source
   if ([string]::IsNullOrWhiteSpace($Server)) {
@@ -4161,6 +4488,52 @@ try {
   Write-Verbose "Using command timeout: $effectiveCommandTimeout seconds"
   Write-Verbose "Using max retries: $effectiveMaxRetries attempts"
   Write-Verbose "Using retry delay: $effectiveRetryDelay seconds"
+
+  # Update effective config values for integrity report
+  if ($script:ConfigSources.connectionTimeout.source -eq 'default') {
+    if ($config -and $config.ContainsKey('connectionTimeout')) {
+      $script:ConfigSources.connectionTimeout = [ordered]@{ value = $effectiveConnectionTimeout; source = 'configFile' }
+    } else {
+      $script:ConfigSources.connectionTimeout.value = $effectiveConnectionTimeout
+    }
+  } else {
+    $script:ConfigSources.connectionTimeout.value = $effectiveConnectionTimeout
+  }
+  if ($script:ConfigSources.commandTimeout.source -eq 'default') {
+    if ($config -and $config.ContainsKey('commandTimeout')) {
+      $script:ConfigSources.commandTimeout = [ordered]@{ value = $effectiveCommandTimeout; source = 'configFile' }
+    } else {
+      $script:ConfigSources.commandTimeout.value = $effectiveCommandTimeout
+    }
+  } else {
+    $script:ConfigSources.commandTimeout.value = $effectiveCommandTimeout
+  }
+  if ($script:ConfigSources.maxRetries.source -eq 'default') {
+    if ($config -and $config.ContainsKey('maxRetries')) {
+      $script:ConfigSources.maxRetries = [ordered]@{ value = $effectiveMaxRetries; source = 'configFile' }
+    } else {
+      $script:ConfigSources.maxRetries.value = $effectiveMaxRetries
+    }
+  } else {
+    $script:ConfigSources.maxRetries.value = $effectiveMaxRetries
+  }
+  if ($script:ConfigSources.retryDelaySeconds.source -eq 'default') {
+    if ($config -and $config.ContainsKey('retryDelaySeconds')) {
+      $script:ConfigSources.retryDelaySeconds = [ordered]@{ value = $effectiveRetryDelay; source = 'configFile' }
+    } else {
+      $script:ConfigSources.retryDelaySeconds.value = $effectiveRetryDelay
+    }
+  } else {
+    $script:ConfigSources.retryDelaySeconds.value = $effectiveRetryDelay
+  }
+  # Update final resolved values
+  $script:ConfigSources.server.value = $Server
+  $script:ConfigSources.database.value = $Database
+  $script:ConfigSources.importMode.value = $ImportMode
+  $script:ConfigSources.configFile.value = $configSource
+  $script:ConfigSources.includeData.value = [bool]$IncludeData
+  $script:ConfigSources.createDatabase.value = [bool]$CreateDatabase
+  $script:ConfigSources.continueOnError.value = [bool]$ContinueOnError
 
   # Display configuration
   Show-ImportConfiguration `
@@ -4755,6 +5128,10 @@ try {
   }
   if ($stripFilestreamEnabled) {
     $sqlCmdVars['__StripFilestream__'] = $true
+    if ($script:ConfigSources.stripFilestream.source -eq 'default') {
+      $script:ConfigSources.stripFilestream = [ordered]@{ value = $true; source = 'configFile' }
+    }
+    $script:ConfigSources.stripFilestream.value = $true
     Write-Output "[INFO] FILESTREAM stripping: enabled - FILESTREAM features will be removed (Linux/container compatibility)"
     Write-Output "       FILESTREAM_ON clauses will be removed, VARBINARY(MAX) FILESTREAM -> VARBINARY(MAX)"
   }
@@ -4777,6 +5154,10 @@ try {
   }
   if ($stripAlwaysEncryptedEnabled) {
     $sqlCmdVars['__StripAlwaysEncrypted__'] = $true
+    if ($script:ConfigSources.stripAlwaysEncrypted.source -eq 'default') {
+      $script:ConfigSources.stripAlwaysEncrypted = [ordered]@{ value = $true; source = 'configFile' }
+    }
+    $script:ConfigSources.stripAlwaysEncrypted.value = $true
     Write-Output "[INFO] Always Encrypted stripping: enabled - CMK, CEK, and ENCRYPTED WITH clauses will be removed"
     Write-Output "       Encrypted columns will become regular (unencrypted) columns"
   }
@@ -4843,7 +5224,7 @@ try {
     }
   }
 
-  # Report skipped folders if any
+  # Report skipped folders if any, and record individual files as skipped for integrity report
   if ($skippedFolders.Count -gt 0) {
     Write-Output "[INFO] Skipped $($skippedFolders.Count) folder(s) due to $ImportMode mode settings:"
     foreach ($folder in $skippedFolders) {
@@ -4851,14 +5232,33 @@ try {
         '00_FileGroups' { 'FileGroups (environment-specific)' }
         '02_DatabaseConfiguration' { 'Database Scoped Configurations (environment-specific)' }
         '17_ExternalData' { 'External Data Sources (environment-specific)' }
+        '20_SecurityPolicies' { 'Security Policies (disabled in mode)' }
         '21_Data' { 'Data not requested' }
         default { $folder }
       }
       Write-Output "  - $reason"
+
+      # Record each .sql file in skipped folder as a skipped object
+      $skipReasonCode = switch ($folder) {
+        '02_DatabaseConfiguration' { 'DevMode_DatabaseConfiguration' }
+        '17_ExternalData'          { 'DevMode_ExternalData' }
+        '20_SecurityPolicies'      { 'DevMode_SecurityPolicy' }
+        default                    { "Skipped_$($folder -replace '^\d{2}_', '')" }
+      }
+      $skippedFolderPath = Join-Path $SourcePath $folder
+      if (Test-Path $skippedFolderPath) {
+        $skippedFiles = Get-ChildItem -Path $skippedFolderPath -Filter '*.sql' -Recurse -ErrorAction SilentlyContinue
+        foreach ($skippedFile in $skippedFiles) {
+          Add-SkippedObject -FilePath $skippedFile.FullName -SourcePath $SourcePath -Reason $skipReasonCode
+        }
+      }
     }
   }
 
   Write-Output ''
+
+  # Set SourcePath at script level for integrity report tracking within Invoke-SqlScript
+  $script:ReportSourcePath = $SourcePath
 
   # Apply scripts
   Write-Output 'Applying scripts...'
@@ -5123,6 +5523,7 @@ try {
 
     if ($result -eq $true) {
       $successCount++
+      Add-ImportedObject -FilePath $scriptFile.FullName -SourcePath $SourcePath
     }
     elseif ($result -eq -1) {
       $failureCount++
@@ -5282,6 +5683,7 @@ try {
 
       if ($result -eq $true) {
         $successCount++
+        Add-ImportedObject -FilePath $scriptFile.FullName -SourcePath $SourcePath
       }
       elseif ($result -eq -1) {
         $failureCount++
@@ -5398,6 +5800,7 @@ try {
 
       if ($result -eq $true) {
         $successCount++
+        Add-ImportedObject -FilePath $scriptFile.FullName -SourcePath $SourcePath
       }
       elseif ($result -eq -1) {
         $failureCount++
@@ -5691,6 +6094,9 @@ try {
   Write-Output '═══════════════════════════════════════════════'
   Write-Output ''
 
+  # Write integrity report (always, regardless of success/failure)
+  Export-IntegrityReport -SourcePath $SourcePath -Server $Server -Database $Database
+
   if ($failureCount -eq 0) {
     exit 0
   }
@@ -5702,6 +6108,17 @@ try {
 catch {
   Write-Error "[ERROR] Script error: $($_.ToString())"
   Write-Log "Script error: $($_.ToString())" -Severity ERROR
+
+  # Attempt to write integrity report even on unhandled errors
+  if ($script:ReportSourcePath -and $Server -and $Database) {
+    try {
+      Export-IntegrityReport -SourcePath $script:ReportSourcePath -Server $Server -Database $Database
+    }
+    catch {
+      Write-Verbose "[WARNING] Could not write integrity report during error handling: $_"
+    }
+  }
+
   exit 1
 }
 

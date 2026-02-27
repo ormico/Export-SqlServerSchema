@@ -554,6 +554,74 @@ Encryption Objects Found:
 
 > **Note**: The export script automatically detects encryption objects and stores them in `_export_metadata.json` (version 1.1+). For older exports without metadata, the import script falls back to scanning SQL files.
 
+### 4.5 Post-Import Integrity Report
+
+Every import run automatically generates a JSON integrity report at `<SourcePath>/import-report-<yyyyMMdd_HHmmss>.json`. This report provides a unified view of what happened during the import.
+
+**Report Contents:**
+
+| Field | Description |
+|-------|-------------|
+| `exportedObjectCount` | Number of objects in the export (from `_export_metadata.json` or `.sql` file count) |
+| `importedObjectCount` | Number of objects successfully imported |
+| `skippedObjectCount` | Number of objects skipped (with reasons) |
+| `failedObjectCount` | Number of objects that failed to import |
+| `skippedReasons` | Aggregated skip reason counts (e.g., `{"DevMode_SecurityPolicy": 3}`) |
+| `duration` | Total import duration (HH:mm:ss) |
+| `effectiveConfiguration` | All tracked parameters with their resolved values and sources |
+| `importedObjects` | List of successfully imported objects with type/schema/name |
+| `skippedObjects` | List of skipped objects with reason codes |
+| `failedObjects` | List of failed objects with error messages |
+
+**Skip Reason Codes:**
+
+| Reason Code | Meaning |
+|-------------|---------|
+| `DevMode_SecurityPolicy` | Security policy skipped in Dev mode |
+| `DevMode_DatabaseConfiguration` | Database configuration skipped in Dev mode |
+| `DevMode_ExternalData` | External data source skipped in Dev mode |
+| `DevMode_AlwaysEncrypted` | Always Encrypted object stripped via `-StripAlwaysEncrypted` |
+| `DevMode_FileStream` | FILESTREAM object stripped via `-StripFilestream` |
+| `EmptyScript` | Script file was empty or whitespace-only |
+
+**Configuration Source Tracking:**
+
+The `effectiveConfiguration` section shows where each parameter value came from:
+- `default` — built-in default value
+- `cli` — explicitly passed on the command line
+- `configFile` — resolved from YAML config file
+- `envVar:<NAME>` — resolved from environment variable
+
+**Example Report (abbreviated):**
+```json
+{
+  "exportedObjectCount": 57,
+  "importedObjectCount": 54,
+  "skippedObjectCount": 2,
+  "failedObjectCount": 1,
+  "skippedReasons": { "DevMode_SecurityPolicy": 1, "DevMode_AlwaysEncrypted": 1 },
+  "duration": "00:01:42",
+  "timestamp": "2026-02-25T12:00:00Z",
+  "sourcePath": "./DbScripts/localhost_MyDb_20260225_120000",
+  "targetServer": "localhost",
+  "targetDatabase": "MyDb_Dev",
+  "effectiveConfiguration": {
+    "importMode": { "value": "Dev", "source": "default" },
+    "server": { "value": "localhost", "source": "cli" },
+    "stripAlwaysEncrypted": { "value": true, "source": "configFile" }
+  },
+  "importedObjects": [
+    { "type": "Table", "schema": "dbo", "name": "Customers", "filePath": "09_Tables_PrimaryKey/dbo.Customers.sql" }
+  ],
+  "skippedObjects": [
+    { "type": "SecurityPolicy", "schema": "dbo", "name": "FilterPolicy", "filePath": "20_SecurityPolicies/dbo.FilterPolicy.sql", "reason": "DevMode_SecurityPolicy" }
+  ],
+  "failedObjects": [
+    { "type": "Programmability", "schema": "dbo", "name": "BrokenProc", "filePath": "14_Programmability/03_StoredProcedures/dbo.BrokenProc.sql", "reason": "SqlError", "errorMessage": "Invalid object name 'dbo.MissingTable'." }
+  ]
+}
+```
+
 ## 5. Troubleshooting
 
 ### Common Issues

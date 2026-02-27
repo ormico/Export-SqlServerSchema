@@ -136,6 +136,7 @@ $cred = Get-Credential
 - Command-line parameters override config files
 - **Automatic retry logic** for transient failures with exponential backoff
 - **Configurable timeouts** and retry settings via config file or parameters
+- **Post-import integrity report** (`import-report-<timestamp>.json`) with imported/skipped/failed object tracking
 - **Comprehensive error logging** with connection cleanup guarantees
 
 ## Testing
