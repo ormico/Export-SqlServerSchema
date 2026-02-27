@@ -53,7 +53,8 @@ function Test-Utf8Bom {
 # Setup: Create temporary directory for test files
 # ─────────────────────────────────────────────────────────────────────────────
 
-$tempDir = Join-Path $env:TEMP "utf8bom-tests-$(New-Guid)"
+$baseTempDir = if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { [System.IO.Path]::GetTempPath() }
+$tempDir = Join-Path $baseTempDir "utf8bom-tests-$(New-Guid)"
 $null = New-Item -ItemType Directory -Path $tempDir -Force
 
 Write-Host ''
@@ -72,41 +73,42 @@ Write-Host '── Section 1: Static Source Code Analysis ──' -ForegroundCol
 Write-Host ''
 
 $scriptContent = Get-Content -Path $exportScript -Raw
+$icase = [System.Text.RegularExpressions.RegexOptions]::IgnoreCase
 
 # Test 1: New-ScriptingOptions uses AnsiFile = $false
-$ansiFileFalseInDefaults = $scriptContent -match 'AnsiFile\s*=\s*\$false'
+$ansiFileFalseInDefaults = $scriptContent -match '(?i)AnsiFile\s*=\s*\$false'
 Write-TestResult 'New-ScriptingOptions sets AnsiFile = $false' $ansiFileFalseInDefaults
 
 # Test 2: No remaining AnsiFile = $true in production code
 # Count occurrences of AnsiFile = $true vs AnsiFile = $false
-$ansiTrueMatches = [regex]::Matches($scriptContent, '\$(?:scripter\.Options|Scripter\.Options|options)\.AnsiFile\s*=\s*\$true')
-$ansiTrueInDefaults = [regex]::Matches($scriptContent, 'AnsiFile\s*=\s*\$true')
+$ansiTrueMatches = [regex]::Matches($scriptContent, '\$(?:scripter\.Options|Scripter\.Options|options)\.AnsiFile\s*=\s*\$true', $icase)
+$ansiTrueInDefaults = [regex]::Matches($scriptContent, 'AnsiFile\s*=\s*\$true', $icase)
 $totalAnsiTrue = $ansiTrueMatches.Count + $ansiTrueInDefaults.Count
 Write-TestResult 'No remaining AnsiFile = $true in source' ($totalAnsiTrue -eq 0) `
     "Found $totalAnsiTrue occurrence(s) of AnsiFile = `$true"
 
 # Test 3: UTF8Encoding with BOM ($true) is used in New-ScriptingOptions defaults
-$utf8BomInDefaults = $scriptContent -match 'Encoding\s*=\s*\[System\.Text\.UTF8Encoding\]::new\(\$true\)'
+$utf8BomInDefaults = $scriptContent -match '(?i)Encoding\s*=\s*\[System\.Text\.UTF8Encoding\]::new\(\$true\)'
 Write-TestResult 'New-ScriptingOptions defaults include UTF8Encoding BOM' $utf8BomInDefaults
 
 # Test 4: Parallel worker sets UTF8 BOM encoding on scripter options
-$parallelEncodingMatches = [regex]::Matches($scriptContent, '\$scripter\.Options\.Encoding\s*=\s*\[System\.Text\.UTF8Encoding\]::new\(\$true\)')
+$parallelEncodingMatches = [regex]::Matches($scriptContent, '\$scripter\.Options\.Encoding\s*=\s*\[System\.Text\.UTF8Encoding\]::new\(\$true\)', $icase)
 Write-TestResult 'Parallel worker sets UTF8 BOM on scripter.Options.Encoding' ($parallelEncodingMatches.Count -ge 1) `
     "Found $($parallelEncodingMatches.Count) match(es), expected >= 1"
 
 # Test 5: Process-ExportWorkItem sets UTF8 BOM encoding
-$processExportEncoding = [regex]::Matches($scriptContent, '\$Scripter\.Options\.Encoding\s*=\s*\[System\.Text\.UTF8Encoding\]::new\(\$true\)')
+$processExportEncoding = [regex]::Matches($scriptContent, '\$Scripter\.Options\.Encoding\s*=\s*\[System\.Text\.UTF8Encoding\]::new\(\$true\)', $icase)
 Write-TestResult 'Process-ExportWorkItem sets UTF8 BOM on Scripter.Options.Encoding' ($processExportEncoding.Count -ge 1) `
     "Found $($processExportEncoding.Count) match(es), expected >= 1"
 
 # Test 6: No UTF8Encoding($false) remains for SQL file writes
-$utf8NoBomMatches = [regex]::Matches($scriptContent, 'UTF8Encoding[^)]*\$false')
+$utf8NoBomMatches = [regex]::Matches($scriptContent, 'UTF8Encoding[^)]*\$false', $icase)
 Write-TestResult 'No UTF8Encoding($false) in source (no-BOM removed)' ($utf8NoBomMatches.Count -eq 0) `
     "Found $($utf8NoBomMatches.Count) occurrence(s) of UTF8Encoding `$false"
 
 # Test 7: Out-File for .sql/.md files uses utf8BOM encoding
 # Filter to only .sql/.md related writes (exclude JSON metadata/metrics files)
-$allOutFileUtf8 = [regex]::Matches($scriptContent, 'Out-File\s+-FilePath\s+\$\w+\s+-Encoding\s+UTF8\b(?!BOM)')
+$allOutFileUtf8 = [regex]::Matches($scriptContent, 'Out-File\s+-FilePath\s+\$\w+\s+-Encoding\s+UTF8\b(?!BOM)', $icase)
 $sqlOutFileUtf8Count = 0
 foreach ($m in $allOutFileUtf8) {
     $lineStart = $scriptContent.LastIndexOf("`n", $m.Index) + 1
@@ -122,27 +124,27 @@ Write-TestResult 'No Out-File -Encoding UTF8 (without BOM) for SQL/MD export fil
     "Found $sqlOutFileUtf8Count Out-File call(s) for SQL/MD files still using plain UTF8"
 
 # Test 8: Out-File uses utf8BOM (positive check)
-$outFileBomMatches = [regex]::Matches($scriptContent, 'Out-File\s+.*-Encoding\s+utf8BOM')
+$outFileBomMatches = [regex]::Matches($scriptContent, 'Out-File\s+.*-Encoding\s+utf8BOM', $icase)
 Write-TestResult 'Out-File calls use -Encoding utf8BOM' ($outFileBomMatches.Count -ge 3) `
     "Found $($outFileBomMatches.Count) match(es), expected >= 3 (FileGroups, DbConfig, DbCreds)"
 
 # Test 9: Set-Content for strip FILESTREAM uses utf8BOM
-$setContentBomMatches = [regex]::Matches($scriptContent, 'Set-Content\s+.*-Encoding\s+utf8BOM')
+$setContentBomMatches = [regex]::Matches($scriptContent, 'Set-Content\s+.*-Encoding\s+utf8BOM', $icase)
 Write-TestResult 'Set-Content uses -Encoding utf8BOM for strip FILESTREAM' ($setContentBomMatches.Count -ge 1) `
     "Found $($setContentBomMatches.Count) match(es), expected >= 1"
 
 # Test 10: SecurityPolicy WriteAllText uses UTF8Encoding($true)
-$writeAllTextBomMatches = [regex]::Matches($scriptContent, 'WriteAllText\([^,]+,\s*[^,]+,\s*\[System\.Text\.UTF8Encoding\]::new\(\$true\)\)')
+$writeAllTextBomMatches = [regex]::Matches($scriptContent, 'WriteAllText\([^,]+,\s*[^,]+,\s*\[System\.Text\.UTF8Encoding\]::new\(\$true\)\)', $icase)
 Write-TestResult 'SecurityPolicy WriteAllText uses UTF8Encoding BOM' ($writeAllTextBomMatches.Count -ge 2) `
     "Found $($writeAllTextBomMatches.Count) match(es), expected >= 2 (parallel + sequential)"
 
 # Test 11: SecurityPolicy AppendAllText uses UTF8Encoding($true)
-$appendAllTextBomMatches = [regex]::Matches($scriptContent, 'AppendAllText\([^,]+,\s*[^,]+,\s*\[System\.Text\.UTF8Encoding\]::new\(\$true\)\)')
+$appendAllTextBomMatches = [regex]::Matches($scriptContent, 'AppendAllText\([^,]+,\s*[^,]+,\s*\[System\.Text\.UTF8Encoding\]::new\(\$true\)\)', $icase)
 Write-TestResult 'SecurityPolicy AppendAllText uses UTF8Encoding BOM' ($appendAllTextBomMatches.Count -ge 2) `
     "Found $($appendAllTextBomMatches.Count) match(es), expected >= 2 (parallel + sequential)"
 
 # Test 12: Deployment manifest uses utf8BOM
-$manifestBomMatch = $scriptContent -match 'manifestContent\s*\|\s*Out-File\s+.*-Encoding\s+utf8BOM'
+$manifestBomMatch = $scriptContent -match '(?i)manifestContent\s*\|\s*Out-File\s+.*-Encoding\s+utf8BOM'
 Write-TestResult 'Deployment manifest uses -Encoding utf8BOM' $manifestBomMatch
 
 Write-Host ''
