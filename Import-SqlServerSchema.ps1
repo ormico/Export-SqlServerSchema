@@ -3318,6 +3318,148 @@ function Test-ScriptExcluded {
   return $false
 }
 
+function Get-CanonicalTypeOrder {
+  <#
+    .SYNOPSIS
+        Returns the import's canonical type-to-order mapping.
+    .DESCRIPTION
+        Defines the import script's own ordering for folder types, independent
+        of the export's numeric folder prefixes. This allows import to reorder
+        folders from older exports that may have incorrect dependency ordering.
+    .OUTPUTS
+        Ordered hashtable mapping type identifiers to their ordinal position.
+  #>
+  return [ordered]@{
+    'filegroups'            = 0
+    'security'              = 1
+    'database_configuration' = 2
+    'schemas'               = 3
+    'sequences'             = 4
+    'partition_functions'   = 5
+    'partition_schemes'     = 6
+    'types'                 = 7
+    'xml_schema_collections' = 8
+    'tables_primarykey'     = 9
+    'indexes'               = 10
+    'tables_foreignkeys'    = 11
+    'defaults'              = 12
+    'rules'                 = 13
+    'programmability'       = 14
+    'synonyms'              = 15
+    'fulltext_search'       = 16
+    'external_data'         = 17
+    'search_property_lists' = 18
+    'plan_guides'           = 19
+    'security_policies'     = 20
+    'data'                  = 21
+  }
+}
+
+function Resolve-FolderTypeFromName {
+  <#
+    .SYNOPSIS
+        Derives a type identifier from a folder name by stripping the numeric prefix.
+    .DESCRIPTION
+        Fallback for old exports that lack folderOrder in metadata. Strips the
+        leading numeric prefix (e.g., '09_') and lowercases the remainder to
+        produce a type identifier matching the canonical order keys.
+    .PARAMETER FolderName
+        The numbered folder name (e.g., '10_Indexes', '09_Tables_PrimaryKey').
+    .OUTPUTS
+        Type identifier string (e.g., 'indexes', 'tables_primarykey').
+  #>
+  param(
+    [Parameter(Mandatory)]
+    [string]$FolderName
+  )
+
+  $stripped = $FolderName -replace '^\d{2}_', ''
+  return $stripped.ToLowerInvariant()
+}
+
+function Get-TypeBasedFolderOrder {
+  <#
+    .SYNOPSIS
+        Reorders export folders according to import's canonical type ordering.
+    .DESCRIPTION
+        Reads folderOrder from metadata (or falls back to name-based parsing)
+        and returns folder names sorted by import's canonical type ordering.
+        Emits a warning if the effective order differs from the export's numbering.
+    .PARAMETER SourcePath
+        Path to the export directory.
+    .PARAMETER ExportFolders
+        Array of folder names to reorder.
+    .OUTPUTS
+        Array of folder names in import's canonical order.
+  #>
+  param(
+    [Parameter(Mandatory)]
+    [string]$SourcePath,
+
+    [Parameter(Mandatory)]
+    [string[]]$ExportFolders
+  )
+
+  $canonicalOrder = Get-CanonicalTypeOrder
+  $metadata = Read-ExportMetadata -Path $SourcePath
+
+  # Build folder-to-type mapping from metadata or fallback
+  $folderTypeMap = @{}
+  if ($metadata -and $metadata.ContainsKey('folderOrder') -and $metadata.folderOrder) {
+    # New export with folderOrder — use metadata mapping
+    foreach ($entry in $metadata.folderOrder) {
+      $folderTypeMap[$entry.folder] = $entry.type
+    }
+    Write-Verbose "Using folderOrder from metadata (version $($metadata.version))"
+  }
+  else {
+    # Fallback for old exports — derive type from folder name
+    Write-Verbose "No folderOrder in metadata — using name-based fallback"
+    foreach ($folder in $ExportFolders) {
+      $folderTypeMap[$folder] = Resolve-FolderTypeFromName -FolderName $folder
+    }
+  }
+
+  # Sort folders by canonical type order
+  $sortedFolders = @($ExportFolders | Sort-Object {
+      $type = $folderTypeMap[$_]
+      if ($canonicalOrder.Contains($type)) {
+        $canonicalOrder[$type]
+      }
+      else {
+        # Unknown types go to the end, preserving original relative order
+        999
+      }
+    })
+
+  # Detect reordering and emit warning
+  $reordered = $false
+  for ($i = 0; $i -lt [Math]::Min($ExportFolders.Count, $sortedFolders.Count); $i++) {
+    if ($ExportFolders[$i] -ne $sortedFolders[$i]) {
+      $reordered = $true
+      break
+    }
+  }
+
+  if ($reordered) {
+    $warningLines = @("[WARNING] Import order differs from export folder numbering.")
+    $warningLines += "          Import will process folders in the following order:"
+    for ($i = 0; $i -lt $sortedFolders.Count; $i++) {
+      $folder = $sortedFolders[$i]
+      $type = $folderTypeMap[$folder]
+      $exportIdx = [Array]::IndexOf($ExportFolders, $folder)
+      $marker = if ($exportIdx -ne $i) { '   <-- reordered' } else { '' }
+      $num = ($i + 1).ToString().PadLeft(([Math]::Max($sortedFolders.Count, 1)).ToString().Length)
+      $warningLines += "          $num. $folder ($type)$marker"
+    }
+    foreach ($line in $warningLines) {
+      Write-Host $line -ForegroundColor Yellow
+    }
+  }
+
+  return $sortedFolders
+}
+
 function Get-ScriptFiles {
   <#
     .SYNOPSIS
@@ -3458,6 +3600,10 @@ function Get-ScriptFiles {
   else {
     Write-Verbose "Skipping 21_Data (IncludeData=$IncludeData)"
   }
+
+  # Apply type-based reordering using metadata or fallback name parsing
+  # This ensures correct dependency ordering even for older exports with wrong numbering
+  $orderedDirs = @(Get-TypeBasedFolderOrder -SourcePath $Path -ExportFolders $orderedDirs)
 
   # Initialize subfolder paths array (used when filtering granular types like Views, Functions, StoredProcedures)
   $subfolderPaths = @()
