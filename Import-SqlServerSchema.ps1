@@ -3355,28 +3355,6 @@ function Get-CanonicalTypeOrder {
   }
 }
 
-function Resolve-FolderTypeFromName {
-  <#
-    .SYNOPSIS
-        Derives a type identifier from a folder name by stripping the numeric prefix.
-    .DESCRIPTION
-        Fallback for old exports that lack folderOrder in metadata. Strips the
-        leading numeric prefix (e.g., '09_') and lowercases the remainder to
-        produce a type identifier matching the canonical order keys.
-    .PARAMETER FolderName
-        The numbered folder name (e.g., '10_Indexes', '09_Tables_PrimaryKey').
-    .OUTPUTS
-        Type identifier string (e.g., 'indexes', 'tables_primarykey').
-  #>
-  param(
-    [Parameter(Mandatory)]
-    [string]$FolderName
-  )
-
-  $stripped = $FolderName -replace '^\d{2}_', ''
-  return $stripped.ToLowerInvariant()
-}
-
 function Get-TypeBasedFolderOrder {
   <#
     .SYNOPSIS
@@ -3428,6 +3406,7 @@ function Get-TypeBasedFolderOrder {
       }
       else {
         # Unknown types go to the end, preserving original relative order
+        Write-Verbose "Folder '$_' has unknown type '$type' — will be sorted to end"
         999
       }
     })

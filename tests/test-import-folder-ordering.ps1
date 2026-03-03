@@ -57,6 +57,9 @@ $commonScript = Join-Path $projectRoot 'Common-SqlServerSchema.ps1'
 $exportContent = Get-Content $exportScript -Raw
 $importContent = Get-Content $importScript -Raw
 
+# Dot-source Common to get Resolve-FolderTypeFromName for real function testing
+. $commonScript
+
 # ── Test 1: Export metadata version bumped to 1.2 ──────────────────────────
 
 Write-Host "`n=== Test 1: Export metadata version ===" -ForegroundColor Yellow
@@ -155,32 +158,42 @@ Write-TestResult 'Import: indexes before tables_foreignkeys in canonical order' 
 
 # ── Test 8: Resolve-FolderTypeFromName function ─────────────────────────────
 
-Write-Host "`n=== Test 8: Import - Resolve-FolderTypeFromName ===" -ForegroundColor Yellow
+Write-Host "`n=== Test 8: Common - Resolve-FolderTypeFromName ===" -ForegroundColor Yellow
 
-$hasResolveFn = $importContent -match 'function Resolve-FolderTypeFromName'
-Write-TestResult 'Import: Resolve-FolderTypeFromName function exists' $hasResolveFn
+$commonContent = Get-Content $commonScript -Raw
+$hasResolveFn = $commonContent -match 'function Resolve-FolderTypeFromName'
+Write-TestResult 'Common: Resolve-FolderTypeFromName function exists' $hasResolveFn
 
-# Test the function by re-implementing its logic locally
-function Test-ResolveFolderType {
-  param([string]$FolderName)
-  $stripped = $FolderName -replace '^\d{2}_', ''
-  return $stripped.ToLowerInvariant()
-}
-
+# Test the real function (dot-sourced from Common) with all canonical type IDs
 $testCases = @{
   '00_FileGroups'            = 'filegroups'
+  '01_Security'              = 'security'
+  '02_DatabaseConfiguration' = 'database_configuration'
+  '03_Schemas'               = 'schemas'
+  '04_Sequences'             = 'sequences'
+  '05_PartitionFunctions'    = 'partition_functions'
+  '06_PartitionSchemes'      = 'partition_schemes'
+  '07_Types'                 = 'types'
+  '08_XmlSchemaCollections'  = 'xml_schema_collections'
   '09_Tables_PrimaryKey'     = 'tables_primarykey'
   '10_Indexes'               = 'indexes'
   '11_Tables_ForeignKeys'    = 'tables_foreignkeys'
+  '12_Defaults'              = 'defaults'
+  '13_Rules'                 = 'rules'
   '14_Programmability'       = 'programmability'
+  '15_Synonyms'              = 'synonyms'
+  '16_FullTextSearch'        = 'fulltext_search'
+  '17_ExternalData'          = 'external_data'
+  '18_SearchPropertyLists'   = 'search_property_lists'
+  '19_PlanGuides'            = 'plan_guides'
+  '20_SecurityPolicies'      = 'security_policies'
   '21_Data'                  = 'data'
-  '02_DatabaseConfiguration' = 'databaseconfiguration'
 }
 
 foreach ($folder in $testCases.Keys) {
   $expected = $testCases[$folder]
-  $actual = Test-ResolveFolderType -FolderName $folder
-  Write-TestResult "Resolve: '$folder' -> '$expected'" ($actual -eq $expected)
+  $actual = Resolve-FolderTypeFromName -FolderName $folder
+  Write-TestResult "Resolve: '$folder' -> '$expected'" ($actual -eq $expected) $(if ($actual -ne $expected) { "got '$actual'" }  )
 }
 
 # ── Test 9: Get-TypeBasedFolderOrder function ───────────────────────────────
@@ -288,11 +301,10 @@ $oldFolders = @(
   '11_Indexes'              # OLD: Indexes was 11
 )
 
-# Build folder-to-type mapping using name-based fallback
+# Build folder-to-type mapping using real Resolve-FolderTypeFromName
 $oldTypeMap = @{}
 foreach ($f in $oldFolders) {
-  $stripped = $f -replace '^\d{2}_', ''
-  $oldTypeMap[$f] = $stripped.ToLowerInvariant()
+  $oldTypeMap[$f] = Resolve-FolderTypeFromName -FolderName $f
 }
 
 # Sort by canonical order
@@ -318,8 +330,7 @@ $newFolders = @(
 
 $newTypeMap = @{}
 foreach ($f in $newFolders) {
-  $stripped = $f -replace '^\d{2}_', ''
-  $newTypeMap[$f] = $stripped.ToLowerInvariant()
+  $newTypeMap[$f] = Resolve-FolderTypeFromName -FolderName $f
 }
 
 $newReordered = @($newFolders | Sort-Object {

@@ -16,6 +16,7 @@
       - ConvertFrom-AdoConnectionString : Parses ADO.NET connection strings
       - Resolve-EnvCredential        : Resolves credentials from environment variables
       - Resolve-ConfigFile           : Auto-discovers YAML config files
+      - Resolve-FolderTypeFromName   : Derives canonical type ID from numbered folder name
 
     This file has no param() block and no mandatory parameters, making it safe to dot-source.
 
@@ -505,4 +506,71 @@ function Resolve-ConfigFile {
   }
 
   return ''
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Resolve-FolderTypeFromName
+# ─────────────────────────────────────────────────────────────────────────────
+
+function Resolve-FolderTypeFromName {
+  <#
+    .SYNOPSIS
+        Derives a canonical type identifier from a numbered folder name.
+    .DESCRIPTION
+        Fallback for old exports that lack folderOrder in metadata. Strips the
+        leading numeric prefix (e.g., '09_'), then normalizes the remainder
+        (handling PascalCase and separators) to match the canonical type
+        identifiers used by Get-CanonicalTypeOrder.
+    .PARAMETER FolderName
+        The numbered folder name (e.g., '10_Indexes', '09_Tables_PrimaryKey',
+        '02_DatabaseConfiguration').
+    .OUTPUTS
+        Canonical type identifier string (e.g., 'indexes', 'tables_primarykey',
+        'database_configuration').
+  #>
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$FolderName
+  )
+
+  # Strip the numeric prefix (e.g. '09_')
+  [string]$baseName = ($FolderName -replace '^\d{2}_', '').Trim()
+
+  if ([string]::IsNullOrWhiteSpace($baseName)) {
+    return $baseName
+  }
+
+  # Normalize PascalCase to snake_case:
+  # - Replace hyphens/spaces with underscores
+  # - Insert underscores at camelCase boundaries (e.g. TextSearch -> Text_Search)
+  # - Insert underscores between acronyms and following words (e.g. XMLSchema -> XML_Schema)
+  # - Collapse multiple underscores and lowercase the result
+  # NOTE: Must use [regex]::Replace with 'None' option for case-sensitive matching,
+  # because PowerShell's -replace operator is case-insensitive by default.
+  [string]$normalized = $baseName
+  $normalized = $normalized -replace '[-\s]+', '_'
+  $normalized = [regex]::Replace($normalized, '([a-z0-9])([A-Z])', '$1_$2', 'None')
+  $normalized = [regex]::Replace($normalized, '([A-Z]+)([A-Z][a-z])', '$1_$2', 'None')
+  $normalized = $normalized -replace '_+', '_'
+  $normalized = $normalized.Trim('_').ToLowerInvariant()
+
+  # Fallback mappings for known legacy variants that do not normalize
+  # directly to canonical identifiers via regex alone.
+  [string]$compact = $normalized -replace '_', ''
+  switch ($compact) {
+    'filegroups'            { return 'filegroups' }
+    'databaseconfiguration' { return 'database_configuration' }
+    'partitionfunctions'    { return 'partition_functions' }
+    'partitionschemes'      { return 'partition_schemes' }
+    'xmlschemacollections'  { return 'xml_schema_collections' }
+    'tablesprimarykey'      { return 'tables_primarykey' }
+    'tablesforeignkeys'     { return 'tables_foreignkeys' }
+    'searchpropertylists'   { return 'search_property_lists' }
+    'planguides'            { return 'plan_guides' }
+    'securitypolicies'      { return 'security_policies' }
+    'fulltextsearch'        { return 'fulltext_search' }
+    'externaldata'          { return 'external_data' }
+  }
+
+  return $normalized
 }
