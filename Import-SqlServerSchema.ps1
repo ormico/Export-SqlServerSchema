@@ -3847,7 +3847,7 @@ function Import-YamlConfig {
     if (-not (Get-Module -ListAvailable -Name powershell-yaml)) {
       Write-Host ""
       Write-Host "[ERROR] PowerShell-Yaml module not found" -ForegroundColor Red
-      Write-Host "[INFO] Install with: Install-Module powershell-yaml -Scope CurrentUser" -ForegroundColor Yellow
+      Write-Host "[INFO] Install with: Install-Module powershell-yaml -Scope CurrentUser" -ForegroundColor Cyan
       Write-Host ""
       throw "PowerShell-Yaml module is required to parse YAML configuration files"
     }
@@ -6197,7 +6197,7 @@ try {
   Write-Output "Execution results:"
   Write-Host "  [SUCCESS] Successful: $successCount script(s)" -ForegroundColor Green
   if ($skipCount -gt 0) {
-    Write-Host "  [INFO] Skipped:   $skipCount script(s)" -ForegroundColor Yellow
+    Write-Host "  [INFO] Skipped:   $skipCount script(s)" -ForegroundColor Cyan
   }
   if ($failureCount -gt 0) {
     Write-Host "  [ERROR] Failed:    $failureCount script(s)" -ForegroundColor Red
