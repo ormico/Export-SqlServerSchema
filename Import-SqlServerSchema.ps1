@@ -1085,6 +1085,51 @@ function Test-Dependencies {
   }
 }
 
+function Format-ErrorChain {
+  <#
+    .SYNOPSIS
+        Extracts all Message: lines from a full error string and formats them as an arrow chain.
+    .PARAMETER FullError
+        The full error string containing nested exception details.
+    .OUTPUTS
+        Array of strings formatted as "→ message".
+  #>
+  param([string]$FullError)
+
+  if ([string]::IsNullOrWhiteSpace($FullError)) { return @('→ Unknown error') }
+
+  # Extract all "Message: ..." lines and "Error NNN: ..." lines from the full error string
+  $messages = @()
+  foreach ($line in ($FullError -split "`n")) {
+    $trimmed = $line.Trim()
+    if ($trimmed -match '^\s*-?\s*Error\s+\d+:\s*(.+)') {
+      $messages += $matches[1].Trim()
+    }
+    elseif ($trimmed -match '^\s*Message:\s*(.+)') {
+      $messages += $matches[1].Trim()
+    }
+  }
+
+  if ($messages.Count -eq 0) {
+    # Fallback: use the first non-empty line
+    $firstLine = ($FullError -split "`n" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -First 1)
+    if ($firstLine) { $firstLine = $firstLine.Trim() -replace '^\s*-?\s*', '' }
+    return @("→ $firstLine")
+  }
+
+  # Deduplicate consecutive identical messages
+  $deduplicated = @()
+  $prev = $null
+  foreach ($msg in $messages) {
+    if ($msg -ne $prev) {
+      $deduplicated += $msg
+      $prev = $msg
+    }
+  }
+
+  return $deduplicated | ForEach-Object { "→ $_" }
+}
+
 function Add-FailedScript {
   <#
     .SYNOPSIS
@@ -1098,6 +1143,8 @@ function Add-FailedScript {
         The error message (preferably the innermost SQL error).
     .PARAMETER Folder
         The folder the script belongs to (e.g., '09_Tables_PrimaryKey').
+    .PARAMETER SqlContent
+        The SQL that was actually executed (may differ from source if transformations were applied).
   #>
   param(
     [Parameter(Mandatory)]
@@ -1108,20 +1155,22 @@ function Add-FailedScript {
 
     [string]$Folder = '',
 
-    [string]$FilePath = ''
+    [string]$FilePath = '',
+
+    [string]$SqlContent = ''
   )
 
-  # Extract the most useful error message (innermost exception)
-  $shortError = $ErrorMessage -split "`n" | Where-Object { $_ -match 'Error \d+:|Message:' } | Select-Object -First 1
-  if (-not $shortError) { $shortError = ($ErrorMessage -split "`n")[0] }
-  $shortError = $shortError.Trim() -replace '^\s*-?\s*', ''
+  # Format error chain for summary display
+  $errorChain = Format-ErrorChain -FullError $ErrorMessage
+  $chainText = ($errorChain -join "`n")
 
   [void]$script:FailedScripts.Add([PSCustomObject]@{
     ScriptName   = $ScriptName
     FilePath     = $FilePath
     Folder       = $Folder
-    ErrorMessage = $shortError
+    ErrorMessage = $chainText
     FullError    = $ErrorMessage
+    SqlContent   = $SqlContent
     Timestamp    = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
   })
 }
@@ -1157,12 +1206,31 @@ function Write-ErrorLog {
       [void]$sb.AppendLine("    File: $($failure.FilePath)")
     }
     [void]$sb.AppendLine("    Time: $($failure.Timestamp)")
-    [void]$sb.AppendLine("    Error: $($failure.ErrorMessage)")
+    [void]$sb.AppendLine("")
+    [void]$sb.AppendLine("    Error Chain:")
+    foreach ($chainLine in ($failure.ErrorMessage -split "`n")) {
+      [void]$sb.AppendLine("      $chainLine")
+    }
     [void]$sb.AppendLine("")
     [void]$sb.AppendLine("    Full Error Details:")
     foreach ($line in ($failure.FullError -split "`n")) {
       [void]$sb.AppendLine("      $line")
     }
+
+    # Include the executed SQL if available (truncated to first 200 lines)
+    if ($failure.SqlContent) {
+      [void]$sb.AppendLine("")
+      [void]$sb.AppendLine("    Executed SQL:")
+      $sqlLines = $failure.SqlContent -split "`n"
+      $maxLines = [Math]::Min($sqlLines.Count, 200)
+      for ($j = 0; $j -lt $maxLines; $j++) {
+        [void]$sb.AppendLine("      $($sqlLines[$j])")
+      }
+      if ($sqlLines.Count -gt 200) {
+        [void]$sb.AppendLine("      ... (truncated, $($sqlLines.Count) total lines)")
+      }
+    }
+
     [void]$sb.AppendLine("")
     [void]$sb.AppendLine("-" * 80)
     [void]$sb.AppendLine("")
@@ -2786,6 +2854,7 @@ For more details, see: https://go.microsoft.com/fwlink/?linkid=2226722
     # Output success message to Verbose stream only (quiet by default for performance)
     Write-Verbose "  [SUCCESS] Applied: $scriptName"
     $script:LastScriptError = $null
+    $script:LastFailedSql = $null
     return $true
   }
   catch {
@@ -2814,8 +2883,9 @@ For more details, see: https://go.microsoft.com/fwlink/?linkid=2226722
       $level++
     }
 
-    # Store error for caller to access (structural scripts need this for error reporting)
+    # Store error and executed SQL for caller to access (structural scripts need this for error reporting)
     $script:LastScriptError = $errorMessage
+    $script:LastFailedSql = $sql
 
     # Use Write-Verbose for retry attempts (failure may be temporary due to dependencies)
     # The calling code will use Write-Error if all retries fail
@@ -3011,13 +3081,12 @@ function Invoke-ScriptsWithDependencyRetries {
         'Unknown error'
       }
 
-      # Extract short error for display
-      $shortError = $errorMsg -split "`n" | Where-Object { $_ -match 'Error \d+:|Message:' } | Select-Object -First 1
-      if (-not $shortError) { $shortError = ($errorMsg -split "`n")[0] }
-      $shortError = $shortError.Trim() -replace '^\s*-?\s*', ''
-
+      # Display error chain
       Write-Host "  - $($failedScript.Name)" -ForegroundColor Red
-      Write-Host "    $shortError" -ForegroundColor DarkRed
+      $errorChain = Format-ErrorChain -FullError $errorMsg
+      foreach ($line in $errorChain) {
+        Write-Host "    $line" -ForegroundColor DarkRed
+      }
 
       # Derive folder from file path instead of hardcoding
       $scriptFolder = '14_Programmability'  # default fallback
@@ -3026,8 +3095,11 @@ function Invoke-ScriptsWithDependencyRetries {
         $scriptFolder = ($relativePath -split '[\\/]')[0]
       }
 
+      # Get the last failed SQL for this script (may have been overwritten by retries)
+      $failedSql = if ($script:LastFailedSql) { $script:LastFailedSql } else { '' }
+
       # Record for final summary
-      Add-FailedScript -ScriptName $failedScript.Name -ErrorMessage $errorMsg -Folder $scriptFolder -FilePath $failedScript.FullName
+      Add-FailedScript -ScriptName $failedScript.Name -ErrorMessage $errorMsg -Folder $scriptFolder -FilePath $failedScript.FullName -SqlContent $failedSql
     }
 
     if (-not $ContinueOnError) {
@@ -5820,15 +5892,16 @@ try {
 
       # Get and display error immediately (structural failures are fatal)
       $errorMsg = if ($script:LastScriptError) { $script:LastScriptError } else { 'Unknown error' }
-      $shortError = $errorMsg -split "`n" | Where-Object { $_ -match 'Error \d+:|Message:' } | Select-Object -First 1
-      if (-not $shortError) { $shortError = ($errorMsg -split "`n")[0] }
-      $shortError = $shortError.Trim() -replace '^\s*-?\s*', ''
+      $failedSql = if ($script:LastFailedSql) { $script:LastFailedSql } else { '' }
 
       Write-Host "  [ERROR] $($scriptFile.Name)" -ForegroundColor Red
-      Write-Host "    $shortError" -ForegroundColor DarkRed
+      $errorChain = Format-ErrorChain -FullError $errorMsg
+      foreach ($line in $errorChain) {
+        Write-Host "    $line" -ForegroundColor DarkRed
+      }
 
       # Record for final summary
-      Add-FailedScript -ScriptName $scriptFile.Name -ErrorMessage $errorMsg -Folder $currentFolder -FilePath $scriptFile.FullName
+      Add-FailedScript -ScriptName $scriptFile.Name -ErrorMessage $errorMsg -Folder $currentFolder -FilePath $scriptFile.FullName -SqlContent $failedSql
       if (-not $ContinueOnError) {
         # Set flag to abort - but don't throw error so we can still write error log
         $abortAfterStructuralFailure = $true
@@ -5980,15 +6053,16 @@ try {
 
         # Get error details
         $errorMsg = if ($script:LastScriptError) { $script:LastScriptError } else { 'Unknown error' }
-        $shortError = $errorMsg -split "`n" | Where-Object { $_ -match 'Error \d+:|Message:' } | Select-Object -First 1
-        if (-not $shortError) { $shortError = ($errorMsg -split "`n")[0] }
-        $shortError = $shortError.Trim() -replace '^\s*-?\s*', ''
+        $failedSql = if ($script:LastFailedSql) { $script:LastFailedSql } else { '' }
 
         Write-Host "  [ERROR] $($scriptFile.Name)" -ForegroundColor Red
-        Write-Host "    $shortError" -ForegroundColor DarkRed
+        $errorChain = Format-ErrorChain -FullError $errorMsg
+        foreach ($line in $errorChain) {
+          Write-Host "    $line" -ForegroundColor DarkRed
+        }
 
         # Record for final summary
-        Add-FailedScript -ScriptName $scriptFile.Name -ErrorMessage $errorMsg -Folder '15_SecurityPolicies' -FilePath $scriptFile.FullName
+        Add-FailedScript -ScriptName $scriptFile.Name -ErrorMessage $errorMsg -Folder '15_SecurityPolicies' -FilePath $scriptFile.FullName -SqlContent $failedSql
         if (-not $ContinueOnError) {
           $abortAfterStructuralFailure = $true
           Write-Host "[ERROR] Security policy script failed. Aborting import after writing error log." -ForegroundColor Red
@@ -6097,15 +6171,16 @@ try {
 
         # Get error details
         $errorMsg = if ($script:LastScriptError) { $script:LastScriptError } else { 'Unknown error' }
-        $shortError = $errorMsg -split "`n" | Where-Object { $_ -match 'Error \d+:|Message:' } | Select-Object -First 1
-        if (-not $shortError) { $shortError = ($errorMsg -split "`n")[0] }
-        $shortError = $shortError.Trim() -replace '^\s*-?\s*', ''
+        $failedSql = if ($script:LastFailedSql) { $script:LastFailedSql } else { '' }
 
         Write-Host "  [ERROR] $($scriptFile.Name)" -ForegroundColor Red
-        Write-Host "    $shortError" -ForegroundColor DarkRed
+        $errorChain = Format-ErrorChain -FullError $errorMsg
+        foreach ($line in $errorChain) {
+          Write-Host "    $line" -ForegroundColor DarkRed
+        }
 
         # Record for final summary
-        Add-FailedScript -ScriptName $scriptFile.Name -ErrorMessage $errorMsg -Folder '16_Data' -FilePath $scriptFile.FullName
+        Add-FailedScript -ScriptName $scriptFile.Name -ErrorMessage $errorMsg -Folder '16_Data' -FilePath $scriptFile.FullName -SqlContent $failedSql
         if (-not $ContinueOnError) {
           break
         }
@@ -6151,12 +6226,20 @@ try {
               $fkCount++
             }
             catch {
-              $fkErrorMsg = "Failed to re-enable FK $($fk.Name) on [$($table.Schema)].[$($table.Name)]: $($_.Exception.Message)"
-              if ($_.Exception.InnerException) {
-                $fkErrorMsg += "`n  Inner: $($_.Exception.InnerException.Message)"
+              $fkErrorMsg = "Failed to re-enable FK $($fk.Name) on [$($table.Schema)].[$($table.Name)]"
+              # Build full error with inner exceptions for Format-ErrorChain
+              $fkFullError = "Message: $($_.Exception.Message)"
+              $fkInner = $_.Exception.InnerException
+              while ($fkInner) {
+                $fkFullError += "`n        Message: $($fkInner.Message)"
+                $fkInner = $fkInner.InnerException
               }
               Write-Host "  [ERROR] $fkErrorMsg" -ForegroundColor Red
-              Add-FailedScript -ScriptName "FK: $($fk.Name)" -ErrorMessage $fkErrorMsg -Folder 'ForeignKeys'
+              $fkChain = Format-ErrorChain -FullError $fkFullError
+              foreach ($line in $fkChain) {
+                Write-Host "    $line" -ForegroundColor DarkRed
+              }
+              Add-FailedScript -ScriptName "FK: $($fk.Name)" -ErrorMessage $fkFullError -Folder 'ForeignKeys'
               $errorCount++
             }
           }
@@ -6325,7 +6408,10 @@ try {
     $displayCount = [Math]::Min($script:FailedScripts.Count, 10)
     for ($i = 0; $i -lt $displayCount; $i++) {
       $failure = $script:FailedScripts[$i]
-      Write-Host "  $($i + 1). [$($failure.Folder)] $($failure.ScriptName) - $($failure.ErrorMessage)" -ForegroundColor Red
+      Write-Host "  $($i + 1). [$($failure.Folder)] $($failure.ScriptName)" -ForegroundColor Red
+      foreach ($chainLine in ($failure.ErrorMessage -split "`n")) {
+        Write-Host "     $chainLine" -ForegroundColor DarkRed
+      }
     }
     if ($script:FailedScripts.Count -gt 10) {
       Write-Host "  ... and $($script:FailedScripts.Count - 10) more error(s)" -ForegroundColor Red

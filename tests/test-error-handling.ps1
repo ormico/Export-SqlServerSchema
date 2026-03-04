@@ -113,7 +113,7 @@ END
 
 # Clean up any existing test databases from previous runs
 Write-Host "[INFO] Cleaning up test databases from previous runs..." -ForegroundColor Gray
-@('TestDb_ErrorTest1', 'TestDb_ErrorTest3', 'TestDb_RetryError', 'TestDb_FKError') | ForEach-Object {
+@('TestDb_ErrorTest1', 'TestDb_ErrorTest3', 'TestDb_RetryError', 'TestDb_FKError', 'TestDb_ChainTest', 'TestDb_SqlContent') | ForEach-Object {
     Drop-TestDatabase -DbName $_
 }
 
@@ -395,6 +395,126 @@ Write-TestResult -TestName "FK error attributed to ForeignKeys folder" -Passed $
     -Message "FK errors should show 'Folder: ForeignKeys' in the error log"
 
 Drop-TestDatabase -DbName $targetDb5
+
+# ═══════════════════════════════════════════════════════════════
+# TEST 6: NESTED EXCEPTION CHAIN IN ERROR LOG
+# ═══════════════════════════════════════════════════════════════
+
+Write-Host "`n[INFO] Test 6: Nested Exception Chain in Error Log" -ForegroundColor Cyan
+
+# Re-use the retry export from Test 4 (which has fn_UnresolvableDep that causes nested exceptions)
+$chainExportDir = Join-Path $ExportPath "chain_export"
+& $exportScript -Server $Server -Database $SourceDatabase -OutputPath $chainExportDir `
+    -Credential $credential -Verbose:$false 2>&1 | Out-Null
+
+$chainExportedDir = Get-ChildItem $chainExportDir -Directory | Select-Object -First 1
+
+# Inject function with unresolvable dependency (causes nested exception: AggregateException -> SqlException)
+$chainBrokenDir = Join-Path $chainExportedDir.FullName "14_Programmability" "02_Functions"
+$chainBrokenSql = @"
+-- Function with unresolvable dependency for nested exception testing
+CREATE FUNCTION dbo.fn_ChainTest()
+RETURNS TABLE
+AS
+RETURN (SELECT * FROM dbo.TableThatDoesNotExist_ChainTest);
+GO
+"@
+$chainBrokenPath = Join-Path $chainBrokenDir "dbo.fn_ChainTest.sql"
+$chainBrokenSql | Set-Content -Path $chainBrokenPath
+
+$targetDb6 = "TestDb_ChainTest"
+Drop-TestDatabase -DbName $targetDb6
+
+try {
+    & $importScript -Server $Server -Database $targetDb6 `
+        -SourcePath $chainExportedDir.FullName -ConfigFile $configPath1 `
+        -Credential $credential -ContinueOnError 2>&1 | Out-Null
+} catch { }
+
+$chainErrorLogs = Get-ChildItem -Path $chainExportedDir.FullName -Filter "import_errors_*.log" -ErrorAction SilentlyContinue
+if ($chainErrorLogs.Count -gt 0) {
+    $chainLogContent = Get-Content $chainErrorLogs[0].FullName -Raw
+
+    # Test 6a: Error log contains inner exception message (not just outer wrapper)
+    $hasInnerException = $chainLogContent -match "Invalid object name"
+    Write-TestResult -TestName "Error log contains inner exception message" -Passed $hasInnerException `
+        -Message "Error log should show the inner SQL exception (e.g., 'Invalid object name'), not just wrapper"
+
+    # Test 6b: Error chain uses arrow format
+    $hasArrowFormat = $chainLogContent -match "→"
+    Write-TestResult -TestName "Error chain uses arrow (→) format" -Passed $hasArrowFormat `
+        -Message "Error chain should display messages with → prefix"
+
+    # Test 6c: Error Chain section exists in error log
+    $hasErrorChainSection = $chainLogContent -match "Error Chain:"
+    Write-TestResult -TestName "Error log has Error Chain section" -Passed $hasErrorChainSection `
+        -Message "Error log should have an 'Error Chain:' section with formatted messages"
+} else {
+    Write-TestResult -TestName "Error log contains inner exception message" -Passed $false `
+        -Message "No error log was created for chain test"
+    Write-TestResult -TestName "Error chain uses arrow (→) format" -Passed $false `
+        -Message "No error log was created for chain test"
+    Write-TestResult -TestName "Error log has Error Chain section" -Passed $false `
+        -Message "No error log was created for chain test"
+}
+
+Drop-TestDatabase -DbName $targetDb6
+
+# ═══════════════════════════════════════════════════════════════
+# TEST 7: EXECUTED SQL IN ERROR LOG
+# ═══════════════════════════════════════════════════════════════
+
+Write-Host "`n[INFO] Test 7: Executed SQL in Error Log" -ForegroundColor Cyan
+
+$sqlExportDir = Join-Path $ExportPath "sql_export"
+& $exportScript -Server $Server -Database $SourceDatabase -OutputPath $sqlExportDir `
+    -Credential $credential -Verbose:$false 2>&1 | Out-Null
+
+$sqlExportedDir = Get-ChildItem $sqlExportDir -Directory | Select-Object -First 1
+
+# Inject a broken script with recognizable SQL content
+$sqlBrokenDir = Join-Path $sqlExportedDir.FullName "14_Programmability" "02_Functions"
+$sqlBrokenContent = @"
+-- Unique marker for SQL content test: MARKER_SQL_CONTENT_TEST_12345
+CREATE FUNCTION dbo.fn_SqlContentTest()
+RETURNS TABLE
+AS
+RETURN (SELECT * FROM dbo.NonExistentTable_SqlContentTest);
+GO
+"@
+$sqlBrokenPath = Join-Path $sqlBrokenDir "dbo.fn_SqlContentTest.sql"
+$sqlBrokenContent | Set-Content -Path $sqlBrokenPath
+
+$targetDb7 = "TestDb_SqlContent"
+Drop-TestDatabase -DbName $targetDb7
+
+try {
+    & $importScript -Server $Server -Database $targetDb7 `
+        -SourcePath $sqlExportedDir.FullName -ConfigFile $configPath1 `
+        -Credential $credential -ContinueOnError 2>&1 | Out-Null
+} catch { }
+
+$sqlErrorLogs = Get-ChildItem -Path $sqlExportedDir.FullName -Filter "import_errors_*.log" -ErrorAction SilentlyContinue
+if ($sqlErrorLogs.Count -gt 0) {
+    $sqlLogContent = Get-Content $sqlErrorLogs[0].FullName -Raw
+
+    # Test 7a: Error log contains "Executed SQL:" section
+    $hasExecutedSqlSection = $sqlLogContent -match "Executed SQL:"
+    Write-TestResult -TestName "Error log has Executed SQL section" -Passed $hasExecutedSqlSection `
+        -Message "Error log should include 'Executed SQL:' section for failed scripts"
+
+    # Test 7b: Error log contains the actual SQL content
+    $hasSqlContent = $sqlLogContent -match "MARKER_SQL_CONTENT_TEST_12345"
+    Write-TestResult -TestName "Error log contains actual SQL content" -Passed $hasSqlContent `
+        -Message "Error log should contain the SQL that was executed (including unique marker)"
+} else {
+    Write-TestResult -TestName "Error log has Executed SQL section" -Passed $false `
+        -Message "No error log was created for SQL content test"
+    Write-TestResult -TestName "Error log contains actual SQL content" -Passed $false `
+        -Message "No error log was created for SQL content test"
+}
+
+Drop-TestDatabase -DbName $targetDb7
 
 # ═══════════════════════════════════════════════════════════════
 # CLEANUP
