@@ -37,7 +37,7 @@ foreach ($file in $testFiles) {
         continue
     }
 
-    $typeLine -match '^\s*#\s*TestType:\s*(\S+)' | Out-Null
+    ($typeLine | Select-Object -First 1) -match '^\s*#\s*TestType:\s*(\S+)' | Out-Null
     $testType = $Matches[1]
 
     if ($testType -eq 'unit') {

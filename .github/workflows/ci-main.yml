@@ -81,7 +81,6 @@ jobs:
       - name: Install PowerShell modules
         shell: pwsh
         run: |
-          Install-Module -Name SqlServer -Scope CurrentUser -Force -AllowClobber
           Install-Module -Name powershell-yaml -Scope CurrentUser -Force -AllowClobber
           Write-Host "[SUCCESS] PowerShell modules installed"
 

@@ -18,7 +18,6 @@ jobs:
       - name: Install PowerShell modules
         shell: pwsh
         run: |
-          Install-Module -Name SqlServer -Scope CurrentUser -Force -AllowClobber
           Install-Module -Name powershell-yaml -Scope CurrentUser -Force -AllowClobber
           Write-Host "[SUCCESS] PowerShell modules installed"
 
@@ -26,14 +25,6 @@ jobs:
         shell: pwsh
         working-directory: ./tests
         run: ./run-all-unit-tests.ps1
-
-      - name: Upload test artifacts
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: unit-test-exports
-          path: tests/exports/
-          retention-days: 7
 
   integration-tests:
     name: Run Integration Tests
