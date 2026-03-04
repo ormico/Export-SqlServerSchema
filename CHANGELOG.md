@@ -5,6 +5,12 @@ All notable changes to Export-SqlServerSchema will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.9.1] - 2026-03-04
+
+### Fixed
+
+- **Import summary output now uses colored `Write-Host` instead of `Write-Output`** — The end-of-import execution results (`[SUCCESS]`, `[INFO]`, `[ERROR]` lines) now display with proper color formatting (green, yellow, red) instead of plain uncolored `Write-Output`, matching the project's console output conventions.
+
 ## [1.9.0] - 2026-03-04
 
 ### Changed
