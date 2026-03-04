@@ -39,27 +39,21 @@ Write-Host "`n========================================" -ForegroundColor Cyan
 Write-Host "ExcludeObjects Import Test" -ForegroundColor Cyan
 Write-Host "========================================`n" -ForegroundColor Cyan
 
-# ── Load the import script to get access to Test-ObjectExcluded ──
-# Extract the function definition and define it in test scope via ScriptBlock.
+# ── Load import filter helpers (Test-SchemaExcluded, Test-ObjectExcluded, Test-ScriptExcluded) ──
+$importHelpers = Join-Path $PSScriptRoot '..' 'Import-Helpers.ps1'
+if (-not (Test-Path $importHelpers)) {
+  Write-Host "[ERROR] Import-Helpers.ps1 not found at $importHelpers" -ForegroundColor Red
+  exit 1
+}
+. $importHelpers
 
+# Still need the main script content for config/parameter validation tests
 $importScript = Join-Path $PSScriptRoot '..' 'Import-SqlServerSchema.ps1'
 if (-not (Test-Path $importScript)) {
   Write-Host "[ERROR] Import-SqlServerSchema.ps1 not found at $importScript" -ForegroundColor Red
   exit 1
 }
-
 $scriptContent = Get-Content $importScript -Raw
-
-# Extract function and dot-source via temp file to define in caller scope
-if ($scriptContent -match '(?ms)(function Test-ObjectExcluded \{.+?\n\})') {
-  $tempFunc = Join-Path ([System.IO.Path]::GetTempPath()) "Test-ObjectExcluded_$(Get-Random).ps1"
-  $matches[1] | Out-File -FilePath $tempFunc -Encoding utf8
-  . $tempFunc
-  Remove-Item $tempFunc -Force
-} else {
-  Write-Host "[ERROR] Could not extract Test-ObjectExcluded function from Import-SqlServerSchema.ps1" -ForegroundColor Red
-  exit 1
-}
 
 # ═══════════════════════════════════════════════════════════════
 # PHASE 1: Test Test-ObjectExcluded directly
