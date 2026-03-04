@@ -238,6 +238,7 @@ DbScripts/
 | `-IncludeObjectTypes` | No | Whitelist: Only import specified types (e.g., Schemas,Tables,Views) |
 | `-ExcludeObjectTypes` | No | Blacklist: Import all except specified types (e.g., WindowsUsers) |
 | `-ExcludeSchemas` | No | Exclude scripts by schema prefix (e.g., cdc,staging) |
+| `-ExcludeObjects` | No | Exclude specific objects by filename pattern (e.g., dbo.usp_Legacy*) |
 | `-Credential` | No | SQL authentication credentials |
 | `-ServerFromEnv` | No | Env var name for server address (e.g., SQLCMD_SERVER) |
 | `-UsernameFromEnv` | No | Env var name for username (e.g., SQLCMD_USER) |
@@ -665,6 +666,29 @@ Both Export and Import scripts support filtering which object types to process v
 ```
 
 **Why `-Force`?** The Import script checks if the database already contains objects and stops to prevent accidental overwrites. When doing selective imports to an existing database, use `-Force` to bypass this check.
+
+**Object exclusion** (`-ExcludeObjects`): Exclude individual objects by `schema.objectName` filename pattern
+```powershell
+# Exclude a specific stored procedure
+./Import-SqlServerSchema.ps1 -Server localhost -Database MyDb -SourcePath ./DbScripts/... `
+    -ExcludeObjects "dbo.usp_LegacyReport"
+
+# Exclude multiple stored procedures with overlapping names
+# "dbo.usp_Process" does NOT match "dbo.usp_ProcessOrders" — full name match required
+./Import-SqlServerSchema.ps1 -Server localhost -Database MyDb -SourcePath ./DbScripts/... `
+    -ExcludeObjects "dbo.usp_Process","dbo.usp_ProcessOrders"
+
+# Wildcard: exclude all stored procedures starting with usp_Legacy
+# Matches dbo.usp_LegacyReport, dbo.usp_LegacyImport, etc.
+./Import-SqlServerSchema.ps1 -Server localhost -Database MyDb -SourcePath ./DbScripts/... `
+    -ExcludeObjects "dbo.usp_Legacy*"
+
+# Exclude all objects in the staging schema
+./Import-SqlServerSchema.ps1 -Server localhost -Database MyDb -SourcePath ./DbScripts/... `
+    -ExcludeObjects "staging.*"
+```
+
+> **Note:** `-ExcludeObjects` matches against `schema.objectName` extracted from filenames (not SQL object names). It uses PowerShell `-ilike` for full string matching — `dbo.usp_Process` will **not** match `dbo.usp_ProcessOrders`. Only applies to schema-bound folders (Tables, Views, Functions, StoredProcedures, etc.) when using single grouping mode. See [#118](https://github.com/AgileSqlClub/Export-SqlServerSchema/issues/118) for known limitations.
 
 ### Multi-Pass Import with -Force Flag
 
