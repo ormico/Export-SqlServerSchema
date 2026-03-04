@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Import summary output now uses colored `Write-Host` instead of `Write-Output`** — The end-of-import execution results (`[SUCCESS]`, `[INFO]`, `[ERROR]` lines) now display with proper color formatting (green, yellow, red) instead of plain uncolored `Write-Output`, matching the project's console output conventions.
 
+- **Release workflow missing `Import-Helpers.ps1` and `ConvertTo-ImportReport.ps1`** — The `ci-main.yml` release job did not copy `Import-Helpers.ps1` or `ConvertTo-ImportReport.ps1` into the release archive. Both files are required at runtime: `Import-SqlServerSchema.ps1` dot-sources `Import-Helpers.ps1` and invokes `ConvertTo-ImportReport.ps1` for post-import summaries.
+
 ## [1.9.0] - 2026-03-04
 
 ### Changed
