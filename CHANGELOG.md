@@ -5,6 +5,15 @@ All notable changes to Export-SqlServerSchema will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **`DatabaseFromEnv` and `TrustServerCertificateFromEnv` parameters (#86)** — Complete the `*FromEnv` pattern for all connection properties:
+  - `-DatabaseFromEnv` CLI parameter and `connection.databaseFromEnv` config key resolve database name from an environment variable
+  - `-TrustServerCertificateFromEnv` CLI parameter and `connection.trustServerCertificateFromEnv` config key resolve TrustServerCertificate from an environment variable (accepts `true`/`false`/`1`/`0`)
+  - Both follow the same precedence chain: CLI explicit > CLI `*FromEnv` > CLI `-ConnectionStringFromEnv` > config `connection.*FromEnv` > config `connection.connectionStringFromEnv` > defaults
+
 ## [1.9.0] - 2026-03-03
 
 ### Added

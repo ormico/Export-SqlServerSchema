@@ -209,6 +209,18 @@ connection:
   serverFromEnv: SQLCMD_SERVER
 ```
 
+#### `connection.databaseFromEnv`
+
+- **Type**: String
+- **Default**: none
+- **Description**: Name of an environment variable containing the database name
+- **Precedence**: Only used when `-Database` is not explicitly provided on the command line
+
+```yaml
+connection:
+  databaseFromEnv: SQLCMD_DATABASE
+```
+
 #### `connection.usernameFromEnv`
 
 - **Type**: String
@@ -246,6 +258,18 @@ connection:
   trustServerCertificate: true
 ```
 
+#### `connection.trustServerCertificateFromEnv`
+
+- **Type**: String
+- **Default**: none
+- **Description**: Name of an environment variable containing a boolean value (`true`/`false`/`1`/`0`) for TrustServerCertificate
+- **Precedence**: Only used when `-TrustServerCertificate` switch is not explicitly provided. Takes precedence over `connection.trustServerCertificate` (static boolean) and root-level `trustServerCertificate`.
+
+```yaml
+connection:
+  trustServerCertificateFromEnv: SQLCMD_TRUST_CERT
+```
+
 #### `connection.connectionStringFromEnv`
 
 - **Type**: String
@@ -279,9 +303,10 @@ Using individual env vars:
 ```yaml
 connection:
   serverFromEnv: SQLCMD_SERVER
+  databaseFromEnv: SQLCMD_DATABASE
   usernameFromEnv: SQLCMD_USER
   passwordFromEnv: SQLCMD_PASSWORD
-  trustServerCertificate: true
+  trustServerCertificateFromEnv: SQLCMD_TRUST_CERT
 ```
 
 Using a single connection string env var:
@@ -293,12 +318,13 @@ connection:
 
 #### Credential Precedence
 
-1. **Explicit CLI parameters** (`-Credential`, `-Server`, `-Database`) — highest priority
-2. **CLI individual `*FromEnv` parameters** (`-ServerFromEnv`, `-UsernameFromEnv`, `-PasswordFromEnv`)
+1. **Explicit CLI parameters** (`-Credential`, `-Server`, `-Database`, `-TrustServerCertificate`) — highest priority
+2. **CLI individual `*FromEnv` parameters** (`-ServerFromEnv`, `-DatabaseFromEnv`, `-UsernameFromEnv`, `-PasswordFromEnv`, `-TrustServerCertificateFromEnv`)
 3. **CLI `-ConnectionStringFromEnv`** (full ADO.NET connection string in one env var)
-4. **Config file `connection:` section** — `connection.serverFromEnv`, `connection.usernameFromEnv`,
-   `connection.passwordFromEnv`, `connection.connectionStringFromEnv` (in that order)
-5. **Default** — Windows integrated authentication
+4. **Config file `connection:` section** — `connection.serverFromEnv`, `connection.databaseFromEnv`, `connection.usernameFromEnv`,
+   `connection.passwordFromEnv`, `connection.trustServerCertificateFromEnv`, `connection.connectionStringFromEnv` (in that order)
+5. **Config file static settings** — `connection.trustServerCertificate`, root-level `trustServerCertificate`
+6. **Default** — Windows integrated authentication
 
 #### `targetSqlVersion`
 

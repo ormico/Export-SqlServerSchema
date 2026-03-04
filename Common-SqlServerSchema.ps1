@@ -315,11 +315,12 @@ function Resolve-EnvCredential {
     .DESCRIPTION
         Builds a PSCredential from environment variable names specified via *FromEnv parameters
         or config file connection section. Follows precedence (high to low):
-          1. Explicit -Credential / -Server / -Database command-line parameters
-          2. Individual *FromEnv CLI parameters (-ServerFromEnv, -UsernameFromEnv, -PasswordFromEnv)
+          1. Explicit -Credential / -Server / -Database / -TrustServerCertificate command-line parameters
+          2. Individual *FromEnv CLI parameters (-ServerFromEnv, -DatabaseFromEnv, -UsernameFromEnv, -PasswordFromEnv, -TrustServerCertificateFromEnv)
           3. -ConnectionStringFromEnv CLI parameter (full ADO.NET connection string in env var)
-          4. Config file connection: section equivalents
-          5. Defaults (Windows auth, no overrides)
+          4. Config file connection: section equivalents (serverFromEnv, databaseFromEnv, usernameFromEnv, passwordFromEnv, trustServerCertificateFromEnv, connectionStringFromEnv)
+          5. Config root-level trustServerCertificate
+          6. Defaults (Windows auth, no overrides)
     .OUTPUTS
         Hashtable with resolved Server, Database, Credential, and TrustServerCertificate values.
   #>
@@ -328,9 +329,11 @@ function Resolve-EnvCredential {
     [string]$DatabaseParam,
     [pscredential]$CredentialParam,
     [string]$ServerFromEnvParam,
+    [string]$DatabaseFromEnvParam,
     [string]$UsernameFromEnvParam,
     [string]$PasswordFromEnvParam,
     [string]$ConnectionStringFromEnvParam,
+    [string]$TrustServerCertificateFromEnvParam,
     [bool]$TrustServerCertificateParam,
     [hashtable]$Config,
     [hashtable]$BoundParameters
@@ -344,21 +347,50 @@ function Resolve-EnvCredential {
   }
 
   # --- Resolve TrustServerCertificate ---
-  # CLI switch > config connection section > config root-level > connection string > default (false)
+  # CLI switch > TrustServerCertificateFromEnv CLI > config connection.trustServerCertificateFromEnv
+  # > config connection.trustServerCertificate > config root-level trustServerCertificate > connection string > default (false)
+  # Note: config connection.trustServerCertificateFromEnv is skipped when CLI -ConnectionStringFromEnv
+  # is provided (CLI connection string has higher precedence than config *FromEnv).
   $trustResolvedFromHigherPriority = $BoundParameters.ContainsKey('TrustServerCertificate')
   if (-not $trustResolvedFromHigherPriority) {
-    $trustResolved = $false
-    if ($Config -and $Config.ContainsKey('connection') -and $Config.connection -is [System.Collections.IDictionary]) {
-      if ($Config.connection.ContainsKey('trustServerCertificate')) {
-        $result.TrustServerCertificate = [bool]$Config.connection.trustServerCertificate
-        $trustResolved = $true
-        $trustResolvedFromHigherPriority = $true
+    # Try TrustServerCertificateFromEnv (CLI first, config fallback only if no CLI ConnectionStringFromEnv)
+    $trustEnvName = $TrustServerCertificateFromEnvParam
+    if (-not $trustEnvName -and -not $ConnectionStringFromEnvParam -and $Config -and $Config.ContainsKey('connection') -and $Config.connection -is [System.Collections.IDictionary]) {
+      if ($Config.connection.ContainsKey('trustServerCertificateFromEnv')) {
+        $trustEnvName = $Config.connection.trustServerCertificateFromEnv
       }
     }
-    # Only fall back to root-level if connection section didn't specify it
-    if (-not $trustResolved -and $Config -and $Config.ContainsKey('trustServerCertificate')) {
-      $result.TrustServerCertificate = [bool]$Config.trustServerCertificate
+
+    if ($trustEnvName) {
+      $trustEnvValue = [System.Environment]::GetEnvironmentVariable($trustEnvName)
+      if ([string]::IsNullOrWhiteSpace($trustEnvValue)) {
+        throw "Environment variable '$trustEnvName' (specified via TrustServerCertificateFromEnv) is not set or is empty."
+      }
+      # Parse as boolean: accept "true"/"false"/"1"/"0"
+      switch ($trustEnvValue.Trim().ToLowerInvariant()) {
+        'true'  { $result.TrustServerCertificate = $true }
+        '1'     { $result.TrustServerCertificate = $true }
+        'false' { $result.TrustServerCertificate = $false }
+        '0'     { $result.TrustServerCertificate = $false }
+        default { throw "Environment variable '$trustEnvName' (specified via TrustServerCertificateFromEnv) has invalid value '$trustEnvValue'. Expected 'true', 'false', '1', or '0'." }
+      }
       $trustResolvedFromHigherPriority = $true
+      Write-Verbose "[ENV] TrustServerCertificate resolved from environment variable '$trustEnvName'"
+    }
+    else {
+      $trustResolved = $false
+      if ($Config -and $Config.ContainsKey('connection') -and $Config.connection -is [System.Collections.IDictionary]) {
+        if ($Config.connection.ContainsKey('trustServerCertificate')) {
+          $result.TrustServerCertificate = [bool]$Config.connection.trustServerCertificate
+          $trustResolved = $true
+          $trustResolvedFromHigherPriority = $true
+        }
+      }
+      # Only fall back to root-level if connection section didn't specify it
+      if (-not $trustResolved -and $Config -and $Config.ContainsKey('trustServerCertificate')) {
+        $result.TrustServerCertificate = [bool]$Config.trustServerCertificate
+        $trustResolvedFromHigherPriority = $true
+      }
     }
   }
 
@@ -381,6 +413,30 @@ function Resolve-EnvCredential {
       $result.Server = $envValue
       $serverResolvedFromHigherPriority = $true
       Write-Verbose "[ENV] Server resolved from environment variable '$serverEnvName'"
+    }
+  }
+
+  # --- Resolve Database from individual *FromEnv ---
+  # CLI -Database > -DatabaseFromEnv > config connection.databaseFromEnv > connection string
+  # Note: config connection.databaseFromEnv is skipped when CLI -ConnectionStringFromEnv
+  # is provided (CLI connection string has higher precedence than config *FromEnv).
+  $databaseResolvedFromHigherPriority = $BoundParameters.ContainsKey('Database') -and -not [string]::IsNullOrWhiteSpace($DatabaseParam)
+  if (-not $databaseResolvedFromHigherPriority) {
+    $databaseEnvName = $DatabaseFromEnvParam
+    if (-not $databaseEnvName -and -not $ConnectionStringFromEnvParam -and $Config -and $Config.ContainsKey('connection') -and $Config.connection -is [System.Collections.IDictionary]) {
+      if ($Config.connection.ContainsKey('databaseFromEnv')) {
+        $databaseEnvName = $Config.connection.databaseFromEnv
+      }
+    }
+
+    if ($databaseEnvName) {
+      $envValue = [System.Environment]::GetEnvironmentVariable($databaseEnvName)
+      if ([string]::IsNullOrWhiteSpace($envValue)) {
+        throw "Environment variable '$databaseEnvName' (specified via DatabaseFromEnv) is not set or is empty."
+      }
+      $result.Database = $envValue
+      $databaseResolvedFromHigherPriority = $true
+      Write-Verbose "[ENV] Database resolved from environment variable '$databaseEnvName'"
     }
   }
 
@@ -450,7 +506,6 @@ function Resolve-EnvCredential {
       Write-Verbose "[ENV] Server resolved from connection string in environment variable '$connStrEnvName'"
     }
 
-    $databaseResolvedFromHigherPriority = $BoundParameters.ContainsKey('Database') -and -not [string]::IsNullOrWhiteSpace($DatabaseParam)
     if (-not $databaseResolvedFromHigherPriority -and -not [string]::IsNullOrWhiteSpace($parsed.Database)) {
       $result.Database = $parsed.Database
       Write-Verbose "[ENV] Database resolved from connection string in environment variable '$connStrEnvName'"
