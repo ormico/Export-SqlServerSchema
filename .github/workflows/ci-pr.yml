@@ -110,6 +110,20 @@ jobs:
           Write-Host "Running validate-only tests..."
           ./test-validate-only.ps1
 
+      - name: Run import integrity report tests
+        shell: pwsh
+        working-directory: ./tests
+        run: |
+          Write-Host "Running import integrity report tests..."
+          ./test-import-integrity-report.ps1
+
+      - name: Run import report rendering tests
+        shell: pwsh
+        working-directory: ./tests
+        run: |
+          Write-Host "Running import report rendering tests..."
+          ./test-convert-import-report.ps1
+
       - name: Run config auto-discovery tests
         shell: pwsh
         working-directory: ./tests
