@@ -14,6 +14,7 @@
 .NOTES
     Issue: #93 - Unique indexes should load before foreign key constraints
 #>
+# TestType: unit
 
 param()
 

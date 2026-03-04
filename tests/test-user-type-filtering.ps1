@@ -14,6 +14,7 @@
     Requires: SQL Server container running (docker-compose up -d)
     Tests Bug #2 fix: Cross-platform user filtering
 #>
+# TestType: integration
 
 param(
     [string]$ConfigFile = ".env"

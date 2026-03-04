@@ -10,6 +10,7 @@
     'DatabaseConfiguration' matched 'Data'. The fix strips numeric prefixes and uses
     -like with a trailing wildcard for safe substring-start matching.
 #>
+# TestType: unit
 
 $ErrorActionPreference = 'Stop'
 Set-Location $PSScriptRoot

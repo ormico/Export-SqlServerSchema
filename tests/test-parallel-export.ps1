@@ -9,6 +9,7 @@
     Verifies parallel export produces identical output to sequential export.
     Tests different worker counts and grouping modes.
 #>
+# TestType: integration
 
 [CmdletBinding()]
 param()

@@ -11,6 +11,7 @@
     2. YAML config file exclusion
     3. Command-line overriding config settings
 #>
+# TestType: integration
 
 param(
     [string]$Server = 'localhost',

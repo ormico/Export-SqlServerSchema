@@ -22,6 +22,7 @@
 .NOTES
     Issue: #67 - Post-Import Integrity Report
 #>
+# TestType: unit
 
 param()
 

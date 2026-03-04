@@ -22,6 +22,7 @@
     Requires: SQL Server container running (docker-compose up -d in tests/)
     Tests Issue #63: ConnectionStringFromEnv parameter
 #>
+# TestType: integration
 
 param(
     [string]$ConfigFile = ".env"

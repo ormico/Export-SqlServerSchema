@@ -15,6 +15,7 @@
     Requires: SQL Server container running (docker-compose up -d)
     Tests Bug #3 fix: Improved error reporting
 #>
+# TestType: integration
 
 param(
     [string]$ConfigFile = ".env"

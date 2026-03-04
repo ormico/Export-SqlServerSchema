@@ -19,6 +19,7 @@
 .NOTES
     Issue: #69 - Import report rendering
 #>
+# TestType: unit
 
 param()
 

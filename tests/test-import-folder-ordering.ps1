@@ -15,6 +15,7 @@
 .NOTES
     Issue: #98 - Import-aware folder ordering
 #>
+# TestType: unit
 
 param()
 

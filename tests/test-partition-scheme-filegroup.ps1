@@ -16,6 +16,7 @@
 .NOTES
     Issue: #80 - removeToPrimary incorrectly replaces partition schemes with [PRIMARY]
 #>
+# TestType: unit
 
 param()
 

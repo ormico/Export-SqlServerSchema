@@ -21,6 +21,7 @@
     ./test-export-strip-filestream.ps1
     ./test-export-strip-filestream.ps1 -ConfigFile ./custom.env
 #>
+# TestType: integration
 
 param(
     [string]$ConfigFile = ".env"

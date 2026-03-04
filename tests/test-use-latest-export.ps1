@@ -20,6 +20,7 @@
 .NOTES
     Issue: #71 - UseLatestExport switch
 #>
+# TestType: unit
 
 param()
 

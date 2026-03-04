@@ -12,6 +12,7 @@
 .NOTES
     Does NOT require a SQL Server connection. All tests run locally.
 #>
+# TestType: unit
 
 $ErrorActionPreference = 'Stop'
 $scriptDir = $PSScriptRoot

@@ -26,6 +26,7 @@
     ./test-clr-strict-security.ps1
     ./test-clr-strict-security.ps1 -ConfigFile ./custom.env
 #>
+# TestType: integration
 
 param(
     [string]$ConfigFile = ".env"

@@ -11,6 +11,7 @@
 .NOTES
     Requires: SQL Server container running (docker-compose up -d)
 #>
+# TestType: integration
 
 param(
     [string]$Server = 'localhost',

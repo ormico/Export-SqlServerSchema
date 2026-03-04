@@ -15,6 +15,7 @@
     Requires: SQL Server container running (docker-compose up -d)
     Note: Memory-optimized tests may be skipped if SQL Server edition doesn't support it
 #>
+# TestType: integration
 
 param(
     [string]$ConfigFile = ".env"
