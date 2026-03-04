@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Config `serverFromEnv`/`usernameFromEnv`/`passwordFromEnv` no longer override CLI `-ConnectionStringFromEnv` (#105)** — Added `-not $ConnectionStringFromEnvParam` guards to the config fallback paths for server and credential resolution in `Resolve-EnvCredential`, matching the fix already applied for `databaseFromEnv` and `trustServerCertificateFromEnv` in #102.
+
+- **Improved error reporting with full exception chains (#92)** — SQL errors during import now display all nested exception messages instead of only the outermost wrapper (e.g., "One or more errors occurred."):
+  - Console output and end-of-import summary show error chains with `→` arrow format, making root causes immediately visible
+  - Error log files include an "Error Chain" section and the executed SQL (truncated to 200 lines) for failed schema scripts, aiding diagnosis of transformation bugs
+  - Integrity report JSON adds structured `errorChain` array with exception type and message at each nesting level; `errorMessage` now contains only the root cause (innermost exception) for clean machine consumption
+  - SQL content is automatically redacted for password/secret patterns before logging; data script SQL is excluded entirely to prevent PII exposure
+
 ### Added
 
 - **`DatabaseFromEnv` and `TrustServerCertificateFromEnv` parameters (#86)** — Complete the `*FromEnv` pattern for all connection properties:

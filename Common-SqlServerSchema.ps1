@@ -396,10 +396,12 @@ function Resolve-EnvCredential {
 
   # --- Resolve Server from individual *FromEnv ---
   # CLI -Server > -ServerFromEnv > config connection.serverFromEnv
+  # Note: config connection.serverFromEnv is skipped when CLI -ConnectionStringFromEnv
+  # is provided (CLI connection string has higher precedence than config *FromEnv).
   $serverResolvedFromHigherPriority = $BoundParameters.ContainsKey('Server') -and -not [string]::IsNullOrWhiteSpace($ServerParam)
   if (-not $serverResolvedFromHigherPriority) {
     $serverEnvName = $ServerFromEnvParam
-    if (-not $serverEnvName -and $Config -and $Config.ContainsKey('connection') -and $Config.connection -is [System.Collections.IDictionary]) {
+    if (-not $serverEnvName -and -not $ConnectionStringFromEnvParam -and $Config -and $Config.ContainsKey('connection') -and $Config.connection -is [System.Collections.IDictionary]) {
       if ($Config.connection.ContainsKey('serverFromEnv')) {
         $serverEnvName = $Config.connection.serverFromEnv
       }
@@ -442,13 +444,16 @@ function Resolve-EnvCredential {
 
   # --- Resolve Credential from individual *FromEnv ---
   # CLI -Credential > *FromEnv params > config connection.*FromEnv
+  # Note: config connection.*FromEnv is skipped when CLI -ConnectionStringFromEnv
+  # is provided (CLI connection string has higher precedence than config *FromEnv).
   $credResolvedFromHigherPriority = $BoundParameters.ContainsKey('Credential') -and $null -ne $CredentialParam
   if (-not $credResolvedFromHigherPriority) {
     $usernameEnvName = $UsernameFromEnvParam
     $passwordEnvName = $PasswordFromEnvParam
 
-    # Fall back to config file connection section
-    if ($Config -and $Config.ContainsKey('connection') -and $Config.connection -is [System.Collections.IDictionary]) {
+    # Fall back to config file connection section (skip if CLI ConnectionStringFromEnv is provided,
+    # since CLI connection string has higher precedence than config *FromEnv)
+    if (-not $ConnectionStringFromEnvParam -and $Config -and $Config.ContainsKey('connection') -and $Config.connection -is [System.Collections.IDictionary]) {
       if (-not $usernameEnvName -and $Config.connection.ContainsKey('usernameFromEnv')) {
         $usernameEnvName = $Config.connection.usernameFromEnv
       }

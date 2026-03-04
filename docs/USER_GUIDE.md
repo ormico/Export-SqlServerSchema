@@ -675,7 +675,16 @@ The `effectiveConfiguration` section shows where each parameter value came from:
     { "type": "SecurityPolicy", "schema": "dbo", "name": "FilterPolicy", "filePath": "20_SecurityPolicies/dbo.FilterPolicy.sql", "reason": "DevMode_SecurityPolicy" }
   ],
   "failedObjects": [
-    { "type": "Programmability", "schema": "dbo", "name": "BrokenProc", "filePath": "14_Programmability/03_StoredProcedures/dbo.BrokenProc.sql", "reason": "SqlError", "errorMessage": "Invalid object name 'dbo.MissingTable'." }
+    {
+      "type": "Programmability", "schema": "dbo", "name": "BrokenProc",
+      "filePath": "14_Programmability/03_StoredProcedures/dbo.BrokenProc.sql",
+      "reason": "SqlError",
+      "errorMessage": "Invalid object name 'dbo.MissingTable'.",
+      "errorChain": [
+        { "type": "System.AggregateException", "message": "One or more errors occurred." },
+        { "type": "Microsoft.Data.SqlClient.SqlException", "message": "Invalid object name 'dbo.MissingTable'." }
+      ]
+    }
   ]
 }
 ```
