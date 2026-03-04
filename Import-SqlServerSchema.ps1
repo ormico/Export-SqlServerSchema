@@ -1126,6 +1126,29 @@ function Test-Dependencies {
   }
 }
 
+function Redact-SqlSecrets {
+  <#
+    .SYNOPSIS
+        Redacts secret values from SQL content before logging.
+    .DESCRIPTION
+        Replaces password and secret string literals that follow known T-SQL
+        keywords (PASSWORD, SECRET) with a redaction placeholder. Handles
+        SQL Server escaped single quotes within string literals.
+  #>
+  param([string]$Sql)
+
+  if ([string]::IsNullOrWhiteSpace($Sql)) { return $Sql }
+
+  # Redact PASSWORD = N'...' and PASSWORD = '...' (covers ENCRYPTION BY PASSWORD, DECRYPTION BY PASSWORD, WITH PASSWORD, etc.)
+  # The SQL string literal pattern handles escaped quotes: N?'([^']|'')*'
+  $Sql = $Sql -replace "(PASSWORD\s*=\s*N?)'(?:[^']|'')*'", "`$1'***REDACTED***'"
+
+  # Redact SECRET = N'...' and SECRET = '...' (database scoped credentials)
+  $Sql = $Sql -replace "(SECRET\s*=\s*N?)'(?:[^']|'')*'", "`$1'***REDACTED***'"
+
+  return $Sql
+}
+
 function Format-ErrorChain {
   <#
     .SYNOPSIS
@@ -1181,11 +1204,13 @@ function Add-FailedScript {
     .PARAMETER ScriptName
         Name of the failed script file.
     .PARAMETER ErrorMessage
-        The error message (preferably the innermost SQL error).
+        The full error string including nested exception details. Format-ErrorChain
+        extracts individual messages from this to build the display chain.
     .PARAMETER Folder
         The folder the script belongs to (e.g., '09_Tables_PrimaryKey').
     .PARAMETER SqlContent
         The SQL that was actually executed (may differ from source if transformations were applied).
+        Secrets are automatically redacted before storage.
   #>
   param(
     [Parameter(Mandatory)]
@@ -1205,13 +1230,16 @@ function Add-FailedScript {
   $errorChain = Format-ErrorChain -FullError $ErrorMessage
   $chainText = ($errorChain -join "`n")
 
+  # Redact secrets from SQL before storing (passwords, secrets injected by transformations)
+  $redactedSql = if ($SqlContent) { Redact-SqlSecrets -Sql $SqlContent } else { '' }
+
   [void]$script:FailedScripts.Add([PSCustomObject]@{
     ScriptName   = $ScriptName
     FilePath     = $FilePath
     Folder       = $Folder
     ErrorMessage = $chainText
     FullError    = $ErrorMessage
-    SqlContent   = $SqlContent
+    SqlContent   = $redactedSql
     Timestamp    = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
   })
 }
@@ -3027,6 +3055,7 @@ function Invoke-ScriptsWithDependencyRetries {
   $pendingScripts = @($Scripts)
   $attempt = 1
   $failedScriptErrors = @{}  # Track last error for each failed script
+  $failedScriptSql = @{}     # Track last failed SQL for each script (per-script, not global)
 
   while ($pendingScripts.Count -gt 0 -and $attempt -le $MaxRetries) {
     if ($attempt -gt 1) {
@@ -3068,6 +3097,9 @@ function Invoke-ScriptsWithDependencyRetries {
         if ($failedScriptErrors.ContainsKey($scriptFile.Name)) {
           $failedScriptErrors.Remove($scriptFile.Name)
         }
+        if ($failedScriptSql.ContainsKey($scriptFile.Name)) {
+          $failedScriptSql.Remove($scriptFile.Name)
+        }
         # Track for integrity report
         Add-ImportedObject -FilePath $scriptFile.FullName -SourcePath $SourcePath
       }
@@ -3080,6 +3112,10 @@ function Invoke-ScriptsWithDependencyRetries {
         }
         elseif ($scriptError) {
           $failedScriptErrors[$scriptFile.Name] = $scriptError
+        }
+        # Track failed SQL per-script (global $script:LastFailedSql would be wrong after multiple failures)
+        if ($script:LastFailedSql) {
+          $failedScriptSql[$scriptFile.Name] = $script:LastFailedSql
         }
       }
       else {
@@ -3136,8 +3172,8 @@ function Invoke-ScriptsWithDependencyRetries {
         $scriptFolder = ($relativePath -split '[\\/]')[0]
       }
 
-      # Get the last failed SQL for this script (may have been overwritten by retries)
-      $failedSql = if ($script:LastFailedSql) { $script:LastFailedSql } else { '' }
+      # Use per-script SQL tracking (global $script:LastFailedSql would point to wrong script after retries)
+      $failedSql = if ($failedScriptSql.ContainsKey($failedScript.Name)) { $failedScriptSql[$failedScript.Name] } else { '' }
 
       # Record for final summary
       Add-FailedScript -ScriptName $failedScript.Name -ErrorMessage $errorMsg -Folder $scriptFolder -FilePath $failedScript.FullName -SqlContent $failedSql
