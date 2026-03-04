@@ -5,9 +5,9 @@
     Autodiscovery runner for all integration tests (requires SQL Server container).
 
 .DESCRIPTION
-    Scans test-*.ps1 files for a '# TestType: integration' header in the first 30 lines
-    and runs each match in a child pwsh process. Appends run-integration-test.ps1 at the
-    end (comprehensive test runs last for fast-feedback ordering).
+    Runs run-integration-test.ps1 first (creates the TestDb database that other tests depend on),
+    then scans test-*.ps1 files for a '# TestType: integration' header in the first 30 lines
+    and runs each match in a child pwsh process.
 
     For scripts that accept a -ConfigFile parameter, the runner forwards the config file path.
 
@@ -53,10 +53,10 @@ foreach ($file in $testFiles) {
     }
 }
 
-# Append run-integration-test.ps1 last (comprehensive test for fast-feedback ordering)
+# Prepend run-integration-test.ps1 first (creates TestDb that other tests depend on)
 $comprehensiveTest = Join-Path $PSScriptRoot 'run-integration-test.ps1'
 if (Test-Path $comprehensiveTest) {
-    $integrationTests += Get-Item $comprehensiveTest
+    $integrationTests = @(Get-Item $comprehensiveTest) + $integrationTests
 }
 
 Write-Host "`n=== Integration Test Autodiscovery ===" -ForegroundColor Cyan

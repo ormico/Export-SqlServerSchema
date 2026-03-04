@@ -51,7 +51,7 @@ param()
 | `run-all-integration-tests.ps1` | `test-*.ps1` with `# TestType: integration` + `run-integration-test.ps1` | Required |
 
 - Files with a `run-` prefix are **excluded** from autodiscovery (only `test-*.ps1` is scanned).
-- `run-integration-test.ps1` is explicitly appended at the end of the integration runner for fast-feedback ordering.
+- `run-integration-test.ps1` runs first in the integration runner (creates TestDb that other tests depend on).
 - Files missing a `# TestType:` header emit a warning but do not fail the run.
 - `run-perf-test.ps1` is a benchmark script and is not part of autodiscovery or CI.
 
