@@ -1154,11 +1154,11 @@ function Redact-SqlSecrets {
 function Format-ErrorChain {
   <#
     .SYNOPSIS
-        Extracts all Message: lines from a full error string and formats them as an arrow chain.
+        Extracts all "Message:" and "Error <num>:" lines from a full error string and formats them as an arrow chain.
     .PARAMETER FullError
         The full error string containing nested exception details.
     .OUTPUTS
-        Array of strings formatted as "→ message".
+        Array of strings formatted as "→ message" extracted from matching error lines.
   #>
   param([string]$FullError)
 
@@ -1254,12 +1254,16 @@ function Add-FailedScript {
     }
   }
 
-  # Single-line root cause: innermost exception message (last in chain) for JSON errorMessage
-  $rootCause = if ($structuredChain.Count -gt 0) {
-    $structuredChain[-1].message
-  } else {
+  # Single-line root cause: innermost exception message (prefer Message: entries over SQL Error NNN:) for JSON errorMessage
+  $rootCause = $null
+  if ($structuredChain.Count -gt 0) {
+    # Prefer the last Message: entry (clean exception message) over Error NNN: entries
+    $messageEntry = $structuredChain | Where-Object { $_.message -notmatch '^\s*Error\s+\d+:' } | Select-Object -Last 1
+    $rootCause = if ($messageEntry) { $messageEntry.message } else { $structuredChain[-1].message }
+  }
+  if (-not $rootCause) {
     # Fallback: first non-empty line
-    ($ErrorMessage -split "`n" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -First 1)
+    $rootCause = ($ErrorMessage -split "`n" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -First 1)
   }
   if (-not $rootCause) { $rootCause = 'Unknown error' }
 
