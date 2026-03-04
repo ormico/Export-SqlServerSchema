@@ -40,7 +40,7 @@ If no issue number is provided, ask the user for one before proceeding.
 2. **Create a worktree** using the `EnterWorktree` tool
 3. **Immediately rename the branch** — `EnterWorktree` auto-names with a `worktree-` prefix that must be renamed before doing any other work. Feature branches must follow the `feature/<name>` format:
    ```bash
-   git branch -m worktree-<auto-name> feature/<descriptive-branch-name>
+   git branch -m feature/<descriptive-branch-name>
    ```
 4. **Assign and label the issue**:
    ```bash
