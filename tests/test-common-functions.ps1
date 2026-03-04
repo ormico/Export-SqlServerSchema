@@ -16,6 +16,7 @@
 .NOTES
     Issue: #66 - Extract shared functions into common helper library
 #>
+# TestType: unit
 
 param()
 

@@ -22,6 +22,7 @@
     Requires: SQL Server container running (docker-compose up -d in tests/)
     Tests Issue #63: ConnectionStringFromEnv parameter
 #>
+# TestType: integration
 
 param(
     [string]$ConfigFile = ".env"
@@ -146,7 +147,7 @@ function Get-FunctionBlock {
     }
     return $Content.Substring($startIndex, $end - $startIndex + 1)
 }
-$tempFuncFile = Join-Path $env:TEMP "test-ado-parser-$([System.Guid]::NewGuid().ToString('N')).ps1"
+$tempFuncFile = Join-Path ([System.IO.Path]::GetTempPath()) "test-ado-parser-$([System.Guid]::NewGuid().ToString('N')).ps1"
 Get-FunctionBlock $exportScriptContent 'ConvertFrom-AdoConnectionString' | Set-Content $tempFuncFile -Encoding UTF8
 . $tempFuncFile
 Remove-Item $tempFuncFile -ErrorAction SilentlyContinue

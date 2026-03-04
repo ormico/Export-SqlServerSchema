@@ -19,6 +19,7 @@
 .NOTES
     Issue: #59 - Config file auto-discovery
 #>
+# TestType: unit
 
 param()
 

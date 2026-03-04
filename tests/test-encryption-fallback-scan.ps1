@@ -27,6 +27,7 @@
 .EXAMPLE
     ./test-encryption-fallback-scan.ps1
 #>
+# TestType: integration
 
 [CmdletBinding()]
 param()

@@ -15,6 +15,7 @@
     Requires: SQL Server container running (docker-compose up -d)
     Tests Bug #3 fix: Improved error reporting
 #>
+# TestType: integration
 
 param(
     [string]$ConfigFile = ".env"
@@ -92,6 +93,13 @@ function Invoke-SqlCommand {
         throw "SQL command failed: $result"
     }
     return $result
+}
+
+function Write-ErrorChainTestFailures {
+    param([string]$Reason)
+    Write-TestResult -TestName "Integrity report errorMessage is clean root cause" -Passed $false -Message $Reason
+    Write-TestResult -TestName "Integrity report has errorChain array" -Passed $false -Message $Reason
+    Write-TestResult -TestName "errorChain entries have type and message fields" -Passed $false -Message $Reason
 }
 
 function Drop-TestDatabase {
@@ -455,6 +463,54 @@ if ($chainErrorLogs.Count -gt 0) {
     $hasErrorChainSection = $chainLogContent -match "Error Chain:"
     Write-TestResult -TestName "Error log has Error Chain section" -Passed $hasErrorChainSection `
         -Message "Error log should have an 'Error Chain:' section with formatted messages"
+
+    # Test 6d: Integrity report JSON contains structured errorChain array
+    $chainReportFile = Get-ChildItem -Path $chainExportedDir.FullName -Filter "import-report-*.json" -ErrorAction SilentlyContinue |
+        Sort-Object -Property LastWriteTime, Name -Descending |
+        Select-Object -First 1
+    if ($chainReportFile) {
+        $chainReport = $null
+        try {
+            $chainReport = Get-Content -Path $chainReportFile.FullName -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+        } catch {
+            Write-ErrorChainTestFailures "Failed to parse integrity report JSON: $($_.Exception.Message)"
+        }
+
+        if ($chainReport) {
+            $chainFailed = $chainReport.failedObjects | Where-Object { $_.name -match 'fn_ChainTest' } | Select-Object -First 1
+            if ($chainFailed) {
+                # errorMessage should be the clean root cause (Message: line, not Error NNN:)
+                $hasCleanRootCause = $chainFailed.errorMessage -match "Invalid object name" -and $chainFailed.errorMessage -notmatch "^Error \d+:"
+                Write-TestResult -TestName "Integrity report errorMessage is clean root cause" -Passed $hasCleanRootCause `
+                    -Message "errorMessage should be the innermost exception message without 'Error NNN:' prefix"
+
+                # errorChain should be an array with type and message fields
+                $hasErrorChainArray = $chainFailed.errorChain -is [array] -and $chainFailed.errorChain.Count -gt 0
+                Write-TestResult -TestName "Integrity report has errorChain array" -Passed $hasErrorChainArray `
+                    -Message "failedObjects should include errorChain array with structured exception data"
+
+                if ($hasErrorChainArray) {
+                    $allValid = $true
+                    foreach ($entry in $chainFailed.errorChain) {
+                        if (-not (($entry.PSObject.Properties.Name -contains 'type') -and
+                                  ($entry.PSObject.Properties.Name -contains 'message'))) {
+                            $allValid = $false
+                            break
+                        }
+                    }
+                    Write-TestResult -TestName "errorChain entries have type and message fields" -Passed $allValid `
+                        -Message "Every errorChain entry should have 'type' and 'message' fields"
+                } else {
+                    Write-TestResult -TestName "errorChain entries have type and message fields" -Passed $false `
+                        -Message "errorChain array was empty or missing"
+                }
+            } else {
+                Write-ErrorChainTestFailures "fn_ChainTest not found in failedObjects"
+            }
+        }
+    } else {
+        Write-ErrorChainTestFailures "No integrity report JSON was created for chain test"
+    }
 } else {
     Write-TestResult -TestName "Error log contains inner exception message" -Passed $false `
         -Message "No error log was created for chain test"
@@ -462,6 +518,7 @@ if ($chainErrorLogs.Count -gt 0) {
         -Message "No error log was created for chain test"
     Write-TestResult -TestName "Error log has Error Chain section" -Passed $false `
         -Message "No error log was created for chain test"
+    Write-ErrorChainTestFailures "No error log was created for chain test"
 }
 
 Drop-TestDatabase -DbName $targetDb6

@@ -22,6 +22,7 @@
 .EXAMPLE
     ./test-encryption-secrets.ps1 -Server "localhost,1433"
 #>
+# TestType: integration
 
 [CmdletBinding()]
 param(

@@ -243,6 +243,20 @@ import:
   # Object types to include in import (if specified, only these types are imported)
   # includeObjectTypes: []
 
+  # Schemas to exclude from import (only applies to schema-bound object folders)
+  # excludeSchemas: []
+    # - staging
+    # - temp
+
+  # Exclude specific objects by filename pattern (schema.objectName, full match, wildcards supported)
+  # Only reliably excludes individual objects when the relevant object type is exported in single mode.
+  # Not supported for grouped files (grouped filenames may not match patterns as expected).
+  # Note: "dbo.usp_Process" does NOT match "dbo.usp_ProcessOrders" — use "dbo.usp_Process*" for prefix matching
+  # excludeObjects: []
+    # - "dbo.usp_LegacyProc"           # Exact match only (not dbo.usp_LegacyProcV2)
+    # - "staging.*"                     # Exclude all staging schema objects
+    # - "dbo.usp_Legacy*"              # Exclude all objects starting with dbo.usp_Legacy
+
   # ─────────────────────────────────────────────────────────────
   # DEPENDENCY RETRY SETTINGS
   # ─────────────────────────────────────────────────────────────

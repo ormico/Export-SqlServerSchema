@@ -7,7 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.9.0] - 2026-03-04
 
+### Changed
+
+- **Extract import filter functions into `Import-Helpers.ps1` (#113)** — Moved `Test-SchemaExcluded`, `Test-ObjectExcluded`, and `Test-ScriptExcluded` from `Import-SqlServerSchema.ps1` into a new dot-sourceable helper file. This eliminates the fragile regex extraction hack in tests and allows direct dot-sourcing of filter functions.
+
+### Added
+
+- **`ExcludeObjects` parameter for Import-SqlServerSchema (#108)** — Exclude specific objects from import using `schema.name` wildcard patterns (e.g., `dbo.usp_LegacyProc`, `staging.*`). Supports `-ExcludeObjects` CLI parameter and `import.excludeObjects` config key, with CLI taking precedence over config. Matches the existing `excludeObjects` pattern from the export script.
+
 ### Fixed
+
+- **Schema-bound folder detection uses prefix matching instead of substring matching (#112)** — `Test-SchemaExcluded` and `Test-ObjectExcluded` now strip numeric prefixes and use `-like` with trailing wildcard instead of `-match` (regex substring matching). This fixes false positives where folders like `DatabaseConfiguration` incorrectly matched the `Data` entry. Also added missing schema-bound folders: `Types`, `XmlSchemaCollections`, `Defaults`, `Rules`.
 
 - **Config `serverFromEnv`/`usernameFromEnv`/`passwordFromEnv` no longer override CLI `-ConnectionStringFromEnv` (#105)** — Added `-not $ConnectionStringFromEnvParam` guards to the config fallback paths for server and credential resolution in `Resolve-EnvCredential`, matching the fix already applied for `databaseFromEnv` and `trustServerCertificateFromEnv` in #102.
 

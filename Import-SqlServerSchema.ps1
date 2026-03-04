@@ -150,6 +150,10 @@
     Test connectivity to the SQL Server and verify permissions, then exit without importing.
     Useful for smoke-testing credentials in pipelines.
 
+.PARAMETER Quiet
+    Suppress the console import summary that is rendered by ConvertTo-ImportReport.ps1 at the
+    end of every import run. The JSON report is still written regardless of this switch.
+
 .NOTES
     License: MIT
     Repository: https://github.com/ormico/Export-SqlServerSchema
@@ -229,6 +233,9 @@ param(
   [Parameter(HelpMessage = 'Exclude specific schemas from import. Example: cdc,staging')]
   [string[]]$ExcludeSchemas,
 
+  [Parameter(HelpMessage = 'Exclude objects by matching schema.objectName from script filenames (case-insensitive wildcards, full name match). Example: dbo.usp_LegacyProc,staging.*')]
+  [string[]]$ExcludeObjects,
+
   [Parameter(HelpMessage = 'Strip FILESTREAM features (removes FILESTREAM_ON clauses, converts FILESTREAM columns to VARBINARY(MAX)). Required for Linux/container targets.')]
   [switch]$StripFilestream,
 
@@ -266,13 +273,19 @@ param(
   [switch]$ValidateOnly,
 
   [Parameter(HelpMessage = 'Test SQL Server connectivity and permissions, then exit without importing.')]
-  [switch]$TestConnection
+  [switch]$TestConnection,
+
+  [Parameter(HelpMessage = 'Suppress the console import summary rendered by ConvertTo-ImportReport.ps1')]
+  [switch]$Quiet
 )
 
 $ErrorActionPreference = if ($ContinueOnError) { 'Continue' } else { 'Stop' }
 
 # Load shared helper functions used by both Export and Import scripts
 . "$PSScriptRoot\Common-SqlServerSchema.ps1"
+
+# Load import-specific filter helpers (Test-SchemaExcluded, Test-ObjectExcluded, Test-ScriptExcluded)
+. "$PSScriptRoot\Import-Helpers.ps1"
 
 $script:LogFile = $null  # Will be set during import
 
@@ -284,6 +297,9 @@ $script:ExcludeObjectTypesFilter = $ExcludeObjectTypes
 
 # Store ExcludeSchemas parameter at script level for use in Test-ScriptExcluded
 $script:ExcludeSchemasFilter = $ExcludeSchemas
+
+# Store ExcludeObjects parameter at script level for use in Test-ObjectExcluded
+$script:ExcludeObjectsFilter = $ExcludeObjects
 
 # Store StripFilestream parameter at script level for use in transformations
 $script:StripFilestreamEnabled = $StripFilestream.IsPresent
@@ -570,11 +586,13 @@ function Export-IntegrityReport {
   $reportPath = Join-Path $SourcePath "import-report-${timestamp}.json"
 
   try {
-    $report | ConvertTo-Json -Depth 10 | Set-Content -Path $reportPath -Encoding UTF8
-    Write-Output "[INFO] Integrity report saved to: $reportPath"
+    $report | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $reportPath -Encoding UTF8
+    Write-Host "[INFO] Integrity report saved to: $reportPath" -ForegroundColor Cyan
+    return $reportPath
   }
   catch {
     Write-Warning "[WARNING] Failed to write integrity report: $_"
+    return $null
   }
 }
 
@@ -640,7 +658,7 @@ function Test-ImportConfigKeys {
   if ($Config.import -and $Config.import -is [hashtable]) {
     $knownImport = @(
       'defaultMode', 'createDatabase', 'force', 'continueOnError', 'includeData',
-      'includeObjectTypes', 'excludeObjectTypes', 'excludeSchemas',
+      'includeObjectTypes', 'excludeObjectTypes', 'excludeSchemas', 'excludeObjects',
       'dependencyRetries', 'showSql', 'useLatestExport',
       'developerMode', 'productionMode', 'encryptionSecrets', 'clr',
       'fileGroupFileSizeDefaults'
@@ -3238,277 +3256,6 @@ function Invoke-ScriptsWithDependencyRetries {
   }
 }
 
-function Test-SchemaExcluded {
-  <#
-    .SYNOPSIS
-        Checks if a script file belongs to an excluded schema.
-    .DESCRIPTION
-        Extracts schema from filename patterns like 'Schema.ObjectName.sql' or
-        'Schema.ObjectName.type.sql' and checks against excluded schemas list.
-        Only applies to schema-bound object folders (Tables, Views, Functions, etc.)
-        to avoid false positives on users/roles/security objects.
-    .PARAMETER ScriptPath
-        Full path to the script file.
-    .PARAMETER ExcludeSchemas
-        Array of schema names to exclude.
-    .OUTPUTS
-        $true if script's schema is excluded, $false otherwise.
-  #>
-  param(
-    [string]$ScriptPath,
-    [string[]]$ExcludeSchemas
-  )
-
-  if (-not $ExcludeSchemas -or $ExcludeSchemas.Count -eq 0) {
-    return $false
-  }
-
-  # Only apply schema filtering to folders containing schema-bound objects
-  # This prevents false positives like user "cdc.user.sql" being treated as schema "cdc"
-  # Note: Programmability has nested subfolders (02_Functions, 03_StoredProcedures, etc.)
-  $schemaBoundFolders = @(
-    'Tables',           # Matches 09_Tables_PrimaryKey, 11_Tables_ForeignKeys, etc.
-    'Indexes',          # Matches 10_Indexes
-    'Views',            # Matches 05_Views (nested under 14_Programmability)
-    'Functions',        # Matches 02_Functions (nested under 14_Programmability)
-    'StoredProcedures', # Matches 03_StoredProcedures (nested under 14_Programmability)
-    'Triggers',         # Matches 04_Triggers (nested under 14_Programmability)
-    'Synonyms',         # Matches 15_Synonyms
-    'Sequences',        # Matches 04_Sequences
-    'Data'              # Matches 21_Data
-  )
-
-  # Extract folder name from path (immediate parent)
-  $parentFolder = Split-Path (Split-Path $ScriptPath -Parent) -Leaf
-
-  # Check if this is a schema-bound folder
-  # Use partial matching since folders have numeric prefixes (e.g., 09_Tables_PrimaryKey)
-  $isSchemaBoundFolder = $false
-  foreach ($folder in $schemaBoundFolders) {
-    if ($parentFolder -match $folder) {
-      $isSchemaBoundFolder = $true
-      break
-    }
-  }
-
-  if (-not $isSchemaBoundFolder) {
-    return $false  # Not a schema-bound folder, don't filter
-  }
-
-  $fileName = Split-Path $ScriptPath -Leaf
-
-  # Pattern 1: Schema.ObjectName.sql or Schema.ObjectName.type.sql
-  # Examples: cdc.fn_cdc_get_all_changes.function.sql, dbo.MyTable.sql
-  if ($fileName -match '^([^.]+)\.') {
-    $schemaName = $matches[1]
-
-    # Skip numeric prefixes from grouped files (e.g., 001_dbo.sql -> extract dbo)
-    if ($schemaName -match '^\d{3}_(.+)$') {
-      $schemaName = $matches[1]
-    }
-
-    if ($ExcludeSchemas -contains $schemaName) {
-      return $true
-    }
-  }
-
-  return $false
-}
-
-function Test-ScriptExcluded {
-  <#
-    .SYNOPSIS
-        Checks if a script file should be excluded based on ExcludeObjectTypes settings.
-    .DESCRIPTION
-        Determines exclusion based on folder path and filename patterns.
-        Supports granular user type exclusions (WindowsUsers, SqlUsers, etc.).
-    .PARAMETER ScriptPath
-        Full path to the script file.
-    .PARAMETER ExcludeTypes
-        Array of object types to exclude.
-    .OUTPUTS
-        $true if script should be excluded, $false otherwise.
-  #>
-  param(
-    [string]$ScriptPath,
-    [string[]]$ExcludeTypes
-  )
-
-  if (-not $ExcludeTypes -or $ExcludeTypes.Count -eq 0) {
-    return $false
-  }
-
-  $fileName = Split-Path $ScriptPath -Leaf
-  $relativePath = $ScriptPath
-
-  # Build exclusion patterns based on ExcludeTypes
-  foreach ($excludeType in $ExcludeTypes) {
-    switch ($excludeType) {
-      'FileGroups' {
-        if ($relativePath -match '00_FileGroups') { return $true }
-      }
-      'DatabaseConfiguration' {
-        if ($relativePath -match '02_DatabaseConfiguration') { return $true }
-      }
-      'Schemas' {
-        if ($relativePath -match '03_Schemas') { return $true }
-      }
-      'Sequences' {
-        if ($relativePath -match '04_Sequences') { return $true }
-      }
-      'PartitionFunctions' {
-        if ($relativePath -match '05_PartitionFunctions') { return $true }
-      }
-      'PartitionSchemes' {
-        if ($relativePath -match '06_PartitionSchemes') { return $true }
-      }
-      'Types' {
-        if ($relativePath -match '07_Types') { return $true }
-      }
-      'XmlSchemaCollections' {
-        if ($relativePath -match '08_XmlSchemaCollections') { return $true }
-      }
-      'Tables' {
-        if ($relativePath -match '09_Tables|11_Tables') { return $true }
-      }
-      'ForeignKeys' {
-        if ($relativePath -match '11_Tables.*ForeignKeys') { return $true }
-      }
-      'Indexes' {
-        if ($relativePath -match '10_Indexes') { return $true }
-      }
-      'Defaults' {
-        if ($relativePath -match '12_Defaults') { return $true }
-      }
-      'Rules' {
-        if ($relativePath -match '13_Rules') { return $true }
-      }
-      'Programmability' {
-        if ($relativePath -match '14_Programmability') { return $true }
-      }
-      'Views' {
-        if ($relativePath -match '14_Programmability[\\/]05_Views') { return $true }
-      }
-      'Functions' {
-        if ($relativePath -match '14_Programmability[\\/]02_Functions') { return $true }
-      }
-      'StoredProcedures' {
-        if ($relativePath -match '14_Programmability[\\/]03_StoredProcedures') { return $true }
-      }
-      'Synonyms' {
-        if ($relativePath -match '15_Synonyms') { return $true }
-      }
-      'SearchPropertyLists' {
-        if ($relativePath -match '18_SearchPropertyLists') { return $true }
-      }
-      'PlanGuides' {
-        if ($relativePath -match '19_PlanGuides') { return $true }
-      }
-      'DatabaseRoles' {
-        # Exclude .role.sql files in 01_Security
-        if ($relativePath -match '01_Security' -and $fileName -match '\.role\.sql$') { return $true }
-      }
-      'DatabaseUsers' {
-        # Exclude ALL .user.sql files (umbrella exclusion)
-        if ($relativePath -match '01_Security' -and $fileName -match '\.user\.sql$') { return $true }
-      }
-      'WindowsUsers' {
-        # Exclude Windows domain user files based on file CONTENT (not filename pattern)
-        # Detection patterns for Windows users:
-        #   1. FOR LOGIN [DOMAIN\User] - explicit login mapping with backslash
-        #   2. CREATE USER [DOMAIN\User] - implicit (username = login name, contains backslash)
-        # Example filenames: "dbo.DOMAIN.TestUser.user.sql", "dbo.NT SERVICE.SQLSERVERAGENT.user.sql"
-        # Windows principals: DOMAIN\User, NT SERVICE\name, NT AUTHORITY\SYSTEM, BUILTIN\Administrators
-        if ($relativePath -match '01_Security' -and $fileName -match '\.user\.sql$') {
-          $content = Get-Content $ScriptPath -Raw -ErrorAction SilentlyContinue
-          if ($content) {
-            # Method 1: Check FOR LOGIN [name] for backslash
-            if ($content -match 'FOR LOGIN\s*\[([^\]]+)\]') {
-              $loginName = $matches[1]
-              if ($loginName -match '\\') {
-                return $true
-              }
-            }
-            # Method 2: Check CREATE USER [name] for backslash (implicit Windows login)
-            # This handles: CREATE USER [DOMAIN\User] WITH DEFAULT_SCHEMA=[dbo]
-            if ($content -match 'CREATE USER\s*\[([^\]]+)\]') {
-              $userName = $matches[1]
-              # Windows users have backslash AND no "WITHOUT LOGIN" or "FROM EXTERNAL PROVIDER"
-              if ($userName -match '\\' -and $content -notmatch 'WITHOUT LOGIN' -and $content -notmatch 'EXTERNAL PROVIDER') {
-                return $true
-              }
-            }
-          }
-        }
-      }
-      'SqlUsers' {
-        # Exclude SQL Server login mapped users based on file CONTENT
-        # Detection: File contains "FOR LOGIN [username]" where login name has NO backslash
-        #            and is NOT an external provider (Azure AD)
-        # Also includes: "WITHOUT LOGIN" users (contained database users)
-        # Example filenames: "dbo.AppUser.user.sql", "dbo.sa.user.sql"
-        if ($relativePath -match '01_Security' -and $fileName -match '\.user\.sql$') {
-          $content = Get-Content $ScriptPath -Raw -ErrorAction SilentlyContinue
-          if ($content) {
-            # Check for explicit FOR LOGIN without backslash (SQL login)
-            if ($content -match 'FOR LOGIN\s*\[([^\]]+)\]') {
-              $loginName = $matches[1]
-              # SQL logins: no backslash (not Windows), not external provider (not Azure AD)
-              if ($loginName -notmatch '\\' -and $content -notmatch 'EXTERNAL PROVIDER') {
-                return $true
-              }
-            }
-            # WITHOUT LOGIN users are SQL type (contained database users)
-            if ($content -match 'WITHOUT LOGIN') {
-              return $true
-            }
-            # Implicit SQL login: CREATE USER [name] where name has no backslash
-            # and no WITHOUT LOGIN, no EXTERNAL PROVIDER, no FOR LOGIN
-            # This handles: CREATE USER [AppUser] WITH DEFAULT_SCHEMA=[dbo]
-            if ($content -match 'CREATE USER\s*\[([^\]]+)\]') {
-              $userName = $matches[1]
-              if ($userName -notmatch '\\' -and $content -notmatch 'WITHOUT LOGIN' -and
-                  $content -notmatch 'EXTERNAL PROVIDER' -and $content -notmatch 'FOR LOGIN') {
-                return $true
-              }
-            }
-          }
-        }
-      }
-      'ExternalUsers' {
-        # Exclude Azure AD / External provider users based on file CONTENT
-        # Detection: File contains "EXTERNAL PROVIDER" or "FROM EXTERNAL PROVIDER"
-        # Example filenames: "dbo.user@domain.com.user.sql", "dbo.AzureADGroup.user.sql"
-        if ($relativePath -match '01_Security' -and $fileName -match '\.user\.sql$') {
-          $content = Get-Content $ScriptPath -Raw -ErrorAction SilentlyContinue
-          if ($content -match 'EXTERNAL PROVIDER|FROM EXTERNAL PROVIDER') {
-            return $true
-          }
-        }
-      }
-      'CertificateMappedUsers' {
-        # Exclude certificate or asymmetric key mapped users based on file CONTENT
-        # Detection: File contains "FOR CERTIFICATE" or "FOR ASYMMETRIC KEY"
-        # Example filenames: "dbo.CertUser.user.sql", "dbo.KeyMappedUser.user.sql"
-        if ($relativePath -match '01_Security' -and $fileName -match '\.user\.sql$') {
-          $content = Get-Content $ScriptPath -Raw -ErrorAction SilentlyContinue
-          if ($content -match 'FOR CERTIFICATE|FOR ASYMMETRIC KEY') {
-            return $true
-          }
-        }
-      }
-      'SecurityPolicies' {
-        if ($relativePath -match '20_SecurityPolicies') { return $true }
-      }
-      'Data' {
-        if ($relativePath -match '21_Data') { return $true }
-      }
-    }
-  }
-
-  return $false
-}
-
 function Get-CanonicalTypeOrder {
   <#
     .SYNOPSIS
@@ -3916,6 +3663,19 @@ function Get-ScriptFiles {
     $excludedCount = $originalCount - $scripts.Count
     if ($excludedCount -gt 0) {
       Write-Output "  [INFO] Excluded $excludedCount script(s) based on ExcludeSchemas filter"
+    }
+  }
+
+  # Apply ExcludeObjects filter if specified (command-line parameter)
+  if ($script:ExcludeObjectsFilter -and $script:ExcludeObjectsFilter.Count -gt 0) {
+    Write-Verbose "Applying ExcludeObjects filter: $($script:ExcludeObjectsFilter -join ', ')"
+    $originalCount = $scripts.Count
+    $scripts = @($scripts | Where-Object {
+        -not (Test-ObjectExcluded -ScriptPath $_.FullName -ExcludeObjects $script:ExcludeObjectsFilter)
+      })
+    $excludedCount = $originalCount - $scripts.Count
+    if ($excludedCount -gt 0) {
+      Write-Output "  [INFO] Excluded $excludedCount script(s) based on ExcludeObjects filter"
     }
   }
 
@@ -4517,6 +4277,7 @@ try {
   if ($PSBoundParameters.ContainsKey('Database'))           { $script:ConfigSources.database.source           = 'cli'; $script:ConfigSources.database.value           = $Database }
   if ($PSBoundParameters.ContainsKey('ExcludeObjectTypes')) { $script:ConfigSources.excludeObjectTypes.source = 'cli'; $script:ConfigSources.excludeObjectTypes.value = $ExcludeObjectTypes }
   if ($PSBoundParameters.ContainsKey('ExcludeSchemas'))     { $script:ConfigSources.excludeSchemas.source     = 'cli'; $script:ConfigSources.excludeSchemas.value     = $ExcludeSchemas }
+  if ($PSBoundParameters.ContainsKey('ExcludeObjects'))     { $script:ConfigSources.excludeObjects.source     = 'cli'; $script:ConfigSources.excludeObjects.value     = $ExcludeObjects }
   if ($PSBoundParameters.ContainsKey('StripFilestream'))    { $script:ConfigSources.stripFilestream.source    = 'cli'; $script:ConfigSources.stripFilestream.value    = $StripFilestream.IsPresent }
   if ($PSBoundParameters.ContainsKey('StripAlwaysEncrypted')) { $script:ConfigSources.stripAlwaysEncrypted.source = 'cli'; $script:ConfigSources.stripAlwaysEncrypted.value = $StripAlwaysEncrypted.IsPresent }
 
@@ -4664,6 +4425,15 @@ try {
           $script:ExcludeSchemasFilter = $config.import.excludeSchemas
           $script:ConfigSources.excludeSchemas = [ordered]@{ value = $config.import.excludeSchemas; source = 'configFile' }
           Write-Verbose "[INFO] ExcludeSchemas set from config file: $($config.import.excludeSchemas -join ', ')"
+        }
+      }
+
+      # Override ExcludeObjects from config ONLY if not explicitly set on command line
+      if (-not $PSBoundParameters.ContainsKey('ExcludeObjects')) {
+        if ($config.import.excludeObjects -and $config.import.excludeObjects.Count -gt 0) {
+          $script:ExcludeObjectsFilter = $config.import.excludeObjects
+          $script:ConfigSources.excludeObjects = [ordered]@{ value = $config.import.excludeObjects; source = 'configFile' }
+          Write-Verbose "[INFO] ExcludeObjects set from config file: $($config.import.excludeObjects -join ', ')"
         }
       }
 
@@ -6597,7 +6367,20 @@ try {
   Write-Output ''
 
   # Write integrity report (always, regardless of success/failure)
-  Export-IntegrityReport -SourcePath $SourcePath -Server $Server -Database $Database
+  $reportFilePath = Export-IntegrityReport -SourcePath $SourcePath -Server $Server -Database $Database
+
+  # Render import report summary to console (unless -Quiet suppresses it)
+  if ($reportFilePath -and -not $Quiet) {
+    $rendererScript = Join-Path $PSScriptRoot 'ConvertTo-ImportReport.ps1'
+    if (Test-Path -LiteralPath $rendererScript) {
+      try {
+        & $rendererScript -ReportPath $reportFilePath
+      }
+      catch {
+        Write-Host "[WARNING] Could not render import report summary: $_" -ForegroundColor Yellow
+      }
+    }
+  }
 
   if ($failureCount -eq 0) {
     exit 0
@@ -6614,7 +6397,18 @@ catch {
   # Attempt to write integrity report even on unhandled errors
   if ($script:ReportSourcePath -and $Server -and $Database) {
     try {
-      Export-IntegrityReport -SourcePath $script:ReportSourcePath -Server $Server -Database $Database
+      $reportFilePath = Export-IntegrityReport -SourcePath $script:ReportSourcePath -Server $Server -Database $Database
+      if ($reportFilePath -and -not $Quiet) {
+        $rendererScript = Join-Path $PSScriptRoot 'ConvertTo-ImportReport.ps1'
+        if (Test-Path -LiteralPath $rendererScript) {
+          try {
+            & $rendererScript -ReportPath $reportFilePath
+          }
+          catch {
+            Write-Host "[WARNING] Could not render import report summary: $_" -ForegroundColor Yellow
+          }
+        }
+      }
     }
     catch {
       Write-Verbose "[WARNING] Could not write integrity report during error handling: $_"
