@@ -9,9 +9,9 @@
     scripts by schema.objectName pattern during import. It tests:
     1. Test-ObjectExcluded function directly (exact match, wildcards, non-schema-bound)
     2. Get-ScriptFiles filtering with mock SQL files
-    3. CLI parameter sets $script:ExcludeObjectsFilter
-    4. YAML config file populates the filter
-    5. CLI overrides config
+    3. CLI parameter and type validation
+    4. JSON schema and config key validation
+    5. Config merge precedence (CLI overrides config, config fallback)
 #>
 
 $ErrorActionPreference = 'Stop'
@@ -40,23 +40,22 @@ Write-Host "ExcludeObjects Import Test" -ForegroundColor Cyan
 Write-Host "========================================`n" -ForegroundColor Cyan
 
 # ── Load the import script to get access to Test-ObjectExcluded ──
-# We dot-source a mock-friendly subset by extracting the function.
-# Instead, we'll just source the function definition directly from the script.
+# Extract the function definition and define it in test scope via ScriptBlock.
 
-$importScript = Join-Path $PSScriptRoot '..\Import-SqlServerSchema.ps1'
+$importScript = Join-Path $PSScriptRoot '..' 'Import-SqlServerSchema.ps1'
 if (-not (Test-Path $importScript)) {
   Write-Host "[ERROR] Import-SqlServerSchema.ps1 not found at $importScript" -ForegroundColor Red
   exit 1
 }
 
-# Extract and define Test-ObjectExcluded by reading it from the script
 $scriptContent = Get-Content $importScript -Raw
 
-# Extract the Test-ObjectExcluded function using regex
+# Extract function and dot-source via temp file to define in caller scope
 if ($scriptContent -match '(?ms)(function Test-ObjectExcluded \{.+?\n\})') {
-  $functionDef = $matches[1]
-  # Define it in our scope
-  Invoke-Expression $functionDef
+  $tempFunc = Join-Path ([System.IO.Path]::GetTempPath()) "Test-ObjectExcluded_$(Get-Random).ps1"
+  $matches[1] | Out-File -FilePath $tempFunc -Encoding utf8
+  . $tempFunc
+  Remove-Item $tempFunc -Force
 } else {
   Write-Host "[ERROR] Could not extract Test-ObjectExcluded function from Import-SqlServerSchema.ps1" -ForegroundColor Red
   exit 1
@@ -201,7 +200,7 @@ try {
   Write-Host "`n[PHASE 4] Config file validation" -ForegroundColor Yellow
 
   # Verify excludeObjects is in the JSON schema
-  $schemaFile = Join-Path $PSScriptRoot '..\export-import-config.schema.json'
+  $schemaFile = Join-Path $PSScriptRoot '..' 'export-import-config.schema.json'
   if (Test-Path $schemaFile) {
     $schemaContent = Get-Content $schemaFile -Raw | ConvertFrom-Json
     $importProps = $schemaContent.properties.import.properties
@@ -224,6 +223,52 @@ try {
   # Verify 'excludeObjects' is in the knownImport list
   $knownImportMatch = $scriptContent -match "'excludeObjects'"
   Write-TestResult -Name "Config: 'excludeObjects' in knownImport list" -Passed $knownImportMatch
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 6: Test config merge precedence
+  # ═══════════════════════════════════════════════════════════════
+  Write-Host "`n[PHASE 6] Config merge precedence" -ForegroundColor Yellow
+
+  # Verify the script has the config merge block for excludeObjects
+  $hasConfigMerge = $scriptContent -match "PSBoundParameters\.ContainsKey\('ExcludeObjects'\)"
+  Write-TestResult -Name "Precedence: CLI PSBoundParameters check exists" -Passed $hasConfigMerge
+
+  $hasConfigFallback = $scriptContent -match 'config\.import\.excludeObjects.*Count'
+  Write-TestResult -Name "Precedence: config fallback path exists" -Passed $hasConfigFallback
+
+  # Verify config fallback is guarded by CLI check (CLI overrides config)
+  # The pattern should be: if (-not $PSBoundParameters.ContainsKey('ExcludeObjects')) { ... config.import.excludeObjects ... }
+  $hasGuardedFallback = $scriptContent -match '(?ms)-not \$PSBoundParameters\.ContainsKey\(''ExcludeObjects''\).+?config\.import\.excludeObjects'
+  Write-TestResult -Name "Precedence: config fallback guarded by CLI check" -Passed $hasGuardedFallback
+
+  # Verify the CLI registration sets configSources
+  $hasCliSource = $scriptContent -match "ConfigSources\.excludeObjects\.source\s*=\s*'cli'"
+  Write-TestResult -Name "Precedence: CLI sets ConfigSources.excludeObjects" -Passed $hasCliSource
+
+  $hasConfigSource = $scriptContent -match "ConfigSources\.excludeObjects\s*=\s*\[ordered\]@\{.*source\s*=\s*'configFile'"
+  Write-TestResult -Name "Precedence: config sets ConfigSources.excludeObjects" -Passed $hasConfigSource
+
+  # Create a test YAML config and verify it parses correctly
+  $testConfigFile = Join-Path $tempRoot 'test-exclude-objects-config.yml'
+  @"
+import:
+  excludeObjects:
+    - dbo.usp_LegacyProc
+    - staging.*
+"@ | Out-File -FilePath $testConfigFile -Encoding utf8
+
+  # Verify the YAML parses and produces the expected structure
+  $yamlModule = Get-Module -ListAvailable -Name 'powershell-yaml' | Select-Object -First 1
+  if ($yamlModule) {
+    Import-Module powershell-yaml -ErrorAction SilentlyContinue
+    $testConfig = Get-Content $testConfigFile -Raw | ConvertFrom-Yaml
+    $hasObjects = $testConfig.import.excludeObjects -is [System.Collections.IList] -and $testConfig.import.excludeObjects.Count -eq 2
+    Write-TestResult -Name "Precedence: YAML config parses excludeObjects array" -Passed $hasObjects
+    $correctValues = $testConfig.import.excludeObjects[0] -eq 'dbo.usp_LegacyProc' -and $testConfig.import.excludeObjects[1] -eq 'staging.*'
+    Write-TestResult -Name "Precedence: YAML config values are correct" -Passed $correctValues
+  } else {
+    Write-Host "  [SKIP] powershell-yaml module not available" -ForegroundColor Yellow
+  }
 
 } finally {
   # Cleanup temp directory
