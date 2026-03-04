@@ -38,18 +38,23 @@ If no issue number is provided, ask the user for one before proceeding.
 
 1. **Read the issue** with `gh issue view $ARGUMENTS` to understand requirements
 2. **Create a worktree** using the `EnterWorktree` tool
-3. **Immediately rename the branch** (worktrees auto-name with `worktree-` prefix):
+3. **Immediately rename the branch** to follow the `feature/` convention:
    ```bash
-   git branch -m worktree-<auto-name> feature/<descriptive-branch-name>
+   git branch -m feature/<descriptive-branch-name>
    ```
-4. **Assign and label the issue**:
+4. **Link the branch to the issue** for traceability:
+   ```bash
+   gh issue develop $ARGUMENTS --branch feature/<descriptive-branch-name>
+   ```
+5. **Assign and label the issue**:
    ```bash
    gh issue edit $ARGUMENTS --add-assignee @me
    gh issue edit $ARGUMENTS --add-label in-progress
    ```
-5. **Copy `tests/.env` from the main repo** (it's gitignored and missing in worktrees):
+6. **Copy `tests/.env` from the main repo** (it's gitignored and missing in worktrees):
    ```bash
-   cp "D:\Export-SqlServerSchema\tests\.env" ./tests/.env
+   MAIN_REPO_ROOT="$(git -C "$(git worktree list | head -1 | awk '{print $1}')" rev-parse --show-toplevel)"
+   cp "$MAIN_REPO_ROOT/tests/.env" ./tests/.env
    ```
 
 ## Phase 1: Plan
@@ -87,20 +92,20 @@ If tests pass before implementation, the tests are not testing the right thing �
 
 ```bash
 # Check if container is already running
-docker ps --filter "name=sqlserver" --format "{{.Names}} {{.Status}}"
+docker ps --filter "name=sqlserver-test" --format "{{.Names}} {{.Status}}"
 
 # Only start if not already running
 cd tests && docker-compose up -d
 
 # Wait for SQL Server to be ready (important!)
-docker exec sqlserver /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P 'Test@1234' -C -Q "SELECT 1" -b 2>&1
+docker exec sqlserver-test /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P 'Test@1234' -C -Q "SELECT 1" -b 2>&1
 ```
 
 NEVER run `docker-compose down` — other sessions may be using the container.
 
 ## Phase 5: Implement
 
-- Write high-quality code following project conventions (see `copilot-instructions.md`)
+- Write high-quality code following project conventions (see `.github/copilot-instructions.md`)
 - No shortcuts, no TODOs, no placeholders — complete implementations only
 - Follow existing patterns in the codebase
 - Use `$script:` scope for cross-function state

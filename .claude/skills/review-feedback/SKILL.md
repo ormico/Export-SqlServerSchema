@@ -32,22 +32,24 @@ Determine the PR number:
 1. If `$ARGUMENTS` contains a number, use that as the PR number
 2. Otherwise, auto-detect from the current branch:
    ```bash
-   gh pr list --head $(git branch --show-current) --json number,title,url
+   gh pr list --head "$(git branch --show-current)" --json number --jq '.[0].number'
    ```
+   Store the result as the PR number for all subsequent commands.
 3. If no PR is found, ask the user for the PR number
 
 ## Phase 1: Gather Comments
 
-Fetch all review comments on the PR:
+Resolve the repo name dynamically, then fetch all review comments on the PR:
 
 ```bash
-gh api repos/{owner}/{repo}/pulls/$ARGUMENTS/comments --jq '.[] | {id, path, line, body, user: .user.login, created_at}'
+REPO="$(gh repo view --json nameWithOwner --jq .nameWithOwner)"
+gh api "repos/$REPO/pulls/<PR_NUMBER>/comments" --jq '.[] | {id, path, line, body, user: .user.login, created_at}'
 ```
 
 Also check for top-level PR review summaries:
 
 ```bash
-gh api repos/{owner}/{repo}/pulls/$ARGUMENTS/reviews --jq '.[] | {user: .user.login, state, body}'
+gh api "repos/$REPO/pulls/<PR_NUMBER>/reviews" --jq '.[] | {user: .user.login, state, body}'
 ```
 
 ## Phase 2: Triage — Assess Each Comment
@@ -91,7 +93,7 @@ For each approved fix:
 2. Add or update tests if the comment was about correctness or missing coverage
 3. Verify the fix addresses the specific concern raised
 
-Follow all project conventions (see `copilot-instructions.md`).
+Follow all project conventions (see `.github/copilot-instructions.md`).
 
 ## Phase 5: Run Tests
 
@@ -108,14 +110,15 @@ pwsh -NoProfile -File tests/run-integration-test.ps1
 If integration tests are needed and Docker isn't running:
 
 ```bash
-docker ps --filter "name=sqlserver" --format "{{.Names}} {{.Status}}"
+docker ps --filter "name=sqlserver-test" --format "{{.Names}} {{.Status}}"
 # Start only if not running:
 cd tests && docker-compose up -d
 ```
 
 Copy `tests/.env` from main repo if missing in worktree:
 ```bash
-cp "D:\Export-SqlServerSchema\tests\.env" ./tests/.env
+MAIN_REPO_ROOT="$(git -C "$(git worktree list | head -1 | awk '{print $1}')" rev-parse --show-toplevel)"
+cp "$MAIN_REPO_ROOT/tests/.env" ./tests/.env
 ```
 
 ## Phase 6: Report to User
@@ -135,10 +138,9 @@ Create a commit describing the review fixes:
 
 ```bash
 git add <specific-files>
-git commit -m "fix: address PR review feedback (#$ARGUMENTS)
-
-- Fixed: <brief list of what was fixed>
-- Skipped: <brief note on what was intentionally not changed>"
+git commit -m "fix: address PR review feedback (#<PR_NUMBER>)" \
+    -m "Fixed: <brief list of what was fixed>" \
+    -m "Skipped: <brief note on what was intentionally not changed>"
 ```
 
 Do NOT push unless the user explicitly asks. Do NOT add Co-Authored-By or Claude attribution.
