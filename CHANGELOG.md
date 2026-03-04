@@ -5,6 +5,22 @@ All notable changes to Export-SqlServerSchema will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.9.0] - 2026-03-03
+
+### Added
+
+**Import-aware folder ordering: type identifiers in export metadata and type-based import ordering (#98)**
+- Export metadata (`_export_metadata.json`) now includes `folderOrder` array mapping each numbered folder to a stable type identifier (e.g., `indexes`, `tables_foreignkeys`)
+- Export metadata now includes `exportToolVersion` field tracking the tool version that produced the export
+- Metadata format version bumped from `1.1` to `1.2`
+- Import script maintains its own canonical type-to-order mapping via `Get-CanonicalTypeOrder`, independent of export's folder numbering
+- When processing an export, import reorders folders according to its canonical type ordering using `Get-TypeBasedFolderOrder`
+- For older exports without `folderOrder` metadata, import falls back to name-based type derivation (`Resolve-FolderTypeFromName`)
+- Emits a multi-line `[WARNING]` when import's effective order differs from the export's folder numbering, showing which folders were reordered
+- Added `$script:ExportToolVersion` constant for version tracking
+- Added comprehensive test coverage: `tests/test-import-folder-ordering.ps1` (104 assertions)
+- Full backward compatibility: new import handles old exports (no `folderOrder`), old import ignores new fields
+
 ## [1.8.2] - 2026-02-26
 
 ### Fixed

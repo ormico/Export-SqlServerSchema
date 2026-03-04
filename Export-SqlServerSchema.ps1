@@ -3533,10 +3533,13 @@ $script:Config = @{}  # Will be set after config file is loaded
 $script:LastProgressLabel = $null
 $script:CurrentProgressLabel = $null
 
+# Export tool version — keep in sync with CHANGELOG.md
+$script:ExportToolVersion = '1.9.0'
+
 # Export metadata tracking for delta export feature
 # This tracks all objects exported for use in incremental/delta exports
 $script:ExportMetadata = @{
-  Version               = '1.1'
+  Version               = '1.2'
   ExportStartTimeUtc    = $null
   ExportStartTimeServer = $null
   ServerName            = $null
@@ -3800,15 +3803,51 @@ function Save-ExportMetadata {
     }
   }
 
+  # Build folderOrder array — maps each export folder to a stable type identifier
+  $folderOrder = [System.Collections.ArrayList]::new()
+  $folderTypeIdMap = [ordered]@{
+    '00_FileGroups'            = 'filegroups'
+    '01_Security'              = 'security'
+    '02_DatabaseConfiguration' = 'database_configuration'
+    '03_Schemas'               = 'schemas'
+    '04_Sequences'             = 'sequences'
+    '05_PartitionFunctions'    = 'partition_functions'
+    '06_PartitionSchemes'      = 'partition_schemes'
+    '07_Types'                 = 'types'
+    '08_XmlSchemaCollections'  = 'xml_schema_collections'
+    '09_Tables_PrimaryKey'     = 'tables_primarykey'
+    '10_Indexes'               = 'indexes'
+    '11_Tables_ForeignKeys'    = 'tables_foreignkeys'
+    '12_Defaults'              = 'defaults'
+    '13_Rules'                 = 'rules'
+    '14_Programmability'       = 'programmability'
+    '15_Synonyms'              = 'synonyms'
+    '16_FullTextSearch'        = 'fulltext_search'
+    '17_ExternalData'          = 'external_data'
+    '18_SearchPropertyLists'   = 'search_property_lists'
+    '19_PlanGuides'            = 'plan_guides'
+    '20_SecurityPolicies'      = 'security_policies'
+    '21_Data'                  = 'data'
+  }
+
+  foreach ($key in $folderTypeIdMap.Keys) {
+    [void]$folderOrder.Add([ordered]@{
+        folder = $key
+        type   = $folderTypeIdMap[$key]
+      })
+  }
+
   # Build the final metadata object
   $metadata = [ordered]@{
     version               = $script:ExportMetadata.Version
+    exportToolVersion     = $script:ExportToolVersion
     exportStartTimeUtc    = $script:ExportMetadata.ExportStartTimeUtc
     exportStartTimeServer = $script:ExportMetadata.ExportStartTimeServer
     serverName            = $script:ExportMetadata.ServerName
     databaseName          = $script:ExportMetadata.DatabaseName
     groupBy               = $script:ExportMetadata.GroupBy
     includeData           = $script:ExportMetadata.IncludeData
+    folderOrder           = $folderOrder
     objectCount           = $objects.Count
     objects               = $objects
   }
