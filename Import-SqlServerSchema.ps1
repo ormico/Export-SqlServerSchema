@@ -6195,12 +6195,12 @@ try {
   Write-Output "Target: $Server\$Database"
   Write-Output ''
   Write-Output "Execution results:"
-  Write-Output "  [SUCCESS] Successful: $successCount script(s)"
+  Write-Host "  [SUCCESS] Successful: $successCount script(s)" -ForegroundColor Green
   if ($skipCount -gt 0) {
-    Write-Output "  [INFO] Skipped:   $skipCount script(s)"
+    Write-Host "  [INFO] Skipped:   $skipCount script(s)" -ForegroundColor Yellow
   }
   if ($failureCount -gt 0) {
-    Write-Output "  [ERROR] Failed:    $failureCount script(s)"
+    Write-Host "  [ERROR] Failed:    $failureCount script(s)" -ForegroundColor Red
   }
   Write-Output ''
 
