@@ -147,7 +147,7 @@ function Get-FunctionBlock {
     }
     return $Content.Substring($startIndex, $end - $startIndex + 1)
 }
-$tempFuncFile = Join-Path $env:TEMP "test-ado-parser-$([System.Guid]::NewGuid().ToString('N')).ps1"
+$tempFuncFile = Join-Path ([System.IO.Path]::GetTempPath()) "test-ado-parser-$([System.Guid]::NewGuid().ToString('N')).ps1"
 Get-FunctionBlock $exportScriptContent 'ConvertFrom-AdoConnectionString' | Set-Content $tempFuncFile -Encoding UTF8
 . $tempFuncFile
 Remove-Item $tempFuncFile -ErrorAction SilentlyContinue

@@ -137,7 +137,7 @@ GO
 "@
 
     # Write setup SQL to temp file
-    $setupFile = Join-Path $env:TEMP 'schema_exclude_setup.sql'
+    $setupFile = Join-Path ([System.IO.Path]::GetTempPath()) 'schema_exclude_setup.sql'
     $setupSql | Out-File -FilePath $setupFile -Encoding utf8
 
     $result = sqlcmd @sqlcmdArgs -i $setupFile -b 2>&1
@@ -192,7 +192,7 @@ IF EXISTS (SELECT 1 FROM sys.databases WHERE name = 'TestDb_SchemaExclude')
     DROP DATABASE [TestDb_SchemaExclude];
 CREATE DATABASE [TestDb_SchemaExclude];
 "@
-    $dropFile = Join-Path $env:TEMP 'drop_target.sql'
+    $dropFile = Join-Path ([System.IO.Path]::GetTempPath()) 'drop_target.sql'
     $dropSql | Out-File -FilePath $dropFile -Encoding utf8
     sqlcmd @sqlcmdArgs -i $dropFile -b 2>&1 | Out-Null
 
@@ -314,7 +314,7 @@ IF EXISTS (SELECT 1 FROM sys.databases WHERE name = 'TestDb_SchemaExclude')
 IF EXISTS (SELECT 1 FROM sys.databases WHERE name = 'TestDb_SchemaExclude')
     DROP DATABASE [TestDb_SchemaExclude];
 "@
-    $cleanupFile = Join-Path $env:TEMP 'cleanup_schema_exclude.sql'
+    $cleanupFile = Join-Path ([System.IO.Path]::GetTempPath()) 'cleanup_schema_exclude.sql'
     $cleanupSql | Out-File -FilePath $cleanupFile -Encoding utf8
     sqlcmd @sqlcmdArgs -i $cleanupFile -b 2>&1 | Out-Null
 

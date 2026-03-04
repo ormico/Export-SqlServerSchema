@@ -206,7 +206,7 @@ function Invoke-ImportScriptForOutput {
     }
     $argStr = $argParts -join ' '
 
-    $wrapperPs1 = Join-Path $env:TEMP ([System.IO.Path]::GetRandomFileName() + '.ps1')
+    $wrapperPs1 = Join-Path ([System.IO.Path]::GetTempPath()) ([System.IO.Path]::GetRandomFileName() + '.ps1')
     @"
 try { & $(ConvertTo-Json $importScript -Compress) $argStr *>&1 } catch {}
 "@ | Set-Content -Path $wrapperPs1 -Encoding UTF8

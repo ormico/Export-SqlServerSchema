@@ -532,7 +532,7 @@ GO
 CREATE TABLE Test2 (Col1 INT) ON [PRIMARY] FILESTREAM_ON "DEFAULT"
 GO
 "@
-    $tempFile = Join-Path $env:TEMP "test-filestream-patterns.sql"
+    $tempFile = Join-Path ([System.IO.Path]::GetTempPath()) "test-filestream-patterns.sql"
     $multiplePatternContent | Set-Content -Path $tempFile -Encoding UTF8
 
     # Apply stripping patterns
