@@ -366,6 +366,49 @@ try {
     [System.Environment]::SetEnvironmentVariable($envVar19cs, $null, [System.EnvironmentVariableTarget]::Process)
 }
 
+# Test 20: CLI -ConnectionStringFromEnv takes precedence over config connection.serverFromEnv
+$envVar20srv = "TEST_SRV_CFG_$(Get-Random)"
+$envVar20cs = "TEST_CS_$(Get-Random)"
+[System.Environment]::SetEnvironmentVariable($envVar20srv, 'ConfigServer', [System.EnvironmentVariableTarget]::Process)
+[System.Environment]::SetEnvironmentVariable($envVar20cs, 'Data Source=ConnStrServer;Initial Catalog=db;User ID=u;Password=p', [System.EnvironmentVariableTarget]::Process)
+try {
+    $configWithSrvEnv = @{ connection = @{ serverFromEnv = $envVar20srv } }
+    $r = Resolve-EnvCredential `
+        -ServerParam '' -DatabaseParam 'db' -CredentialParam $null `
+        -ServerFromEnvParam '' -DatabaseFromEnvParam '' `
+        -UsernameFromEnvParam '' -PasswordFromEnvParam '' `
+        -ConnectionStringFromEnvParam $envVar20cs -TrustServerCertificateFromEnvParam '' `
+        -TrustServerCertificateParam $false `
+        -Config $configWithSrvEnv -BoundParameters @{ Database = 'db' }
+    Assert-True 'CLI ConnectionStringFromEnv takes precedence over config serverFromEnv' ($r.Server -eq 'ConnStrServer') "got '$($r.Server)'"
+} finally {
+    [System.Environment]::SetEnvironmentVariable($envVar20srv, $null, [System.EnvironmentVariableTarget]::Process)
+    [System.Environment]::SetEnvironmentVariable($envVar20cs, $null, [System.EnvironmentVariableTarget]::Process)
+}
+
+# Test 21: CLI -ConnectionStringFromEnv takes precedence over config connection.usernameFromEnv/passwordFromEnv
+$envVar21user = "TEST_USER_CFG_$(Get-Random)"
+$envVar21pass = "TEST_PASS_CFG_$(Get-Random)"
+$envVar21cs = "TEST_CS_$(Get-Random)"
+[System.Environment]::SetEnvironmentVariable($envVar21user, 'ConfigUser', [System.EnvironmentVariableTarget]::Process)
+[System.Environment]::SetEnvironmentVariable($envVar21pass, 'ConfigPass', [System.EnvironmentVariableTarget]::Process)
+[System.Environment]::SetEnvironmentVariable($envVar21cs, 'Data Source=srv;Initial Catalog=db;User ID=ConnStrUser;Password=ConnStrPass', [System.EnvironmentVariableTarget]::Process)
+try {
+    $configWithCredEnv = @{ connection = @{ usernameFromEnv = $envVar21user; passwordFromEnv = $envVar21pass } }
+    $r = Resolve-EnvCredential `
+        -ServerParam 'srv' -DatabaseParam 'db' -CredentialParam $null `
+        -ServerFromEnvParam '' -DatabaseFromEnvParam '' `
+        -UsernameFromEnvParam '' -PasswordFromEnvParam '' `
+        -ConnectionStringFromEnvParam $envVar21cs -TrustServerCertificateFromEnvParam '' `
+        -TrustServerCertificateParam $false `
+        -Config $configWithCredEnv -BoundParameters @{ Server = 'srv'; Database = 'db' }
+    Assert-True 'CLI ConnectionStringFromEnv takes precedence over config usernameFromEnv/passwordFromEnv' ($r.Credential.UserName -eq 'ConnStrUser') "got '$($r.Credential.UserName)'"
+} finally {
+    [System.Environment]::SetEnvironmentVariable($envVar21user, $null, [System.EnvironmentVariableTarget]::Process)
+    [System.Environment]::SetEnvironmentVariable($envVar21pass, $null, [System.EnvironmentVariableTarget]::Process)
+    [System.Environment]::SetEnvironmentVariable($envVar21cs, $null, [System.EnvironmentVariableTarget]::Process)
+}
+
 # Summary
 Write-Host "`n=== Summary ===" -ForegroundColor Cyan
 Write-Host "Passed: $passed" -ForegroundColor Green
