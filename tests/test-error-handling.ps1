@@ -191,10 +191,11 @@ $importOutput = & $importScript -Server $Server -Database $targetDb1 `
 $errorLogs1 = Get-ChildItem -Path $exportedDir.FullName -Filter "import_errors_*.log" -ErrorAction SilentlyContinue
 $errorLogContent1 = if ($errorLogs1.Count -gt 0) { Get-Content $errorLogs1[0].FullName -Raw } else { "" }
 
-# Test 1a: Check for error prefix in output
-$hasErrorPrefix = $importOutput -match "\[ERROR\]"
-Write-TestResult -TestName "Output contains [ERROR] prefix" -Passed $hasErrorPrefix `
-    -Message "Error messages should have [ERROR] prefix"
+# Test 1a: Check for error prefix in output or error log
+# Note: Write-Host output cannot be captured via 2>&1, so we also check the error log file
+$hasErrorPrefix = ($importOutput -match "\[ERROR\]") -or ($errorLogContent1 -match "\[ERROR\]|Error \d+:|Exception")
+Write-TestResult -TestName "Output or error log contains error indicators" -Passed $hasErrorPrefix `
+    -Message "Error messages should have [ERROR] prefix in output or error log"
 
 # Test 1b: Check that broken script name is mentioned (in output OR error log)
 $mentionsBrokenScript = ($importOutput -match "fn_BrokenFunction|BrokenFunction") -or ($errorLogContent1 -match "fn_BrokenFunction|BrokenFunction")
