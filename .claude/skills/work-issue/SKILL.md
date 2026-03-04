@@ -38,18 +38,18 @@ If no issue number is provided, ask the user for one before proceeding.
 
 1. **Read the issue** with `gh issue view $ARGUMENTS` to understand requirements
 2. **Create a worktree** using the `EnterWorktree` tool
-3. **Immediately rename the branch** to follow the `feature/` convention:
+3. **Immediately rename the branch** — `EnterWorktree` auto-names with a `worktree-` prefix that must be renamed before doing any other work. Feature branches must follow the `feature/<name>` format:
    ```bash
    git branch -m feature/<descriptive-branch-name>
    ```
-4. **Link the branch to the issue** for traceability:
-   ```bash
-   gh issue develop $ARGUMENTS --branch feature/<descriptive-branch-name>
-   ```
-5. **Assign and label the issue**:
+4. **Assign and label the issue**:
    ```bash
    gh issue edit $ARGUMENTS --add-assignee @me
    gh issue edit $ARGUMENTS --add-label in-progress
+   ```
+5. **Link the branch to the issue** for traceability:
+   ```bash
+   gh issue develop $ARGUMENTS --branch feature/<descriptive-branch-name>
    ```
 6. **Copy `tests/.env` from the main repo** (it's gitignored and missing in worktrees):
    ```bash
