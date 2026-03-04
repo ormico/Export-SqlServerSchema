@@ -5,6 +5,12 @@ All notable changes to Export-SqlServerSchema will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.9.1] - 2026-03-04
+
+### Fixed
+
+- **Release workflow missing `Import-Helpers.ps1` and `ConvertTo-ImportReport.ps1`** — The `ci-main.yml` release job did not copy `Import-Helpers.ps1` or `ConvertTo-ImportReport.ps1` into the release archive. Both files are required at runtime: `Import-SqlServerSchema.ps1` dot-sources `Import-Helpers.ps1` and invokes `ConvertTo-ImportReport.ps1` for post-import summaries.
+
 ## [1.9.0] - 2026-03-04
 
 ### Changed

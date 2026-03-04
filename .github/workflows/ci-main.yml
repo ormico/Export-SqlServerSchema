@@ -136,7 +136,9 @@ jobs:
           cp export-import-config.example.yml release/
           cp export-import-config.schema.json release/
           cp Common-SqlServerSchema.ps1 release/
+          cp ConvertTo-ImportReport.ps1 release/
           cp Export-SqlServerSchema.ps1 release/
+          cp Import-Helpers.ps1 release/
           cp Import-SqlServerSchema.ps1 release/
           cp LICENSE.md release/
           cp README.md release/
