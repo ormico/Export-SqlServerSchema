@@ -408,6 +408,12 @@ $chainExportDir = Join-Path $ExportPath "chain_export"
     -Credential $credential -Verbose:$false 2>&1 | Out-Null
 
 $chainExportedDir = Get-ChildItem $chainExportDir -Directory | Select-Object -First 1
+if (-not $chainExportedDir) {
+    Write-TestResult -TestName "Error log contains inner exception message" -Passed $false `
+        -Message "Export did not produce any output directory under '$chainExportDir'"
+    Write-TestResult -TestName "Error chain uses arrow format" -Passed $false -Message "Skipped (no export output)"
+    Write-TestResult -TestName "Error log has Error Chain section" -Passed $false -Message "Skipped (no export output)"
+} else {
 
 # Inject function with unresolvable dependency (causes nested exception: AggregateException -> SqlException)
 $chainBrokenDir = Join-Path $chainExportedDir.FullName "14_Programmability" "02_Functions"
@@ -459,6 +465,7 @@ if ($chainErrorLogs.Count -gt 0) {
 }
 
 Drop-TestDatabase -DbName $targetDb6
+} # end chainExportedDir null check
 
 # ═══════════════════════════════════════════════════════════════
 # TEST 7: EXECUTED SQL IN ERROR LOG
@@ -471,6 +478,11 @@ $sqlExportDir = Join-Path $ExportPath "sql_export"
     -Credential $credential -Verbose:$false 2>&1 | Out-Null
 
 $sqlExportedDir = Get-ChildItem $sqlExportDir -Directory | Select-Object -First 1
+if (-not $sqlExportedDir) {
+    Write-TestResult -TestName "Error log has Executed SQL section" -Passed $false `
+        -Message "Export did not produce any output directory under '$sqlExportDir'"
+    Write-TestResult -TestName "Error log contains actual SQL content" -Passed $false -Message "Skipped (no export output)"
+} else {
 
 # Inject a broken script with recognizable SQL content
 $sqlBrokenDir = Join-Path $sqlExportedDir.FullName "14_Programmability" "02_Functions"
@@ -515,6 +527,7 @@ if ($sqlErrorLogs.Count -gt 0) {
 }
 
 Drop-TestDatabase -DbName $targetDb7
+} # end sqlExportedDir null check
 
 # ═══════════════════════════════════════════════════════════════
 # CLEANUP

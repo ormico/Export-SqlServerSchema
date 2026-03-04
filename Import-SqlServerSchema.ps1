@@ -1141,11 +1141,12 @@ function Redact-SqlSecrets {
   if ([string]::IsNullOrWhiteSpace($Sql)) { return $Sql }
 
   # Redact PASSWORD = N'...' and PASSWORD = '...' (covers ENCRYPTION BY PASSWORD, DECRYPTION BY PASSWORD, WITH PASSWORD, etc.)
+  # (?i) for explicit case-insensitivity, \b for word boundary to avoid matching column names like USERPASSWORD
   # The SQL string literal pattern handles escaped quotes: N?'([^']|'')*'
-  $Sql = $Sql -replace "(PASSWORD\s*=\s*N?)'(?:[^']|'')*'", "`$1'***REDACTED***'"
+  $Sql = $Sql -replace "(?i)\b(PASSWORD\b\s*=\s*N?)'(?:[^']|'')*'", "`$1'***REDACTED***'"
 
   # Redact SECRET = N'...' and SECRET = '...' (database scoped credentials)
-  $Sql = $Sql -replace "(SECRET\s*=\s*N?)'(?:[^']|'')*'", "`$1'***REDACTED***'"
+  $Sql = $Sql -replace "(?i)\b(SECRET\b\s*=\s*N?)'(?:[^']|'')*'", "`$1'***REDACTED***'"
 
   return $Sql
 }
@@ -6291,9 +6292,8 @@ try {
       elseif ($result -eq -1) {
         $failureCount++
 
-        # Get error details
+        # Get error details (skip SQL content for data scripts — they contain row values that may include PII)
         $errorMsg = if ($script:LastScriptError) { $script:LastScriptError } else { 'Unknown error' }
-        $failedSql = if ($script:LastFailedSql) { $script:LastFailedSql } else { '' }
 
         Write-Host "  [ERROR] $($scriptFile.Name)" -ForegroundColor Red
         $errorChain = Format-ErrorChain -FullError $errorMsg
@@ -6302,7 +6302,7 @@ try {
         }
 
         # Record for final summary
-        Add-FailedScript -ScriptName $scriptFile.Name -ErrorMessage $errorMsg -Folder '16_Data' -FilePath $scriptFile.FullName -SqlContent $failedSql
+        Add-FailedScript -ScriptName $scriptFile.Name -ErrorMessage $errorMsg -Folder '16_Data' -FilePath $scriptFile.FullName
         if (-not $ContinueOnError) {
           break
         }
