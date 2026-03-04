@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Extract import filter functions into `Import-Helpers.ps1` (#113)** — Moved `Test-SchemaExcluded`, `Test-ObjectExcluded`, and `Test-ScriptExcluded` from `Import-SqlServerSchema.ps1` into a new dot-sourceable helper file. This eliminates the fragile regex extraction hack in tests and allows direct dot-sourcing of filter functions.
+
 ### Added
 
 - **`ExcludeObjects` parameter for Import-SqlServerSchema (#108)** — Exclude specific objects from import using `schema.name` wildcard patterns (e.g., `dbo.usp_LegacyProc`, `staging.*`). Supports `-ExcludeObjects` CLI parameter and `import.excludeObjects` config key, with CLI taking precedence over config. Matches the existing `excludeObjects` pattern from the export script.
