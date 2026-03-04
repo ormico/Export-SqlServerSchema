@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`ExcludeObjects` parameter for Import-SqlServerSchema (#108)** — Exclude specific objects from import using `schema.name` wildcard patterns (e.g., `dbo.usp_LegacyProc`, `staging.*`). Supports `-ExcludeObjects` CLI parameter and `import.excludeObjects` config key, with CLI taking precedence over config. Matches the existing `excludeObjects` pattern from the export script.
+
 ### Fixed
 
 - **Config `serverFromEnv`/`usernameFromEnv`/`passwordFromEnv` no longer override CLI `-ConnectionStringFromEnv` (#105)** — Added `-not $ConnectionStringFromEnvParam` guards to the config fallback paths for server and credential resolution in `Resolve-EnvCredential`, matching the fix already applied for `databaseFromEnv` and `trustServerCertificateFromEnv` in #102.

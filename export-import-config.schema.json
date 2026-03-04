@@ -370,6 +370,16 @@
           "uniqueItems": true,
           "examples": ["staging", "temp"]
         },
+        "excludeObjects": {
+          "type": "array",
+          "description": "Specific objects to exclude from import using schema.name pattern (supports wildcards)",
+          "items": {
+            "type": "string",
+            "pattern": "^[\\w\\*]+\\.[\\w\\*]+$"
+          },
+          "uniqueItems": true,
+          "examples": ["dbo.usp_LegacyProc", "staging.*", "*.TempView"]
+        },
         "dependencyRetries": {
           "type": "object",
           "description": "Retry settings for handling cross-object dependencies in programmability objects",
