@@ -518,6 +518,7 @@ function Export-IntegrityReport {
       folder       = $failure.Folder
       reason       = 'SqlError'
       errorMessage = $failure.ErrorMessage
+      errorChain   = @($failure.ErrorChain)
     }
 
     # Try to extract type/schema/name if we have a file path
@@ -1226,21 +1227,62 @@ function Add-FailedScript {
     [string]$SqlContent = ''
   )
 
-  # Format error chain for summary display
-  $errorChain = Format-ErrorChain -FullError $ErrorMessage
-  $chainText = ($errorChain -join "`n")
+  # Format error chain for console/log display (arrow format)
+  $errorChainDisplay = Format-ErrorChain -FullError $ErrorMessage
+  $chainDisplayText = ($errorChainDisplay -join "`n")
+
+  # Parse structured exception chain for JSON report (type + message at each level)
+  $structuredChain = @()
+  $currentType = $null
+  foreach ($line in ($ErrorMessage -split "`n")) {
+    $trimmed = $line.Trim()
+    if ($trimmed -match '^Exception:\s*(.+)' -or $trimmed -match '^Inner Exception \d+\s*\(Type:\s*([^)]+)\)') {
+      $currentType = $matches[1].Trim()
+    }
+    elseif ($trimmed -match '^\s*Message:\s*(.+)') {
+      $structuredChain += [ordered]@{
+        type    = if ($currentType) { $currentType } else { 'Unknown' }
+        message = $matches[1].Trim()
+      }
+    }
+    elseif ($trimmed -match '^\s*-?\s*Error\s+(\d+):\s*(.+)') {
+      $structuredChain += [ordered]@{
+        type    = if ($currentType) { $currentType } else { 'SqlError' }
+        message = "Error $($matches[1]): $($matches[2].Trim())"
+      }
+    }
+  }
+
+  # Single-line root cause: innermost exception message (last in chain) for JSON errorMessage
+  $rootCause = if ($structuredChain.Count -gt 0) {
+    $structuredChain[-1].message
+  } else {
+    # Fallback: first non-empty line
+    ($ErrorMessage -split "`n" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -First 1)
+  }
+  if (-not $rootCause) { $rootCause = 'Unknown error' }
 
   # Redact secrets from SQL before storing (passwords, secrets injected by transformations)
-  $redactedSql = if ($SqlContent) { Redact-SqlSecrets -Sql $SqlContent } else { '' }
+  $redactedSql = ''
+  if ($SqlContent) {
+    $redactedSql = Redact-SqlSecrets -Sql $SqlContent
+    # Truncate to first 200 lines to cap memory usage (large data scripts)
+    $sqlLines = $redactedSql -split "`n"
+    if ($sqlLines.Count -gt 200) {
+      $redactedSql = ($sqlLines[0..199] -join "`n") + "`n-- ... (truncated, $($sqlLines.Count) total lines)"
+    }
+  }
 
   [void]$script:FailedScripts.Add([PSCustomObject]@{
-    ScriptName   = $ScriptName
-    FilePath     = $FilePath
-    Folder       = $Folder
-    ErrorMessage = $chainText
-    FullError    = $ErrorMessage
-    SqlContent   = $redactedSql
-    Timestamp    = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+    ScriptName        = $ScriptName
+    FilePath          = $FilePath
+    Folder            = $Folder
+    ErrorMessage      = $rootCause
+    ErrorChainDisplay = $chainDisplayText
+    ErrorChain        = $structuredChain
+    FullError         = $ErrorMessage
+    SqlContent        = $redactedSql
+    Timestamp         = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
   })
 }
 
@@ -1277,7 +1319,7 @@ function Write-ErrorLog {
     [void]$sb.AppendLine("    Time: $($failure.Timestamp)")
     [void]$sb.AppendLine("")
     [void]$sb.AppendLine("    Error Chain:")
-    foreach ($chainLine in ($failure.ErrorMessage -split "`n")) {
+    foreach ($chainLine in ($failure.ErrorChainDisplay -split "`n")) {
       [void]$sb.AppendLine("      $chainLine")
     }
     [void]$sb.AppendLine("")
@@ -1286,17 +1328,12 @@ function Write-ErrorLog {
       [void]$sb.AppendLine("      $line")
     }
 
-    # Include the executed SQL if available (truncated to first 200 lines)
+    # Include the executed SQL if available (already truncated and redacted at storage time)
     if ($failure.SqlContent) {
       [void]$sb.AppendLine("")
       [void]$sb.AppendLine("    Executed SQL:")
-      $sqlLines = $failure.SqlContent -split "`n"
-      $maxLines = [Math]::Min($sqlLines.Count, 200)
-      for ($j = 0; $j -lt $maxLines; $j++) {
-        [void]$sb.AppendLine("      $($sqlLines[$j])")
-      }
-      if ($sqlLines.Count -gt 200) {
-        [void]$sb.AppendLine("      ... (truncated, $($sqlLines.Count) total lines)")
+      foreach ($sqlLine in ($failure.SqlContent -split "`n")) {
+        [void]$sb.AppendLine("      $sqlLine")
       }
     }
 
@@ -6494,7 +6531,7 @@ try {
     for ($i = 0; $i -lt $displayCount; $i++) {
       $failure = $script:FailedScripts[$i]
       Write-Host "  $($i + 1). [$($failure.Folder)] $($failure.ScriptName)" -ForegroundColor Red
-      foreach ($chainLine in ($failure.ErrorMessage -split "`n")) {
+      foreach ($chainLine in ($failure.ErrorChainDisplay -split "`n")) {
         Write-Host "     $chainLine" -ForegroundColor DarkRed
       }
     }
