@@ -63,7 +63,7 @@ function Test-SchemaExcluded {
     'Triggers',         # Matches 04_Triggers (nested under 14_Programmability)
     'Synonyms',         # Matches 15_Synonyms
     'Sequences',        # Matches 04_Sequences
-    'Data'              # Matches 21_Data
+    '_Data'             # Matches 21_Data (underscore prevents matching 02_DatabaseConfiguration)
   )
 
   # Extract folder name from path (immediate parent)
@@ -128,7 +128,7 @@ function Test-ObjectExcluded {
   # Only apply object filtering to folders containing schema-bound objects
   $schemaBoundFolders = @(
     'Tables', 'Indexes', 'Views', 'Functions', 'StoredProcedures',
-    'Triggers', 'Synonyms', 'Sequences', 'Data'
+    'Triggers', 'Synonyms', 'Sequences', '_Data'
   )
 
   # Extract immediate parent folder name
