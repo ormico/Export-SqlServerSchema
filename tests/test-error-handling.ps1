@@ -475,10 +475,16 @@ if ($chainErrorLogs.Count -gt 0) {
                 -Message "failedObjects should include errorChain array with structured exception data"
 
             if ($hasErrorChainArray) {
-                $hasTypeAndMessage = ($chainFailed.errorChain[0].PSObject.Properties.Name -contains 'type') -and
-                                     ($chainFailed.errorChain[0].PSObject.Properties.Name -contains 'message')
-                Write-TestResult -TestName "errorChain entries have type and message fields" -Passed $hasTypeAndMessage `
-                    -Message "Each errorChain entry should have 'type' and 'message' fields"
+                $allValid = $true
+                foreach ($entry in $chainFailed.errorChain) {
+                    if (-not (($entry.PSObject.Properties.Name -contains 'type') -and
+                              ($entry.PSObject.Properties.Name -contains 'message'))) {
+                        $allValid = $false
+                        break
+                    }
+                }
+                Write-TestResult -TestName "errorChain entries have type and message fields" -Passed $allValid `
+                    -Message "Every errorChain entry should have 'type' and 'message' fields"
             } else {
                 Write-TestResult -TestName "errorChain entries have type and message fields" -Passed $false `
                     -Message "errorChain array was empty or missing"
