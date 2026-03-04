@@ -457,10 +457,12 @@ if ($chainErrorLogs.Count -gt 0) {
         -Message "Error log should have an 'Error Chain:' section with formatted messages"
 
     # Test 6d: Integrity report JSON contains structured errorChain array
-    $chainReportFiles = Get-ChildItem -Path $chainExportedDir.FullName -Filter "import-report-*.json" -ErrorAction SilentlyContinue
-    if ($chainReportFiles.Count -gt 0) {
-        $chainReport = Get-Content $chainReportFiles[0].FullName -Raw | ConvertFrom-Json
-        $chainFailed = $chainReport.failedObjects | Where-Object { $_.name -match 'fn_ChainTest' }
+    $chainReportFile = Get-ChildItem -Path $chainExportedDir.FullName -Filter "import-report-*.json" -ErrorAction SilentlyContinue |
+        Sort-Object -Property LastWriteTime, Name -Descending |
+        Select-Object -First 1
+    if ($chainReportFile) {
+        $chainReport = Get-Content -Path $chainReportFile.FullName -Raw | ConvertFrom-Json
+        $chainFailed = $chainReport.failedObjects | Where-Object { $_.name -match 'fn_ChainTest' } | Select-Object -First 1
         if ($chainFailed) {
             # errorMessage should be the clean root cause (Message: line, not Error NNN:)
             $hasCleanRootCause = $chainFailed.errorMessage -match "Invalid object name" -and $chainFailed.errorMessage -notmatch "^Error \d+:"
