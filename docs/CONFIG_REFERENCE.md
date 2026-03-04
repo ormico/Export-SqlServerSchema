@@ -661,6 +661,34 @@ import:
     - temp
 ```
 
+#### `import.excludeObjects`
+
+- **Type**: Array of strings (patterns)
+- **Default**: Empty
+- **Description**: Exclude specific objects from import by matching `schema.objectName` extracted from filenames
+- **Matching**: Uses PowerShell `-ilike` (case-insensitive, **full string match** — not substring)
+- **Wildcards**: `*` matches any characters (including none), `?` matches exactly one character
+- **Pattern format**: `schema.objectName` (do NOT use SQL bracket notation like `[dbo].[name]`)
+- **Scope**: Only applies to schema-bound object folders (Tables, Views, Functions, StoredProcedures, Indexes, Triggers, Synonyms, Sequences, Types, XmlSchemaCollections, Defaults, Rules, Data)
+- **Limitation**: Only supported with single grouping mode; in schema or all modes patterns do not reliably match individual objects and should not be relied on. See [#118](https://github.com/AgileSqlClub/Export-SqlServerSchema/issues/118) for details.
+
+**Matching behavior with overlapping names:**
+
+| Pattern | `dbo.usp_Process` | `dbo.usp_ProcessOrders` | `dbo.usp_ProcessReturns` |
+|---|---|---|---|
+| `dbo.usp_Process` | matches | no | no |
+| `dbo.usp_Process*` | matches | matches | matches |
+| `dbo.usp_Process?rders` | no | matches | no |
+| `dbo.usp_ProcessOrders` | no | matches | no |
+
+```yaml
+import:
+  excludeObjects:
+    - "dbo.usp_LegacyProc"     # Exact match — does NOT match dbo.usp_LegacyProcV2
+    - "staging.*"               # All objects in the staging schema
+    - "dbo.usp_Legacy*"        # All objects starting with dbo.usp_Legacy
+```
+
 #### `import.dependencyRetries`
 
 Settings for handling cross-object dependencies in programmability objects.
