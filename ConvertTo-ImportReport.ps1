@@ -9,9 +9,9 @@
     format. The Console format prints a compact summary with colored output. The Markdown format
     writes a .md file with tables for skipped and failed objects.
 
-    The -Diff switch cross-references exportedObjects against importedObjects and skippedObjects
-    to flag objects that appear in the export but are missing from both import lists (potential
-    silent failures). Diff integrates into whichever format is active.
+    The -Diff switch cross-references exportedObjects against importedObjects, skippedObjects,
+    and failedObjects to flag objects that appear in the export but are not accounted for in any
+    of those lists (potential silent failures). Diff integrates into whichever format is active.
 
 .PARAMETER ReportPath
     Path to the import-report-*.json file to render. Required.
@@ -20,8 +20,8 @@
     Output format: Console (default) or Markdown.
 
 .PARAMETER Diff
-    Cross-reference exportedObjects against importedObjects and skippedObjects to find objects
-    that were neither imported nor explicitly skipped (potential silent failures).
+    Cross-reference exportedObjects against importedObjects, skippedObjects, and failedObjects
+    to find objects not accounted for in any list (potential silent failures).
 
 .PARAMETER OutputPath
     Override output path for the Markdown file. Defaults to the same directory and base name
@@ -413,6 +413,12 @@ function Export-MarkdownReport {
       [void]$sb.AppendLine("| $type | $schema | $name | $file |")
     }
     [void]$sb.AppendLine('')
+  }
+
+  # Ensure destination directory exists before writing
+  $destinationDirectory = Split-Path -Path $DestinationPath -Parent
+  if ($destinationDirectory -and -not (Test-Path -LiteralPath $destinationDirectory)) {
+    [void](New-Item -ItemType Directory -Path $destinationDirectory -Force)
   }
 
   Set-Content -LiteralPath $DestinationPath -Value $sb.ToString() -Encoding UTF8
