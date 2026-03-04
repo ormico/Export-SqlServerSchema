@@ -12,7 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`DatabaseFromEnv` and `TrustServerCertificateFromEnv` parameters (#86)** — Complete the `*FromEnv` pattern for all connection properties:
   - `-DatabaseFromEnv` CLI parameter and `connection.databaseFromEnv` config key resolve database name from an environment variable
   - `-TrustServerCertificateFromEnv` CLI parameter and `connection.trustServerCertificateFromEnv` config key resolve TrustServerCertificate from an environment variable (accepts `true`/`false`/`1`/`0`)
-  - Both follow the same precedence chain: CLI explicit > CLI `*FromEnv` > config `connection.*FromEnv` > connection string > defaults
+  - Both follow the same precedence chain: CLI explicit > CLI `*FromEnv` > CLI `-ConnectionStringFromEnv` > config `connection.*FromEnv` > config `connection.connectionStringFromEnv` > defaults
 
 ## [1.9.0] - 2026-03-03
 

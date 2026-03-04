@@ -349,11 +349,13 @@ function Resolve-EnvCredential {
   # --- Resolve TrustServerCertificate ---
   # CLI switch > TrustServerCertificateFromEnv CLI > config connection.trustServerCertificateFromEnv
   # > config connection.trustServerCertificate > config root-level trustServerCertificate > connection string > default (false)
+  # Note: config connection.trustServerCertificateFromEnv is skipped when CLI -ConnectionStringFromEnv
+  # is provided (CLI connection string has higher precedence than config *FromEnv).
   $trustResolvedFromHigherPriority = $BoundParameters.ContainsKey('TrustServerCertificate')
   if (-not $trustResolvedFromHigherPriority) {
-    # Try TrustServerCertificateFromEnv (CLI > config)
+    # Try TrustServerCertificateFromEnv (CLI first, config fallback only if no CLI ConnectionStringFromEnv)
     $trustEnvName = $TrustServerCertificateFromEnvParam
-    if (-not $trustEnvName -and $Config -and $Config.ContainsKey('connection') -and $Config.connection -is [System.Collections.IDictionary]) {
+    if (-not $trustEnvName -and -not $ConnectionStringFromEnvParam -and $Config -and $Config.ContainsKey('connection') -and $Config.connection -is [System.Collections.IDictionary]) {
       if ($Config.connection.ContainsKey('trustServerCertificateFromEnv')) {
         $trustEnvName = $Config.connection.trustServerCertificateFromEnv
       }
@@ -416,10 +418,12 @@ function Resolve-EnvCredential {
 
   # --- Resolve Database from individual *FromEnv ---
   # CLI -Database > -DatabaseFromEnv > config connection.databaseFromEnv > connection string
+  # Note: config connection.databaseFromEnv is skipped when CLI -ConnectionStringFromEnv
+  # is provided (CLI connection string has higher precedence than config *FromEnv).
   $databaseResolvedFromHigherPriority = $BoundParameters.ContainsKey('Database') -and -not [string]::IsNullOrWhiteSpace($DatabaseParam)
   if (-not $databaseResolvedFromHigherPriority) {
     $databaseEnvName = $DatabaseFromEnvParam
-    if (-not $databaseEnvName -and $Config -and $Config.ContainsKey('connection') -and $Config.connection -is [System.Collections.IDictionary]) {
+    if (-not $databaseEnvName -and -not $ConnectionStringFromEnvParam -and $Config -and $Config.ContainsKey('connection') -and $Config.connection -is [System.Collections.IDictionary]) {
       if ($Config.connection.ContainsKey('databaseFromEnv')) {
         $databaseEnvName = $Config.connection.databaseFromEnv
       }

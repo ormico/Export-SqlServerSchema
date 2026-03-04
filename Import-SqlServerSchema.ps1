@@ -4608,7 +4608,7 @@ try {
 
   # Validate that Database was resolved from at least one source
   if ([string]::IsNullOrWhiteSpace($Database)) {
-    throw "Database is required. Provide it via -Database, -DatabaseFromEnv, -ConnectionStringFromEnv, or config file connection.databaseFromEnv."
+    throw "Database is required. Provide it via -Database, -DatabaseFromEnv, -ConnectionStringFromEnv, or config file connection.databaseFromEnv / connection.connectionStringFromEnv."
   }
 
   # Resolve SourcePath when -UseLatestExport is set
