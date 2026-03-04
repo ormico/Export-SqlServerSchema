@@ -233,6 +233,9 @@ param(
   [Parameter(HelpMessage = 'Exclude specific schemas from import. Example: cdc,staging')]
   [string[]]$ExcludeSchemas,
 
+  [Parameter(HelpMessage = 'Exclude specific objects from import using schema.name pattern (supports wildcards). Example: dbo.usp_LegacyProc,staging.*')]
+  [string[]]$ExcludeObjects,
+
   [Parameter(HelpMessage = 'Strip FILESTREAM features (removes FILESTREAM_ON clauses, converts FILESTREAM columns to VARBINARY(MAX)). Required for Linux/container targets.')]
   [switch]$StripFilestream,
 
@@ -291,6 +294,9 @@ $script:ExcludeObjectTypesFilter = $ExcludeObjectTypes
 
 # Store ExcludeSchemas parameter at script level for use in Test-ScriptExcluded
 $script:ExcludeSchemasFilter = $ExcludeSchemas
+
+# Store ExcludeObjects parameter at script level for use in Test-ObjectExcluded
+$script:ExcludeObjectsFilter = $ExcludeObjects
 
 # Store StripFilestream parameter at script level for use in transformations
 $script:StripFilestreamEnabled = $StripFilestream.IsPresent
@@ -649,7 +655,7 @@ function Test-ImportConfigKeys {
   if ($Config.import -and $Config.import -is [hashtable]) {
     $knownImport = @(
       'defaultMode', 'createDatabase', 'force', 'continueOnError', 'includeData',
-      'includeObjectTypes', 'excludeObjectTypes', 'excludeSchemas',
+      'includeObjectTypes', 'excludeObjectTypes', 'excludeSchemas', 'excludeObjects',
       'dependencyRetries', 'showSql', 'useLatestExport',
       'developerMode', 'productionMode', 'encryptionSecrets', 'clr',
       'fileGroupFileSizeDefaults'
@@ -3324,6 +3330,65 @@ function Test-SchemaExcluded {
   return $false
 }
 
+function Test-ObjectExcluded {
+  <#
+    .SYNOPSIS
+        Checks if a script file matches an excluded object pattern.
+    .DESCRIPTION
+        Extracts schema.objectName from filename patterns like 'Schema.ObjectName.sql' or
+        'Schema.ObjectName.type.sql' and checks against excluded object patterns using
+        wildcard matching (-ilike). Only applies to schema-bound object folders.
+  #>
+  param(
+    [string]$ScriptPath,
+    [string[]]$ExcludeObjects
+  )
+
+  if (-not $ExcludeObjects -or $ExcludeObjects.Count -eq 0) {
+    return $false
+  }
+
+  # Only apply object filtering to folders containing schema-bound objects
+  $schemaBoundFolders = @(
+    'Tables', 'Indexes', 'Views', 'Functions', 'StoredProcedures',
+    'Triggers', 'Synonyms', 'Sequences', 'Data'
+  )
+
+  # Extract immediate parent folder name
+  $parentFolder = Split-Path (Split-Path $ScriptPath -Parent) -Leaf
+
+  $isSchemaBoundFolder = $false
+  foreach ($folder in $schemaBoundFolders) {
+    if ($parentFolder -match $folder) {
+      $isSchemaBoundFolder = $true
+      break
+    }
+  }
+
+  if (-not $isSchemaBoundFolder) {
+    return $false  # Not a schema-bound folder, don't filter
+  }
+
+  $fileName = Split-Path $ScriptPath -Leaf
+
+  # Extract schema.objectName from filename patterns:
+  # Schema.ObjectName.sql or Schema.ObjectName.type.sql
+  # Handle numeric prefixes: 001_Schema.ObjectName.sql
+  if ($fileName -match '^(?:\d{3}_)?([^.]+)\.([^.]+)') {
+    $schemaName = $matches[1]
+    $objectName = $matches[2]
+    $qualifiedName = "$schemaName.$objectName"
+
+    foreach ($pattern in $ExcludeObjects) {
+      if ($qualifiedName -ilike $pattern) {
+        return $true
+      }
+    }
+  }
+
+  return $false
+}
+
 function Test-ScriptExcluded {
   <#
     .SYNOPSIS
@@ -3928,6 +3993,19 @@ function Get-ScriptFiles {
     }
   }
 
+  # Apply ExcludeObjects filter if specified (command-line parameter)
+  if ($script:ExcludeObjectsFilter -and $script:ExcludeObjectsFilter.Count -gt 0) {
+    Write-Verbose "Applying ExcludeObjects filter: $($script:ExcludeObjectsFilter -join ', ')"
+    $originalCount = $scripts.Count
+    $scripts = @($scripts | Where-Object {
+        -not (Test-ObjectExcluded -ScriptPath $_.FullName -ExcludeObjects $script:ExcludeObjectsFilter)
+      })
+    $excludedCount = $originalCount - $scripts.Count
+    if ($excludedCount -gt 0) {
+      Write-Output "  [INFO] Excluded $excludedCount script(s) based on ExcludeObjects filter"
+    }
+  }
+
   # Track skipped folders for reporting
   $allPossibleDirs = @('00_FileGroups', '02_DatabaseConfiguration', '17_ExternalData', '20_SecurityPolicies', '21_Data')
   foreach ($dir in $allPossibleDirs) {
@@ -4526,6 +4604,7 @@ try {
   if ($PSBoundParameters.ContainsKey('Database'))           { $script:ConfigSources.database.source           = 'cli'; $script:ConfigSources.database.value           = $Database }
   if ($PSBoundParameters.ContainsKey('ExcludeObjectTypes')) { $script:ConfigSources.excludeObjectTypes.source = 'cli'; $script:ConfigSources.excludeObjectTypes.value = $ExcludeObjectTypes }
   if ($PSBoundParameters.ContainsKey('ExcludeSchemas'))     { $script:ConfigSources.excludeSchemas.source     = 'cli'; $script:ConfigSources.excludeSchemas.value     = $ExcludeSchemas }
+  if ($PSBoundParameters.ContainsKey('ExcludeObjects'))     { $script:ConfigSources.excludeObjects.source     = 'cli'; $script:ConfigSources.excludeObjects.value     = $ExcludeObjects }
   if ($PSBoundParameters.ContainsKey('StripFilestream'))    { $script:ConfigSources.stripFilestream.source    = 'cli'; $script:ConfigSources.stripFilestream.value    = $StripFilestream.IsPresent }
   if ($PSBoundParameters.ContainsKey('StripAlwaysEncrypted')) { $script:ConfigSources.stripAlwaysEncrypted.source = 'cli'; $script:ConfigSources.stripAlwaysEncrypted.value = $StripAlwaysEncrypted.IsPresent }
 
@@ -4673,6 +4752,15 @@ try {
           $script:ExcludeSchemasFilter = $config.import.excludeSchemas
           $script:ConfigSources.excludeSchemas = [ordered]@{ value = $config.import.excludeSchemas; source = 'configFile' }
           Write-Verbose "[INFO] ExcludeSchemas set from config file: $($config.import.excludeSchemas -join ', ')"
+        }
+      }
+
+      # Override ExcludeObjects from config ONLY if not explicitly set on command line
+      if (-not $PSBoundParameters.ContainsKey('ExcludeObjects')) {
+        if ($config.import.excludeObjects -and $config.import.excludeObjects.Count -gt 0) {
+          $script:ExcludeObjectsFilter = $config.import.excludeObjects
+          $script:ConfigSources.excludeObjects = [ordered]@{ value = $config.import.excludeObjects; source = 'configFile' }
+          Write-Verbose "[INFO] ExcludeObjects set from config file: $($config.import.excludeObjects -join ', ')"
         }
       }
 
