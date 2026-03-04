@@ -455,12 +455,60 @@ if ($chainErrorLogs.Count -gt 0) {
     $hasErrorChainSection = $chainLogContent -match "Error Chain:"
     Write-TestResult -TestName "Error log has Error Chain section" -Passed $hasErrorChainSection `
         -Message "Error log should have an 'Error Chain:' section with formatted messages"
+
+    # Test 6d: Integrity report JSON contains structured errorChain array
+    $chainReportFiles = Get-ChildItem -Path $chainExportedDir.FullName -Filter "import-report-*.json" -ErrorAction SilentlyContinue
+    if ($chainReportFiles.Count -gt 0) {
+        $chainReport = Get-Content $chainReportFiles[0].FullName -Raw | ConvertFrom-Json
+        $chainFailed = $chainReport.failedObjects | Where-Object { $_.name -match 'fn_ChainTest' }
+        if ($chainFailed) {
+            # errorMessage should be the clean root cause (Message: line, not Error NNN:)
+            $hasCleanRootCause = $chainFailed.errorMessage -match "Invalid object name" -and $chainFailed.errorMessage -notmatch "^Error \d+:"
+            Write-TestResult -TestName "Integrity report errorMessage is clean root cause" -Passed $hasCleanRootCause `
+                -Message "errorMessage should be the innermost exception message without 'Error NNN:' prefix"
+
+            # errorChain should be an array with type and message fields
+            $hasErrorChainArray = $chainFailed.errorChain -is [array] -and $chainFailed.errorChain.Count -gt 0
+            Write-TestResult -TestName "Integrity report has errorChain array" -Passed $hasErrorChainArray `
+                -Message "failedObjects should include errorChain array with structured exception data"
+
+            if ($hasErrorChainArray) {
+                $hasTypeAndMessage = ($chainFailed.errorChain[0].PSObject.Properties.Name -contains 'type') -and
+                                     ($chainFailed.errorChain[0].PSObject.Properties.Name -contains 'message')
+                Write-TestResult -TestName "errorChain entries have type and message fields" -Passed $hasTypeAndMessage `
+                    -Message "Each errorChain entry should have 'type' and 'message' fields"
+            } else {
+                Write-TestResult -TestName "errorChain entries have type and message fields" -Passed $false `
+                    -Message "errorChain array was empty or missing"
+            }
+        } else {
+            Write-TestResult -TestName "Integrity report errorMessage is clean root cause" -Passed $false `
+                -Message "fn_ChainTest not found in failedObjects"
+            Write-TestResult -TestName "Integrity report has errorChain array" -Passed $false `
+                -Message "fn_ChainTest not found in failedObjects"
+            Write-TestResult -TestName "errorChain entries have type and message fields" -Passed $false `
+                -Message "fn_ChainTest not found in failedObjects"
+        }
+    } else {
+        Write-TestResult -TestName "Integrity report errorMessage is clean root cause" -Passed $false `
+            -Message "No integrity report JSON was created for chain test"
+        Write-TestResult -TestName "Integrity report has errorChain array" -Passed $false `
+            -Message "No integrity report JSON was created for chain test"
+        Write-TestResult -TestName "errorChain entries have type and message fields" -Passed $false `
+            -Message "No integrity report JSON was created for chain test"
+    }
 } else {
     Write-TestResult -TestName "Error log contains inner exception message" -Passed $false `
         -Message "No error log was created for chain test"
     Write-TestResult -TestName "Error chain uses arrow (→) format" -Passed $false `
         -Message "No error log was created for chain test"
     Write-TestResult -TestName "Error log has Error Chain section" -Passed $false `
+        -Message "No error log was created for chain test"
+    Write-TestResult -TestName "Integrity report errorMessage is clean root cause" -Passed $false `
+        -Message "No error log was created for chain test"
+    Write-TestResult -TestName "Integrity report has errorChain array" -Passed $false `
+        -Message "No error log was created for chain test"
+    Write-TestResult -TestName "errorChain entries have type and message fields" -Passed $false `
         -Message "No error log was created for chain test"
 }
 
