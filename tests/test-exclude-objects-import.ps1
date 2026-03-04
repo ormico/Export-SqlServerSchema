@@ -13,6 +13,7 @@
     4. JSON schema and config key validation
     5. Config merge precedence (CLI overrides config, config fallback)
 #>
+# TestType: unit
 
 $ErrorActionPreference = 'Stop'
 Set-Location $PSScriptRoot

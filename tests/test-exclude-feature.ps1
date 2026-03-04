@@ -12,6 +12,7 @@
     3. Verifying that excluded objects were not exported
     4. Testing multiple exclusion patterns
 #>
+# TestType: integration
 
 param(
     [string]$ConfigFile = ".env"

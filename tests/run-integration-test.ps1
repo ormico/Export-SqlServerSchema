@@ -18,6 +18,7 @@
 .EXAMPLE
     ./run-integration-test.ps1
 #>
+# TestType: integration
 
 param(
     [string]$ConfigFile = ".env"

@@ -14,17 +14,87 @@ This directory contains Docker configuration and test files for validating the E
    docker-compose ps
    ```
 
-3. Run the comprehensive integration test:
+3. Run all unit tests (no SQL Server needed):
+   ```powershell
+   pwsh ./run-all-unit-tests.ps1
+   ```
+
+4. Run all integration tests (requires SQL Server container):
+   ```powershell
+   pwsh ./run-all-integration-tests.ps1
+   ```
+
+5. Run the comprehensive integration test alone:
    ```powershell
    pwsh ./run-integration-test.ps1
    ```
 
-   This test will:
-   - Create a test database with schema
-   - Export the database schema and data
-   - Import to a new database
-   - Verify all objects and data match
-   - Test foreign key constraint management
+## Test Autodiscovery
+
+Tests are classified via a `# TestType:` comment header placed after the closing `#>` of the comment-based help block in each `test-*.ps1` file:
+
+```powershell
+#Requires -Version 7.0
+<#
+.SYNOPSIS ...
+#>
+# TestType: unit
+
+param()
+```
+
+### Runners
+
+| Runner | Discovers | SQL Server |
+|--------|-----------|------------|
+| `run-all-unit-tests.ps1` | `test-*.ps1` with `# TestType: unit` | Not needed |
+| `run-all-integration-tests.ps1` | `test-*.ps1` with `# TestType: integration` + `run-integration-test.ps1` | Required |
+
+- Files with a `run-` prefix are **excluded** from autodiscovery (only `test-*.ps1` is scanned).
+- `run-integration-test.ps1` runs first in the integration runner (creates TestDb that other tests depend on).
+- Files missing a `# TestType:` header emit a warning but do not fail the run.
+- `run-perf-test.ps1` is a benchmark script and is not part of autodiscovery or CI.
+
+### Adding a New Test
+
+1. Create `tests/test-my-feature.ps1` with the `# TestType: unit` or `# TestType: integration` header.
+2. That's it — the autodiscovery runners and CI will pick it up automatically.
+
+### Test Classification
+
+**Unit tests** (no SQL Server needed):
+- test-common-functions.ps1
+- test-config-auto-discovery.ps1
+- test-convert-import-report.ps1
+- test-database-trust-from-env.ps1
+- test-exclude-objects-import.ps1
+- test-import-folder-ordering.ps1
+- test-import-integrity-report.ps1
+- test-index-before-fk.ps1
+- test-partition-scheme-filegroup.ps1
+- test-schema-bound-folder-matching.ps1
+- test-use-latest-export.ps1
+- test-utf8-bom-encoding.ps1
+- test-validate-only.ps1
+
+**Integration tests** (require SQL Server container):
+- test-advanced-filegroups.ps1
+- test-clr-strict-security.ps1
+- test-connection-string-from-env.ps1
+- test-encryption-fallback-scan.ps1
+- test-encryption-secrets.ps1
+- test-env-credentials.ps1
+- test-error-handling.ps1
+- test-exclude-feature.ps1
+- test-export-strip-filestream.ps1
+- test-minimal-config.ps1
+- test-minimal-filegroups.ps1
+- test-parallel-export.ps1
+- test-schema-exclude-import.ps1
+- test-selective-object-types.ps1
+- test-strip-always-encrypted.ps1
+- test-strip-filestream.ps1
+- test-user-type-filtering.ps1
 
 ## Manual Testing
 
@@ -54,14 +124,9 @@ If you want to test individual components:
 - **Test Database**: TestDb
 - **Target Database**: TestDb_Restored
 
-## Test Files
+## Legacy Runner
 
-- **run-integration-test.ps1** - Comprehensive end-to-end test (includes -WhatIf and -TestConnection)
-- **setup-test-db.ps1** - Creates test database with sample schema
-- **test-schema.sql** - Test database schema definition with comprehensive object coverage
-- **test-validate-only.ps1** - Offline -ValidateOnly tests (no server required)
-- **test-import-integrity-report.ps1** - Post-import integrity report unit tests (77 tests; no SQL Server required)
-- **.env** - Configuration file (copy from .env.example)
+- **run-unit-tests.ps1** — Original unit test runner for `ConvertFrom-AdoConnectionString` and `Resolve-EnvCredential`. Kept for direct developer use; not part of autodiscovery.
 
 ## Test Database Coverage
 
@@ -117,12 +182,7 @@ VERBOSE: Could not prefetch Synonym: Exception calling "PrefetchObjects" with "1
 - The parameterless `PrefetchObjects()` succeeds for all types including Synonyms
 - Our code catches this error gracefully and falls back to lazy loading
 
-**Impact**: None - synonyms still export correctly. The prefetch optimization simply doesn't apply to this object type.
-
-**To verify**: Run `test-synonym-prefetch.ps1` which demonstrates:
-- 5 of 6 object types prefetch successfully (Table, View, StoredProcedure, UserDefinedFunction, Schema)
-- Only Synonym fails the typed prefetch
-- Direct synonym scripting works fine
+**Impact**: None — synonyms still export correctly. The prefetch optimization simply doesn't apply to this object type.
 
 ## Stopping
 

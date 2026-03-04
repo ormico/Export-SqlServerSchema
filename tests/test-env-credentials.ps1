@@ -18,6 +18,7 @@
     Requires: SQL Server container running (docker-compose up -d)
     Tests Issue #58: Credential injection using environment variables
 #>
+# TestType: integration
 
 param(
     [string]$ConfigFile = ".env"

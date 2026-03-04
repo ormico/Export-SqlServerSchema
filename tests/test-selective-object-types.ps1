@@ -8,6 +8,7 @@
     Tests the -IncludeObjectTypes and -ExcludeObjectTypes parameters for both
     Export-SqlServerSchema.ps1 and Import-SqlServerSchema.ps1 scripts.
 #>
+# TestType: integration
 
 [CmdletBinding()]
 param(

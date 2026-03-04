@@ -4,6 +4,7 @@
     Unit tests for DatabaseFromEnv and TrustServerCertificateFromEnv parameters
     in Resolve-EnvCredential. These tests do NOT require a SQL Server connection.
 #>
+# TestType: unit
 
 $ErrorActionPreference = 'Stop'
 $worktreeRoot = Split-Path $PSScriptRoot -Parent

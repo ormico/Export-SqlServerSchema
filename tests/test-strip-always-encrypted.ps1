@@ -23,6 +23,7 @@
     ./test-strip-always-encrypted.ps1
     ./test-strip-always-encrypted.ps1 -ConfigFile ./custom.env
 #>
+# TestType: integration
 
 param(
     [string]$ConfigFile = ".env"
