@@ -46,6 +46,10 @@
           "type": "string",
           "description": "Name of the environment variable containing the SQL Server address. Only used when -Server is not explicitly provided. Example: SQLCMD_SERVER"
         },
+        "databaseFromEnv": {
+          "type": "string",
+          "description": "Name of the environment variable containing the database name. Only used when -Database is not explicitly provided. Example: SQLCMD_DATABASE"
+        },
         "usernameFromEnv": {
           "type": "string",
           "description": "Name of the environment variable containing the SQL authentication username. Must be paired with passwordFromEnv. Example: SQLCMD_USER"
@@ -62,6 +66,10 @@
           "type": "boolean",
           "description": "Trust server certificate without validation. Alternative location to the root-level trustServerCertificate setting.",
           "default": false
+        },
+        "trustServerCertificateFromEnv": {
+          "type": "string",
+          "description": "Name of the environment variable containing a boolean value ('true'/'false'/'1'/'0') for TrustServerCertificate. Only used when -TrustServerCertificate is not explicitly provided. Example: SQLCMD_TRUST_CERT"
         }
       },
       "additionalProperties": false

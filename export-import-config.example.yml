@@ -54,8 +54,10 @@ trustServerCertificate: false
 # Option 1: Individual env vars for each connection component
 # connection:
 #   serverFromEnv: SQLCMD_SERVER        # name of env var holding the server address
+#   databaseFromEnv: SQLCMD_DATABASE    # name of env var holding the database name
 #   usernameFromEnv: SQLCMD_USER        # name of env var holding the username
 #   passwordFromEnv: SQLCMD_PASSWORD    # name of env var holding the password
+#   trustServerCertificateFromEnv: SQLCMD_TRUST_CERT  # name of env var holding true/false/1/0
 #   trustServerCertificate: true        # trust self-signed certs (containers)
 #
 # Option 2: Single full ADO.NET connection string in one env var
@@ -66,10 +68,10 @@ trustServerCertificate: false
 #   connectionStringFromEnv: SQLCONNSTR_Default  # name of env var with full connection string
 #
 # Precedence (high to low):
-#   -Server/-Database/-Credential (CLI) >
-#   -ServerFromEnv/-UsernameFromEnv/-PasswordFromEnv (CLI) >
+#   -Server/-Database/-Credential/-TrustServerCertificate (CLI) >
+#   -ServerFromEnv/-DatabaseFromEnv/-UsernameFromEnv/-PasswordFromEnv/-TrustServerCertificateFromEnv (CLI) >
 #   -ConnectionStringFromEnv (CLI) >
-#   connection.serverFromEnv / connection.usernameFromEnv / connection.passwordFromEnv (config) >
+#   connection.serverFromEnv / connection.databaseFromEnv / connection.usernameFromEnv / connection.passwordFromEnv / connection.trustServerCertificateFromEnv (config) >
 #   connection.connectionStringFromEnv (config) >
 #   defaults
 

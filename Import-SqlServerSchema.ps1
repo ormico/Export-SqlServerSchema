@@ -15,8 +15,8 @@
 
 .PARAMETER Database
     Target database name. Will be created if -CreateDatabase is specified and it doesn't exist.
-    Can also be provided via -ConnectionStringFromEnv if the connection string contains an
-    Initial Catalog / Database key.
+    Can also be provided via -DatabaseFromEnv, -ConnectionStringFromEnv, or config file
+    connection.databaseFromEnv.
 
 .PARAMETER SourcePath
     Path to the directory containing exported schema files (timestamped folder from Export-SqlServerSchema.ps1).
@@ -38,19 +38,30 @@
     Must be paired with -UsernameFromEnv. The password is never written to logs or verbose output.
     Example: -PasswordFromEnv SQLCMD_PASSWORD
 
+.PARAMETER DatabaseFromEnv
+    Name of an environment variable containing the database name. Only used when -Database is
+    not explicitly provided. Example: -DatabaseFromEnv SQLCMD_DATABASE
+
 .PARAMETER ConnectionStringFromEnv
     Name of an environment variable containing a full ADO.NET connection string. This is an
     escape-hatch for environments (Azure App Service SQLCONNSTR_*, GitHub Actions secrets, etc.)
     that provide a single connection string rather than individual components.
     Connection string values are overridden by any explicitly supplied individual parameters.
-    Precedence (high to low): -Server/-Credential > -ServerFromEnv/-UsernameFromEnv/-PasswordFromEnv
+    Precedence (high to low): -Server/-Database/-Credential/-TrustServerCertificate >
+    -ServerFromEnv/-DatabaseFromEnv/-UsernameFromEnv/-PasswordFromEnv/-TrustServerCertificateFromEnv
     > -ConnectionStringFromEnv > config connection: section > defaults.
     Example: -ConnectionStringFromEnv SQLCONNSTR_Default
 
 .PARAMETER TrustServerCertificate
     Trust the SQL Server certificate without validation. Required for containers with self-signed
-    certificates. Can also be set via config file (trustServerCertificate: true or
-    connection.trustServerCertificate: true). WARNING: Disables server identity verification.
+    certificates. Can also be set via -TrustServerCertificateFromEnv, config file
+    (trustServerCertificate: true, connection.trustServerCertificate: true, or
+    connection.trustServerCertificateFromEnv). WARNING: Disables server identity verification.
+
+.PARAMETER TrustServerCertificateFromEnv
+    Name of an environment variable containing a boolean value ('true'/'false'/'1'/'0') for
+    TrustServerCertificate. Only used when -TrustServerCertificate switch is not explicitly provided.
+    Example: -TrustServerCertificateFromEnv SQLCMD_TRUST_CERT
 
 .PARAMETER ImportMode
     Import mode: 'Dev' (default, schema-only) or 'Prod' (full infrastructure with FileGroups, configs).
@@ -153,7 +164,7 @@ param(
   [Parameter(HelpMessage = 'Target SQL Server instance. Can also be provided via -ServerFromEnv or config connection.serverFromEnv')]
   [string]$Server,
 
-  [Parameter(HelpMessage = 'Target database name. Can also be provided via -ConnectionStringFromEnv')]
+  [Parameter(HelpMessage = 'Target database name. Can also be provided via -DatabaseFromEnv, -ConnectionStringFromEnv, or config connection.databaseFromEnv')]
   [string]$Database,
 
   [Parameter(Mandatory = $true, HelpMessage = 'Path to exported schema scripts')]
@@ -236,11 +247,17 @@ param(
   [Parameter(HelpMessage = 'Environment variable name containing the password (e.g., -PasswordFromEnv SQLCMD_PASSWORD)')]
   [string]$PasswordFromEnv,
 
+  [Parameter(HelpMessage = 'Environment variable name containing the database name (e.g., -DatabaseFromEnv SQLCMD_DATABASE)')]
+  [string]$DatabaseFromEnv,
+
   [Parameter(HelpMessage = 'Environment variable name containing a full ADO.NET connection string (e.g., -ConnectionStringFromEnv SQLCONNSTR_Default)')]
   [string]$ConnectionStringFromEnv,
 
   [Parameter(HelpMessage = 'Trust the SQL Server certificate without validation. Required for containers with self-signed certificates.')]
   [switch]$TrustServerCertificate,
+
+  [Parameter(HelpMessage = 'Environment variable name containing a boolean for TrustServerCertificate (e.g., -TrustServerCertificateFromEnv SQLCMD_TRUST_CERT)')]
+  [string]$TrustServerCertificateFromEnv,
 
   [Parameter(HelpMessage = 'Scan -SourcePath for valid export subfolders and auto-select the most recent one. Can also be set via config file: import.useLatestExport: true')]
   [switch]$UseLatestExport,
@@ -773,8 +790,10 @@ function Invoke-ImportValidation {
     [string]$SourcePath,
     [string]$Server,
     [string]$ServerFromEnv,
+    [string]$DatabaseFromEnv,
     [string]$UsernameFromEnv,
     [string]$PasswordFromEnv,
+    [string]$TrustServerCertificateFromEnv,
     [hashtable]$Config,
     [switch]$StripAlwaysEncrypted
   )
@@ -925,9 +944,31 @@ function Invoke-ImportValidation {
     }
   }
 
+  if ($DatabaseFromEnv) {
+    $val = [System.Environment]::GetEnvironmentVariable($DatabaseFromEnv)
+    if ([string]::IsNullOrWhiteSpace($val)) {
+      [void]$warnings.Add("DatabaseFromEnv '$DatabaseFromEnv' is not set")
+      Write-Host "  [WARN] $DatabaseFromEnv is not set" -ForegroundColor Yellow
+    }
+    else {
+      Write-Host "  [OK] $DatabaseFromEnv is set" -ForegroundColor Green
+    }
+  }
+
+  if ($TrustServerCertificateFromEnv) {
+    $val = [System.Environment]::GetEnvironmentVariable($TrustServerCertificateFromEnv)
+    if ([string]::IsNullOrWhiteSpace($val)) {
+      [void]$warnings.Add("TrustServerCertificateFromEnv '$TrustServerCertificateFromEnv' is not set")
+      Write-Host "  [WARN] $TrustServerCertificateFromEnv is not set" -ForegroundColor Yellow
+    }
+    else {
+      Write-Host "  [OK] $TrustServerCertificateFromEnv is set" -ForegroundColor Green
+    }
+  }
+
   if ($Config -and $Config.connection -and $Config.connection -is [hashtable]) {
     $connSection = $Config.connection
-    foreach ($cfgKey in @('serverFromEnv', 'usernameFromEnv', 'passwordFromEnv')) {
+    foreach ($cfgKey in @('serverFromEnv', 'databaseFromEnv', 'usernameFromEnv', 'passwordFromEnv', 'trustServerCertificateFromEnv')) {
       $envName = $connSection[$cfgKey]
       if ($envName) {
         $val = [System.Environment]::GetEnvironmentVariable($envName)
@@ -942,8 +983,8 @@ function Invoke-ImportValidation {
     }
   }
 
-  if (-not $ServerFromEnv -and -not $UsernameFromEnv -and -not $PasswordFromEnv -and
-      (-not $Config -or -not $Config.connection)) {
+  if (-not $ServerFromEnv -and -not $DatabaseFromEnv -and -not $UsernameFromEnv -and -not $PasswordFromEnv -and
+      -not $TrustServerCertificateFromEnv -and (-not $Config -or -not $Config.connection)) {
     Write-Host "  [INFO] No *FromEnv parameters or config connection section to validate" -ForegroundColor Gray
   }
 
@@ -4499,8 +4540,10 @@ try {
       -SourcePath $SourcePath `
       -Server $Server `
       -ServerFromEnv $ServerFromEnv `
+      -DatabaseFromEnv $DatabaseFromEnv `
       -UsernameFromEnv $UsernameFromEnv `
       -PasswordFromEnv $PasswordFromEnv `
+      -TrustServerCertificateFromEnv $TrustServerCertificateFromEnv `
       -Config $config `
       -StripAlwaysEncrypted:$StripAlwaysEncrypted
     # Invoke-ImportValidation calls exit internally
@@ -4521,9 +4564,11 @@ try {
     -DatabaseParam $Database `
     -CredentialParam $Credential `
     -ServerFromEnvParam $ServerFromEnv `
+    -DatabaseFromEnvParam $DatabaseFromEnv `
     -UsernameFromEnvParam $UsernameFromEnv `
     -PasswordFromEnvParam $PasswordFromEnv `
     -ConnectionStringFromEnvParam $ConnectionStringFromEnv `
+    -TrustServerCertificateFromEnvParam $TrustServerCertificateFromEnv `
     -TrustServerCertificateParam $TrustServerCertificate.IsPresent `
     -Config $config `
     -BoundParameters $PSBoundParameters
@@ -4546,7 +4591,11 @@ try {
     }
   }
   if ($script:ConfigSources.database.source -eq 'default' -and -not [string]::IsNullOrWhiteSpace($Database)) {
-    if ($ConnectionStringFromEnv -or ($config.connection -and $config.connection.connectionStringFromEnv)) {
+    if ($DatabaseFromEnv -or ($config.connection -and $config.connection.databaseFromEnv)) {
+      $envVarName = if ($DatabaseFromEnv) { $DatabaseFromEnv } else { $config.connection.databaseFromEnv }
+      $script:ConfigSources.database = [ordered]@{ value = $Database; source = "envVar:$envVarName" }
+    }
+    elseif ($ConnectionStringFromEnv -or ($config.connection -and $config.connection.connectionStringFromEnv)) {
       $envVarName = if ($ConnectionStringFromEnv) { $ConnectionStringFromEnv } else { $config.connection.connectionStringFromEnv }
       $script:ConfigSources.database = [ordered]@{ value = $Database; source = "envVar:$envVarName" }
     }
@@ -4559,7 +4608,7 @@ try {
 
   # Validate that Database was resolved from at least one source
   if ([string]::IsNullOrWhiteSpace($Database)) {
-    throw "Database is required. Provide it via -Database, -ConnectionStringFromEnv, or config file connection.connectionStringFromEnv."
+    throw "Database is required. Provide it via -Database, -DatabaseFromEnv, -ConnectionStringFromEnv, or config file connection.databaseFromEnv / connection.connectionStringFromEnv."
   }
 
   # Resolve SourcePath when -UseLatestExport is set
