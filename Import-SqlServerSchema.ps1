@@ -233,7 +233,7 @@ param(
   [Parameter(HelpMessage = 'Exclude specific schemas from import. Example: cdc,staging')]
   [string[]]$ExcludeSchemas,
 
-  [Parameter(HelpMessage = 'Exclude objects by filename pattern using schema.name format (wildcards supported, full name match). Example: dbo.usp_LegacyProc,staging.*')]
+  [Parameter(HelpMessage = 'Exclude objects by matching schema.objectName from script filenames (case-insensitive wildcards, full name match). Example: dbo.usp_LegacyProc,staging.*')]
   [string[]]$ExcludeObjects,
 
   [Parameter(HelpMessage = 'Strip FILESTREAM features (removes FILESTREAM_ON clauses, converts FILESTREAM columns to VARBINARY(MAX)). Required for Linux/container targets.')]

@@ -249,7 +249,8 @@ import:
     # - temp
 
   # Exclude specific objects by filename pattern (schema.objectName, full match, wildcards supported)
-  # Only applies to schema-bound folders (Tables, Views, Functions, etc.) in single grouping mode
+  # Only reliably excludes individual objects when the relevant object type is exported in single mode.
+  # Not supported for grouped files (grouped filenames may not match patterns as expected).
   # Note: "dbo.usp_Process" does NOT match "dbo.usp_ProcessOrders" — use "dbo.usp_Process*" for prefix matching
   # excludeObjects: []
     # - "dbo.usp_LegacyProc"           # Exact match only (not dbo.usp_LegacyProcV2)

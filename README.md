@@ -688,7 +688,7 @@ Both Export and Import scripts support filtering which object types to process v
     -ExcludeObjects "staging.*"
 ```
 
-> **Note:** `-ExcludeObjects` matches against `schema.objectName` extracted from filenames (not SQL object names). It uses PowerShell `-ilike` for full string matching — `dbo.usp_Process` will **not** match `dbo.usp_ProcessOrders`. Only applies to schema-bound folders (Tables, Views, Functions, StoredProcedures, etc.) when using single grouping mode. See [#118](https://github.com/AgileSqlClub/Export-SqlServerSchema/issues/118) for known limitations.
+> **Note:** `-ExcludeObjects` matches against `schema.objectName` extracted from filenames (not SQL object names) using PowerShell `-ilike` for full-string matching — `dbo.usp_Process` will **not** match `dbo.usp_ProcessOrders`. Only reliable for excluding individual objects when the corresponding object type was exported in **single** grouping mode. In schema or all modes, objects are combined into grouped files so patterns may not match as expected. See [#118](https://github.com/AgileSqlClub/Export-SqlServerSchema/issues/118) for known limitations.
 
 ### Multi-Pass Import with -Force Flag
 

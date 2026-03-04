@@ -670,7 +670,7 @@ import:
 - **Wildcards**: `*` matches any characters (including none), `?` matches exactly one character
 - **Pattern format**: `schema.objectName` (do NOT use SQL bracket notation like `[dbo].[name]`)
 - **Scope**: Only applies to schema-bound object folders (Tables, Views, Functions, StoredProcedures, Indexes, Triggers, Synonyms, Sequences, Types, XmlSchemaCollections, Defaults, Rules, Data)
-- **Limitation**: Only works with single grouping mode; patterns silently have no effect in schema or all modes. See [#118](https://github.com/AgileSqlClub/Export-SqlServerSchema/issues/118) for details.
+- **Limitation**: Only supported with single grouping mode; in schema or all modes patterns do not reliably match individual objects and should not be relied on. See [#118](https://github.com/AgileSqlClub/Export-SqlServerSchema/issues/118) for details.
 
 **Matching behavior with overlapping names:**
 
@@ -678,7 +678,7 @@ import:
 |---|---|---|---|
 | `dbo.usp_Process` | matches | no | no |
 | `dbo.usp_Process*` | matches | matches | matches |
-| `dbo.usp_Process?rders` | no | no | no |
+| `dbo.usp_Process?rders` | no | matches | no |
 | `dbo.usp_ProcessOrders` | no | matches | no |
 
 ```yaml
