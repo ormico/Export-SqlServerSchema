@@ -94,6 +94,13 @@ function Invoke-SqlCommand {
     return $result
 }
 
+function Write-ErrorChainTestFailures {
+    param([string]$Reason)
+    Write-TestResult -TestName "Integrity report errorMessage is clean root cause" -Passed $false -Message $Reason
+    Write-TestResult -TestName "Integrity report has errorChain array" -Passed $false -Message $Reason
+    Write-TestResult -TestName "errorChain entries have type and message fields" -Passed $false -Message $Reason
+}
+
 function Drop-TestDatabase {
     param([string]$DbName)
     try {
@@ -461,49 +468,47 @@ if ($chainErrorLogs.Count -gt 0) {
         Sort-Object -Property LastWriteTime, Name -Descending |
         Select-Object -First 1
     if ($chainReportFile) {
-        $chainReport = Get-Content -Path $chainReportFile.FullName -Raw | ConvertFrom-Json
-        $chainFailed = $chainReport.failedObjects | Where-Object { $_.name -match 'fn_ChainTest' } | Select-Object -First 1
-        if ($chainFailed) {
-            # errorMessage should be the clean root cause (Message: line, not Error NNN:)
-            $hasCleanRootCause = $chainFailed.errorMessage -match "Invalid object name" -and $chainFailed.errorMessage -notmatch "^Error \d+:"
-            Write-TestResult -TestName "Integrity report errorMessage is clean root cause" -Passed $hasCleanRootCause `
-                -Message "errorMessage should be the innermost exception message without 'Error NNN:' prefix"
+        $chainReport = $null
+        try {
+            $chainReport = Get-Content -Path $chainReportFile.FullName -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+        } catch {
+            Write-ErrorChainTestFailures "Failed to parse integrity report JSON: $($_.Exception.Message)"
+        }
 
-            # errorChain should be an array with type and message fields
-            $hasErrorChainArray = $chainFailed.errorChain -is [array] -and $chainFailed.errorChain.Count -gt 0
-            Write-TestResult -TestName "Integrity report has errorChain array" -Passed $hasErrorChainArray `
-                -Message "failedObjects should include errorChain array with structured exception data"
+        if ($chainReport) {
+            $chainFailed = $chainReport.failedObjects | Where-Object { $_.name -match 'fn_ChainTest' } | Select-Object -First 1
+            if ($chainFailed) {
+                # errorMessage should be the clean root cause (Message: line, not Error NNN:)
+                $hasCleanRootCause = $chainFailed.errorMessage -match "Invalid object name" -and $chainFailed.errorMessage -notmatch "^Error \d+:"
+                Write-TestResult -TestName "Integrity report errorMessage is clean root cause" -Passed $hasCleanRootCause `
+                    -Message "errorMessage should be the innermost exception message without 'Error NNN:' prefix"
 
-            if ($hasErrorChainArray) {
-                $allValid = $true
-                foreach ($entry in $chainFailed.errorChain) {
-                    if (-not (($entry.PSObject.Properties.Name -contains 'type') -and
-                              ($entry.PSObject.Properties.Name -contains 'message'))) {
-                        $allValid = $false
-                        break
+                # errorChain should be an array with type and message fields
+                $hasErrorChainArray = $chainFailed.errorChain -is [array] -and $chainFailed.errorChain.Count -gt 0
+                Write-TestResult -TestName "Integrity report has errorChain array" -Passed $hasErrorChainArray `
+                    -Message "failedObjects should include errorChain array with structured exception data"
+
+                if ($hasErrorChainArray) {
+                    $allValid = $true
+                    foreach ($entry in $chainFailed.errorChain) {
+                        if (-not (($entry.PSObject.Properties.Name -contains 'type') -and
+                                  ($entry.PSObject.Properties.Name -contains 'message'))) {
+                            $allValid = $false
+                            break
+                        }
                     }
+                    Write-TestResult -TestName "errorChain entries have type and message fields" -Passed $allValid `
+                        -Message "Every errorChain entry should have 'type' and 'message' fields"
+                } else {
+                    Write-TestResult -TestName "errorChain entries have type and message fields" -Passed $false `
+                        -Message "errorChain array was empty or missing"
                 }
-                Write-TestResult -TestName "errorChain entries have type and message fields" -Passed $allValid `
-                    -Message "Every errorChain entry should have 'type' and 'message' fields"
             } else {
-                Write-TestResult -TestName "errorChain entries have type and message fields" -Passed $false `
-                    -Message "errorChain array was empty or missing"
+                Write-ErrorChainTestFailures "fn_ChainTest not found in failedObjects"
             }
-        } else {
-            Write-TestResult -TestName "Integrity report errorMessage is clean root cause" -Passed $false `
-                -Message "fn_ChainTest not found in failedObjects"
-            Write-TestResult -TestName "Integrity report has errorChain array" -Passed $false `
-                -Message "fn_ChainTest not found in failedObjects"
-            Write-TestResult -TestName "errorChain entries have type and message fields" -Passed $false `
-                -Message "fn_ChainTest not found in failedObjects"
         }
     } else {
-        Write-TestResult -TestName "Integrity report errorMessage is clean root cause" -Passed $false `
-            -Message "No integrity report JSON was created for chain test"
-        Write-TestResult -TestName "Integrity report has errorChain array" -Passed $false `
-            -Message "No integrity report JSON was created for chain test"
-        Write-TestResult -TestName "errorChain entries have type and message fields" -Passed $false `
-            -Message "No integrity report JSON was created for chain test"
+        Write-ErrorChainTestFailures "No integrity report JSON was created for chain test"
     }
 } else {
     Write-TestResult -TestName "Error log contains inner exception message" -Passed $false `
@@ -512,12 +517,7 @@ if ($chainErrorLogs.Count -gt 0) {
         -Message "No error log was created for chain test"
     Write-TestResult -TestName "Error log has Error Chain section" -Passed $false `
         -Message "No error log was created for chain test"
-    Write-TestResult -TestName "Integrity report errorMessage is clean root cause" -Passed $false `
-        -Message "No error log was created for chain test"
-    Write-TestResult -TestName "Integrity report has errorChain array" -Passed $false `
-        -Message "No error log was created for chain test"
-    Write-TestResult -TestName "errorChain entries have type and message fields" -Passed $false `
-        -Message "No error log was created for chain test"
+    Write-ErrorChainTestFailures "No error log was created for chain test"
 }
 
 Drop-TestDatabase -DbName $targetDb6
