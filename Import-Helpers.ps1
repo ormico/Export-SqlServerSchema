@@ -63,17 +63,23 @@ function Test-SchemaExcluded {
     'Triggers',         # Matches 04_Triggers (nested under 14_Programmability)
     'Synonyms',         # Matches 15_Synonyms
     'Sequences',        # Matches 04_Sequences
-    '_Data'             # Matches 21_Data (underscore prevents matching 02_DatabaseConfiguration)
+    'Types',            # Matches 07_Types
+    'XmlSchemaCollections', # Matches 08_XmlSchemaCollections
+    'Defaults',         # Matches 12_Defaults
+    'Rules',            # Matches 13_Rules
+    'Data'              # Matches 21_Data
   )
 
   # Extract folder name from path (immediate parent)
   $parentFolder = Split-Path (Split-Path $ScriptPath -Parent) -Leaf
 
   # Check if this is a schema-bound folder
-  # Use partial matching since folders have numeric prefixes (e.g., 09_Tables_PrimaryKey)
+  # Strip numeric prefix (e.g., '09_Tables_PrimaryKey' -> 'Tables_PrimaryKey')
+  # then check for exact match or underscore-separated suffix (e.g., Tables, Tables_PrimaryKey)
+  $folderBase = $parentFolder -replace '^\d+_', ''
   $isSchemaBoundFolder = $false
   foreach ($folder in $schemaBoundFolders) {
-    if ($parentFolder -match $folder) {
+    if ($folderBase -eq $folder -or $folderBase -like "${folder}_*") {
       $isSchemaBoundFolder = $true
       break
     }
@@ -128,15 +134,18 @@ function Test-ObjectExcluded {
   # Only apply object filtering to folders containing schema-bound objects
   $schemaBoundFolders = @(
     'Tables', 'Indexes', 'Views', 'Functions', 'StoredProcedures',
-    'Triggers', 'Synonyms', 'Sequences', '_Data'
+    'Triggers', 'Synonyms', 'Sequences', 'Types', 'XmlSchemaCollections',
+    'Defaults', 'Rules', 'Data'
   )
 
   # Extract immediate parent folder name
   $parentFolder = Split-Path (Split-Path $ScriptPath -Parent) -Leaf
 
+  # Strip numeric prefix and check for exact match or underscore-separated suffix
+  $folderBase = $parentFolder -replace '^\d+_', ''
   $isSchemaBoundFolder = $false
   foreach ($folder in $schemaBoundFolders) {
-    if ($parentFolder -match $folder) {
+    if ($folderBase -eq $folder -or $folderBase -like "${folder}_*") {
       $isSchemaBoundFolder = $true
       break
     }
