@@ -144,6 +144,7 @@ export:
     # - SymmetricKeys                  # Symmetric keys
     # - ColumnMasterKeys               # Always Encrypted column master keys
     # - ColumnEncryptionKeys           # Always Encrypted column encryption keys
+    # - RoleMembers                    # Role membership assignments (ALTER ROLE ... ADD MEMBER)
     # - SecurityPolicies               # Row-Level Security policies
 
   # Specific objects to exclude (supports wildcards)
