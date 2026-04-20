@@ -254,7 +254,8 @@ try {
     Write-TestStep "Export verified" -Type Success
 
     # Verify role memberships were exported (issue #128)
-    $roleMembersFile = Get-ChildItem $exportDir -Recurse -Filter "RoleMembers.sql"
+    $roleMembersPath = Join-Path $exportDir '01_Security_RoleMembers' 'RoleMembers.sql'
+    $roleMembersFile = if (Test-Path $roleMembersPath) { Get-Item $roleMembersPath } else { $null }
     if ($roleMembersFile) {
         $roleMembersContent = Get-Content $roleMembersFile.FullName -Raw
         if ($roleMembersContent -match 'ALTER ROLE.*ADD MEMBER') {
@@ -303,6 +304,7 @@ try {
         Write-TestStep "003_DatabaseOptions subfolder not found in export" -Type Error
         throw "Database options export verification failed"
     }
+
 
     # Step 4.5: Test parallel export (schema only, for comparison with sequential schema)
     Write-Host "`n" -NoNewline

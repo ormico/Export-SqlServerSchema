@@ -5,11 +5,12 @@ All notable changes to Export-SqlServerSchema will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [unreleased] - 
+## [Unreleased]
 
 ### Added
 
 - **Database options export/import (#129)** — `ALTER DATABASE SET` options (e.g., `ALLOW_SNAPSHOT_ISOLATION`, `READ_COMMITTED_SNAPSHOT`, `RECOVERY`, `COMPATIBILITY_LEVEL`) were not exported, so importing to a new database used SQL Server defaults. Export now writes each option as an individual `{OPTION_NAME}.option.sql` file in `02_DatabaseConfiguration/003_DatabaseOptions/`. Import applies all option files in both Dev and Prod modes; in Dev mode, `RECOVERY` is skipped by default to avoid changing the recovery model on developer databases. The exclusion list is configurable via `import.developerMode.databaseOptionExclusions` in the config file. All 27 supported option names are valid values for this exclusion list.
+
 
 - **Role membership export/import (#128)** — `ALTER ROLE ... ADD MEMBER` statements were silently dropped during export because SMO does not generate them. Export now writes them to `01_Security_RoleMembers/RoleMembers.sql`; import processes this folder after `01_Security/` so roles and users already exist.
 

@@ -1342,6 +1342,7 @@ Valid values for `export.includeObjectTypes` and `export.excludeObjectTypes`:
 | `SqlUsers` | SQL Server login-based users |
 | `ExternalUsers` | Azure AD users and groups |
 | `CertificateMappedUsers` | Certificate/asymmetric key mapped users |
+| `RoleMembers` | Role membership assignments (`ALTER ROLE ... ADD MEMBER`) |
 | `Certificates` | Database certificates |
 | `AsymmetricKeys` | Asymmetric keys |
 | `SymmetricKeys` | Symmetric keys |
@@ -1378,6 +1379,7 @@ Valid values for `import.includeObjectTypes`:
 | `PlanGuides` | Plan guides | `PlanGuides` |
 | `DatabaseRoles` | Database roles | `DatabaseRoles` |
 | `DatabaseUsers` | Database users | `DatabaseUsers`, `WindowsUsers`, `SqlUsers`, `ExternalUsers`, `CertificateMappedUsers` |
+| `RoleMembers` | Role membership assignments | `RoleMembers` |
 | `SecurityPolicies` | RLS policies | `SecurityPolicies` |
 | `Data` | Table data | `Data` |
 
