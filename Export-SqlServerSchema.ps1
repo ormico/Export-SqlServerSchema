@@ -2859,6 +2859,11 @@ function Build-WorkItems-Security {
           foreach ($member in $members) {
             # Skip if the member is excluded by name
             if (Test-ObjectExcluded -Schema $null -Name $member) { continue }
+            # Skip if the member is a user excluded by login type (e.g. WindowsUsers, SqlUsers, ExternalUsers)
+            $memberUser = $Database.Users[$member]
+            if ($memberUser -and (Test-UserExcludedByLoginType -User $memberUser)) { continue }
+            # Skip if the member is a role and DatabaseRoles are excluded
+            if ((-not $memberUser) -and $Database.Roles[$member] -and (Test-ObjectTypeExcluded -ObjectType 'DatabaseRoles')) { continue }
             $escapedRole = Get-EscapedSqlIdentifier -Name $role.Name
             $escapedMember = Get-EscapedSqlIdentifier -Name $member
             $roleMemberStatements.Add("ALTER ROLE [$escapedRole] ADD MEMBER [$escapedMember];")
@@ -2879,6 +2884,11 @@ function Build-WorkItems-Security {
             # Skip system users (dbo is always db_owner, etc.) and excluded members
             if ($member -eq 'dbo') { continue }
             if (Test-ObjectExcluded -Schema $null -Name $member) { continue }
+            # Skip if the member is a user excluded by login type (e.g. WindowsUsers, SqlUsers, ExternalUsers)
+            $memberUser = $Database.Users[$member]
+            if ($memberUser -and (Test-UserExcludedByLoginType -User $memberUser)) { continue }
+            # Skip if the member is a role and DatabaseRoles are excluded
+            if ((-not $memberUser) -and $Database.Roles[$member] -and (Test-ObjectTypeExcluded -ObjectType 'DatabaseRoles')) { continue }
             $escapedRole = Get-EscapedSqlIdentifier -Name $role.Name
             $escapedMember = Get-EscapedSqlIdentifier -Name $member
             $roleMemberStatements.Add("ALTER ROLE [$escapedRole] ADD MEMBER [$escapedMember];")
