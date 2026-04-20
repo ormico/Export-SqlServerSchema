@@ -1,0 +1,126 @@
+{
+  "exportedObjectCount": 4,
+  "importedObjectCount": 3,
+  "skippedObjectCount": 0,
+  "failedObjectCount": 1,
+  "skippedReasons": {},
+  "duration": "00:00:02",
+  "timestamp": "2026-04-20T13:28:43.8013681-04:00",
+  "sourcePath": "D:\\Export-SqlServerSchema-128\\tests\\fixtures\\clr_test",
+  "exportMetadataSource": null,
+  "targetServer": "localhost,1433",
+  "targetDatabase": "TestDb_CLR_Enabled",
+  "effectiveConfiguration": {
+    "importMode": {
+      "value": "Dev",
+      "source": "default"
+    },
+    "continueOnError": {
+      "value": true,
+      "source": "cli"
+    },
+    "createDatabase": {
+      "value": true,
+      "source": "cli"
+    },
+    "includeData": {
+      "value": false,
+      "source": "default"
+    },
+    "maxRetries": {
+      "value": 3,
+      "source": "default"
+    },
+    "retryDelaySeconds": {
+      "value": 2,
+      "source": "default"
+    },
+    "connectionTimeout": {
+      "value": 30,
+      "source": "default"
+    },
+    "commandTimeout": {
+      "value": 300,
+      "source": "default"
+    },
+    "configFile": {
+      "value": "D:\\Export-SqlServerSchema-128\\tests\\test-clr-strict-security-enabled.yml",
+      "source": "cli"
+    },
+    "server": {
+      "value": "localhost,1433",
+      "source": "cli"
+    },
+    "database": {
+      "value": "TestDb_CLR_Enabled",
+      "source": "cli"
+    },
+    "excludeObjectTypes": {
+      "value": [],
+      "source": "default"
+    },
+    "excludeSchemas": {
+      "value": [],
+      "source": "default"
+    },
+    "stripFilestream": {
+      "value": false,
+      "source": "default"
+    },
+    "stripAlwaysEncrypted": {
+      "value": false,
+      "source": "default"
+    }
+  },
+  "exportedObjects": [],
+  "importedObjects": [
+    {
+      "type": "Security",
+      "schema": "dbo",
+      "name": "guest.user",
+      "filePath": "01_Security\\dbo.guest.user.sql"
+    },
+    {
+      "type": "Schema",
+      "schema": "dbo",
+      "name": "schema",
+      "filePath": "03_Schemas\\dbo.schema.sql"
+    },
+    {
+      "type": "Table",
+      "schema": "dbo",
+      "name": "ClrTestTable.table",
+      "filePath": "09_Tables_PrimaryKey\\dbo.ClrTestTable.table.sql"
+    }
+  ],
+  "skippedObjects": [],
+  "failedObjects": [
+    {
+      "name": "TestClrAssembly",
+      "filePath": "14_Programmability\\Assembly.TestClrAssembly.sql",
+      "folder": "14_Programmability",
+      "reason": "SqlError",
+      "errorMessage": "CREATE ASSEMBLY for assembly 'TestClrAssembly' failed because assembly 'TestClrAssembly' is malformed or not a pure .NET assembly.",
+      "errorChain": [
+        {
+          "type": "System.Management.Automation.MethodInvocationException",
+          "message": "Exception calling \"ExecuteNonQuery\" with \"1\" argument(s): \"An exception occurred while executing a Transact-SQL statement or batch.\""
+        },
+        {
+          "type": "Microsoft.SqlServer.Management.Common.ExecutionFailureException",
+          "message": "An exception occurred while executing a Transact-SQL statement or batch."
+        },
+        {
+          "type": "Microsoft.Data.SqlClient.SqlException",
+          "message": "CREATE ASSEMBLY for assembly 'TestClrAssembly' failed because assembly 'TestClrAssembly' is malformed or not a pure .NET assembly."
+        },
+        {
+          "type": "Microsoft.Data.SqlClient.SqlException",
+          "message": "Error 6544: CREATE ASSEMBLY for assembly 'TestClrAssembly' failed because assembly 'TestClrAssembly' is malformed or not a pure .NET assembly."
+        }
+      ],
+      "type": "Programmability",
+      "schema": "Assembly"
+    }
+  ]
+}

@@ -1,0 +1,121 @@
+{
+  "exportedObjectCount": 8,
+  "importedObjectCount": 4,
+  "skippedObjectCount": 2,
+  "failedObjectCount": 0,
+  "skippedReasons": {
+    "DevMode_AlwaysEncrypted": 2
+  },
+  "duration": "00:00:00",
+  "timestamp": "2026-04-20T12:48:24.0005504-04:00",
+  "sourcePath": "D:\\Export-SqlServerSchema-128\\tests\\fixtures\\always_encrypted_test",
+  "exportMetadataSource": "_export_metadata.json",
+  "targetServer": "localhost,1433",
+  "targetDatabase": "TestDb_AE_Config",
+  "effectiveConfiguration": {
+    "importMode": {
+      "value": "Dev",
+      "source": "default"
+    },
+    "continueOnError": {
+      "value": false,
+      "source": "default"
+    },
+    "createDatabase": {
+      "value": true,
+      "source": "cli"
+    },
+    "includeData": {
+      "value": false,
+      "source": "default"
+    },
+    "maxRetries": {
+      "value": 3,
+      "source": "default"
+    },
+    "retryDelaySeconds": {
+      "value": 2,
+      "source": "default"
+    },
+    "connectionTimeout": {
+      "value": 30,
+      "source": "default"
+    },
+    "commandTimeout": {
+      "value": 300,
+      "source": "default"
+    },
+    "configFile": {
+      "value": "D:\\Export-SqlServerSchema-128\\tests\\test-always-encrypted-config.yml",
+      "source": "cli"
+    },
+    "server": {
+      "value": "localhost,1433",
+      "source": "cli"
+    },
+    "database": {
+      "value": "TestDb_AE_Config",
+      "source": "cli"
+    },
+    "excludeObjectTypes": {
+      "value": [],
+      "source": "default"
+    },
+    "excludeSchemas": {
+      "value": [],
+      "source": "default"
+    },
+    "stripFilestream": {
+      "value": false,
+      "source": "default"
+    },
+    "stripAlwaysEncrypted": {
+      "value": true,
+      "source": "configFile"
+    }
+  },
+  "exportedObjects": [],
+  "importedObjects": [
+    {
+      "type": "Schema",
+      "schema": null,
+      "name": "dbo",
+      "filePath": "03_Schemas\\dbo.sql"
+    },
+    {
+      "type": "Table",
+      "schema": "dbo",
+      "name": "EncryptedTable",
+      "filePath": "09_Tables_PrimaryKey\\dbo.EncryptedTable.sql"
+    },
+    {
+      "type": "Table",
+      "schema": "dbo",
+      "name": "MultiLineEncrypted",
+      "filePath": "09_Tables_PrimaryKey\\dbo.MultiLineEncrypted.sql"
+    },
+    {
+      "type": "Table",
+      "schema": "dbo",
+      "name": "RegularTable",
+      "filePath": "09_Tables_PrimaryKey\\dbo.RegularTable.sql"
+    }
+  ],
+  "skippedObjects": [
+    {
+      "type": "Security",
+      "schema": null,
+      "name": "004_ColumnMasterKeys",
+      "filePath": "01_Security\\004_ColumnMasterKeys.sql",
+      "reason": "DevMode_AlwaysEncrypted"
+    },
+    {
+      "type": "Security",
+      "schema": null,
+      "name": "005_ColumnEncryptionKeys",
+      "filePath": "01_Security\\005_ColumnEncryptionKeys.sql",
+      "reason": "DevMode_AlwaysEncrypted"
+    }
+  ],
+  "failedObjects": []
+}

@@ -102,10 +102,10 @@ Write-TestResult 'Export: objectTypeOrder has Index before ForeignKey' $hasCorre
 
 Write-Host "`n=== Test 5: Export script deployment manifest ===" -ForegroundColor Yellow
 
-$hasManifestIdx = $exportContent -match '10\.\s*10_Indexes\s*-\s*Create indexes'
-$hasManifestFk = $exportContent -match '11\.\s*11_Tables_ForeignKeys\s*-\s*Add foreign key constraints'
-Write-TestResult 'Export: manifest entry 10 is Indexes' $hasManifestIdx
-Write-TestResult 'Export: manifest entry 11 is ForeignKeys' $hasManifestFk
+$hasManifestIdx = $exportContent -match '11\.\s*10_Indexes\s*-\s*Create indexes'
+$hasManifestFk = $exportContent -match '12\.\s*11_Tables_ForeignKeys\s*-\s*Add foreign key constraints'
+Write-TestResult 'Export: manifest entry 11 is Indexes' $hasManifestIdx
+Write-TestResult 'Export: manifest entry 12 is ForeignKeys' $hasManifestFk
 
 # ── Test 6: Import script folder-to-type mapping ────────────────────────────
 

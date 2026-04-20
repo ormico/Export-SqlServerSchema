@@ -6,3 +6,7 @@ DbScripts/**
 
 .claude/settings.local.json
 .claude/worktrees/
+handoff.md
+
+tests/fixtures/clr_test/import-log.txt
+import-report-*.json

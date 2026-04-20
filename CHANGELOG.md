@@ -5,6 +5,16 @@ All notable changes to Export-SqlServerSchema will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Role membership export/import (#128)** — `ALTER ROLE ... ADD MEMBER` statements were silently dropped during export because SMO does not generate them. Export now writes them to `01_Security_RoleMembers/RoleMembers.sql`; import processes this folder after `01_Security/` so roles and users already exist.
+
+### Fixed
+
+- **Parallel worker dropped queue items after RoleMembers in single-worker mode** — `return $result` inside the runspace scriptblock exited the entire scriptblock instead of continuing the loop, causing all items queued after RoleMembers to be skipped. Fixed with an `if/else` structure so every item reaches `$ResultsBag.Add()` and the progress counter.
+
 ## [1.9.1] - 2026-03-04
 
 ### Fixed

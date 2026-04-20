@@ -139,6 +139,7 @@
               "SqlUsers",
               "ExternalUsers",
               "CertificateMappedUsers",
+              "RoleMembers",
               "SecurityObjects",
               "SecurityPolicies",
               "Data"
@@ -185,6 +186,7 @@
               "SqlUsers",
               "ExternalUsers",
               "CertificateMappedUsers",
+              "RoleMembers",
               "SecurityObjects",
               "SecurityPolicies",
               "Data"
@@ -355,6 +357,7 @@
               "PlanGuides",
               "DatabaseRoles",
               "DatabaseUsers",
+              "RoleMembers",
               "SecurityPolicies",
               "Data"
             ]
