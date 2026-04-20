@@ -109,6 +109,7 @@
               "FileGroups",
               "DatabaseScopedConfigurations",
               "DatabaseScopedCredentials",
+              "DatabaseOptions",
               "Schemas",
               "Sequences",
               "PartitionFunctions",
@@ -156,6 +157,7 @@
               "FileGroups",
               "DatabaseScopedConfigurations",
               "DatabaseScopedCredentials",
+              "DatabaseOptions",
               "Schemas",
               "Sequences",
               "PartitionFunctions",
@@ -337,6 +339,7 @@
             "enum": [
               "FileGroups",
               "DatabaseConfiguration",
+              "DatabaseOptions",
               "Schemas",
               "Sequences",
               "PartitionFunctions",
@@ -455,6 +458,12 @@
           "type": "boolean",
           "description": "Import database scoped configurations",
           "default": false
+        },
+        "databaseOptionExclusions": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Database option names (file stems of .option.sql files) to skip during import. In Dev mode, defaults to ['RECOVERY']. Set to an empty array [] to apply all options.",
+          "default": []
         },
         "includeDatabaseScopedCredentials": {
           "type": "boolean",

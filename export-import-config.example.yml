@@ -353,6 +353,14 @@ import:
       # - PlanGuides                   # Environment-specific query hints
       # - ExternalLibraries            # ML Services packages
 
+    # ALTER DATABASE SET options to skip in developer mode
+    # Default: RECOVERY — dev databases typically use the server's default recovery model
+    # Set to [] to apply all exported options, or list specific option names to skip
+    databaseOptionExclusions:
+      - RECOVERY    # Don't force FULL/BULK_LOGGED recovery on dev databases
+      # - TRUSTWORTHY
+      # - COMPATIBILITY_LEVEL
+
     # FileGroup file size defaults (optional, prevents large allocations on dev systems)
     # If not specified, Dev mode uses safe defaults (1 MB size, 64 MB growth)
     # The source database may have very large file sizes (e.g., 1 GB) that can fail
@@ -442,6 +450,9 @@ import:
 
     # No object types excluded in production mode
     excludeObjectTypes: []
+
+    # No database option exclusions in production — apply all exported ALTER DATABASE SET options
+    databaseOptionExclusions: []
 
     # FileGroup path mappings (optional for fileGroupStrategy: autoRemap)
     # Paths are auto-detected, but can be overridden if needed

@@ -27,7 +27,7 @@ param()
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path $PSScriptRoot -Parent
 
-# ── Test framework ────────────────────────────────────────────────────────────
+# -- Test framework --
 
 $script:total  = 0
 $script:passed = 0
@@ -42,22 +42,22 @@ function Write-TestResult {
   } else {
     $script:failed++
     $msg = "  [FAIL] $Name"
-    if ($Detail) { $msg += " — $Detail" }
+    if ($Detail) { $msg += " - $Detail" }
     Write-Host $msg -ForegroundColor Red
   }
 }
 
 $exportContent = Get-Content (Join-Path $projectRoot 'Export-SqlServerSchema.ps1') -Raw
 
-# ── Section helpers ───────────────────────────────────────────────────────────
+# -- Section helpers --
 
 # Extract Build-WorkItems-Security function body for targeted checks
 $securityFn = [regex]::Match($exportContent,
   'function Build-WorkItems-Security[\s\S]*?(?=\nfunction |\z)').Value
 
-# ── Part 1: Static analysis ───────────────────────────────────────────────────
+# -- Part 1: Static analysis --
 
-Write-Host "`n=== Part 1: Static analysis — fix is structurally present ===" -ForegroundColor Yellow
+Write-Host "`n=== Part 1: Static analysis - fix is structurally present ===" -ForegroundColor Yellow
 
 Write-TestResult 'RoleMembers block exists in Build-WorkItems-Security' `
   ($securityFn -match '# Role Members')
@@ -77,7 +77,7 @@ Write-TestResult '$Database.Roles lookup used for role-as-member case' `
 Write-TestResult 'DatabaseRoles type exclusion applied to role-as-member' `
   ($securityFn -match "Test-ObjectTypeExcluded.*DatabaseRoles")
 
-# Count occurrences — fix must appear in BOTH custom and fixed loops
+# Count occurrences - fix must appear in BOTH custom and fixed loops
 $loginTypeCheckCount = ([regex]::Matches($securityFn, 'Test-UserExcludedByLoginType')).Count
 Write-TestResult 'Test-UserExcludedByLoginType appears in both member loops (count >= 2)' `
   ($loginTypeCheckCount -ge 2) "Count: $loginTypeCheckCount"
@@ -86,9 +86,9 @@ $dbUserLookupCount = ([regex]::Matches($securityFn, '\$Database\.Users\[\$member
 Write-TestResult '$Database.Users lookup appears in both member loops (count >= 2)' `
   ($dbUserLookupCount -ge 2) "Count: $dbUserLookupCount"
 
-# ── Part 2: Simulation — login-type filtering logic ──────────────────────────
+# -- Part 2: Simulation - login-type filtering logic --
 
-Write-Host "`n=== Part 2: Simulation — login-type exclusion suppresses memberships ===" -ForegroundColor Yellow
+Write-Host "`n=== Part 2: Simulation - login-type exclusion suppresses memberships ===" -ForegroundColor Yellow
 
 # Re-implement the member filtering logic locally (mirrors Export-SqlServerSchema.ps1)
 function Test-MemberExcluded-Sim {
@@ -159,7 +159,7 @@ foreach ($c in $cases) {
   Write-TestResult $c.Label ($result -eq $c.Expected) "Expected=$($c.Expected) Got=$result"
 }
 
-# ── Summary ───────────────────────────────────────────────────────────────────
+# -- Summary --
 
 Write-Host ""
 Write-Host "  Total: $script:total  Passed: $script:passed  Failed: $script:failed" -ForegroundColor Cyan

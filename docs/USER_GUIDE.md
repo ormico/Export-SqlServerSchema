@@ -291,6 +291,7 @@ Alternatively, use CLI parameters: `-UsernameFromEnv SQLCMD_USER -PasswordFromEn
 | `enableSecurityPolicies` | bool | false | Enable Row-Level Security (STATE ON) |
 | `includeData` | bool | false | Import table data |
 | `excludeObjectTypes` | string[] | [] | Object types to exclude in this mode |
+| `databaseOptionExclusions` | string[] | ["RECOVERY"] / [] | `ALTER DATABASE SET` options to skip (Dev defaults to `["RECOVERY"]`, Prod defaults to `[]`) |
 | `fileGroupPathMapping` | object | {} | Map FileGroup names to physical paths (optional, paths auto-detected) |
 | `fileGroupFileSizeDefaults.sizeKB` | int | 1024 | Initial file size in KB |
 | `fileGroupFileSizeDefaults.fileGrowthKB` | int | 65536 | File growth increment in KB |
