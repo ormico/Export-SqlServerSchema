@@ -228,6 +228,14 @@ try {
     # Get export config path
     $exportConfigPath = Join-Path $PSScriptRoot "test-export-config.yml"
 
+    # Set source to BULK_LOGGED so RECOVERY.option.sql captures a value that differs from the
+    # new-database default (FULL on Developer/Enterprise; inherited from model). Without this,
+    # source and new-DB default are both FULL, making it impossible to distinguish "RECOVERY
+    # excluded" from "RECOVERY applied" in the Dev-mode assertion below.
+    # sys.databases.recovery_model: 1=FULL, 2=BULK_LOGGED, 3=SIMPLE
+    Invoke-SqlCommand "ALTER DATABASE [$SourceDatabase] SET RECOVERY BULK_LOGGED WITH NO_WAIT" "master"
+    Write-Host "  Set source recovery model to BULK_LOGGED for RECOVERY-exclusion test" -ForegroundColor Gray
+
     # Run export (this will fail if SMO is not installed, but we'll handle it gracefully)
     try {
         & $exportScript -Server $TEST_SERVER -Database $SourceDatabase -OutputPath $ExportPath -IncludeData -Credential $credential -ConfigFile $exportConfigPath -Verbose
@@ -272,6 +280,39 @@ try {
             Write-TestStep "No role memberships to export (source has none)" -Type Info
         }
     }
+
+    # Verify database options were exported (issue #129)
+    $optionsDirs = @(Get-ChildItem $exportDir -Recurse -Filter "003_DatabaseOptions" -Directory)
+    if ($optionsDirs.Count -ne 1) {
+        Write-TestStep "003_DatabaseOptions subfolder not found in export (count=$($optionsDirs.Count))" -Type Error
+        throw "Database options export verification failed"
+    }
+    $optionsDir = $optionsDirs[0]
+    $optionFiles = Get-ChildItem $optionsDir.FullName -Filter "*.option.sql"
+    Write-Host "  Database option files exported: $($optionFiles.Count)" -ForegroundColor White
+
+    $snapshotOptionFile = $optionFiles | Where-Object { $_.Name -eq 'ALLOW_SNAPSHOT_ISOLATION.option.sql' }
+    if ($snapshotOptionFile) {
+        $snapshotContent = Get-Content $snapshotOptionFile.FullName -Raw
+        if ($snapshotContent -match 'ALLOW_SNAPSHOT_ISOLATION\s+ON') {
+            Write-TestStep "ALLOW_SNAPSHOT_ISOLATION exported correctly (issue #129)" -Type Success
+        } else {
+            Write-TestStep "ALLOW_SNAPSHOT_ISOLATION.option.sql does not contain expected ON value" -Type Error
+            throw "Database options export verification failed"
+        }
+    } else {
+        Write-TestStep "ALLOW_SNAPSHOT_ISOLATION.option.sql not found in export" -Type Error
+        throw "Database options export verification failed"
+    }
+
+    $recoveryOptionFile = $optionFiles | Where-Object { $_.Name -eq 'RECOVERY.option.sql' }
+    if ($recoveryOptionFile) {
+        Write-TestStep "RECOVERY.option.sql exported (will be skipped in Dev import)" -Type Success
+    } else {
+        Write-TestStep "RECOVERY.option.sql not found in export" -Type Error
+        throw "Database options export verification failed (RECOVERY)"
+    }
+
 
     # Step 4.5: Test parallel export (schema only, for comparison with sequential schema)
     Write-Host "`n" -NoNewline
@@ -600,6 +641,28 @@ WHERE fg.name IN ('FG_CURRENT', 'FG_ARCHIVE')
         throw "Dev mode verification failed: Schema object counts differ"
     }
 
+    # Verify database options were applied (issue #129)
+    $devSnapshotState = Invoke-SqlCommand "SELECT snapshot_isolation_state FROM sys.databases WHERE name = '$TargetDatabaseDev'" "master"
+    if ($devSnapshotState.Trim() -eq '1') {
+        Write-TestStep "Dev mode: ALLOW_SNAPSHOT_ISOLATION correctly applied" -Type Success
+    } else {
+        Write-TestStep "Dev mode: ALLOW_SNAPSHOT_ISOLATION NOT applied (state=$($devSnapshotState.Trim()))" -Type Error
+        throw "Dev mode verification failed: ALLOW_SNAPSHOT_ISOLATION not applied"
+    }
+
+    # RECOVERY should NOT have been applied in Dev mode (default exclusion).
+    # Source was set to BULK_LOGGED before export, so RECOVERY.option.sql contains BULK_LOGGED.
+    # Dev mode excludes RECOVERY by default, so the dev target should stay at FULL (the
+    # new-database default on Developer/Enterprise). Using recovery_model (numeric) rather than
+    # recovery_model_desc so Invoke-SqlCommand returns a clean string via the numeric fast-path.
+    # sys.databases.recovery_model: 1=FULL, 2=BULK_LOGGED, 3=SIMPLE
+    $devRecovery = Invoke-SqlCommand "SELECT recovery_model FROM sys.databases WHERE name = '$TargetDatabaseDev'" "master"
+    if ($devRecovery.Trim() -ne '1') {
+        Write-TestStep "Dev mode: RECOVERY model changed unexpectedly (expected FULL=1, got $($devRecovery.Trim()))" -Type Error
+        throw "Dev mode verification failed: RECOVERY option was applied when it should have been excluded"
+    }
+    Write-TestStep "Dev mode: RECOVERY option correctly excluded (recovery_model=$($devRecovery.Trim()), FULL)" -Type Success
+
     # Step 8: Import schema in Prod mode
     Write-Host "`n" -NoNewline
     Write-TestStep "Step 8: Importing schema in Prod mode..." -Type Info
@@ -695,6 +758,24 @@ WHERE fg.name IN ('FG_CURRENT', 'FG_ARCHIVE')
         Write-TestStep "Prod mode object counts do not match!" -Type Error
         throw "Prod mode verification failed: Object counts differ"
     }
+
+    # Verify database options were applied in Prod mode (issue #129)
+    $prodSnapshotState = Invoke-SqlCommand "SELECT snapshot_isolation_state FROM sys.databases WHERE name = '$TargetDatabaseProd'" "master"
+    if ($prodSnapshotState.Trim() -eq '1') {
+        Write-TestStep "Prod mode: ALLOW_SNAPSHOT_ISOLATION correctly applied" -Type Success
+    } else {
+        Write-TestStep "Prod mode: ALLOW_SNAPSHOT_ISOLATION NOT applied (state=$($prodSnapshotState.Trim()))" -Type Error
+        throw "Prod mode verification failed: ALLOW_SNAPSHOT_ISOLATION not applied"
+    }
+
+    # Prod mode should apply RECOVERY (no exclusions). Source was set to BULK_LOGGED, so
+    # RECOVERY.option.sql contains BULK_LOGGED; prod target should be BULK_LOGGED=2.
+    $prodRecovery = Invoke-SqlCommand "SELECT recovery_model FROM sys.databases WHERE name = '$TargetDatabaseProd'" "master"
+    if ($prodRecovery.Trim() -ne '2') {
+        Write-TestStep "Prod mode: RECOVERY not applied (expected BULK_LOGGED=2, got $($prodRecovery.Trim()))" -Type Error
+        throw "Prod mode verification failed: RECOVERY option should have been applied"
+    }
+    Write-TestStep "Prod mode: RECOVERY option correctly applied (recovery_model=$($prodRecovery.Trim()), BULK_LOGGED)" -Type Success
 
     # Step 10: Verify data integrity
     Write-Host "`n" -NoNewline

@@ -2,13 +2,17 @@
 
 <#
 .SYNOPSIS
-    Tests that schema-bound folder matching uses prefix matching, not substring matching.
+    Tests Import-Helpers.ps1 filter functions: schema-bound folder matching and
+    database option exclusion logic.
 
 .DESCRIPTION
     Regression tests for issue #112: Test-SchemaExcluded and Test-ObjectExcluded used
     -match (regex substring matching) which caused false positives — e.g.,
     'DatabaseConfiguration' matched 'Data'. The fix strips numeric prefixes and uses
     -like with a trailing wildcard for safe substring-start matching.
+
+    Tests for issue #129: Get-DatabaseOptionExclusions returns correct defaults and
+    respects config overrides; Test-ScriptExcluded correctly handles DatabaseOptions type.
 #>
 # TestType: unit
 
@@ -67,6 +71,7 @@ $dirs = @(
   (Join-Path $tempRoot '21_Data'),
   # Non-schema-bound folders
   (Join-Path $tempRoot '02_DatabaseConfiguration'),
+  (Join-Path $tempRoot '02_DatabaseConfiguration' '003_DatabaseOptions'),
   (Join-Path $tempRoot '01_Security'),
   (Join-Path $tempRoot '03_Schemas'),
   # False-positive traps
@@ -159,6 +164,60 @@ try {
   $path = Join-Path $tempRoot 'ExternalData' 'dbo.TestObj.sql'
   $result = Test-ObjectExcluded -ScriptPath $path -ExcludeObjects @('dbo.TestObj')
   Write-TestResult -Name "ObjectExcluded: ExternalData does NOT match Data" -Passed ($result -eq $false)
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 5: Test-ScriptExcluded — DatabaseOptions type (#129)
+  # ═══════════════════════════════════════════════════════════════
+  Write-Host "`n[PHASE 5] Test-ScriptExcluded: DatabaseOptions type (#129)" -ForegroundColor Yellow
+
+  # .option.sql files under 003_DatabaseOptions should be excluded
+  $optionFile = Join-Path $tempRoot '02_DatabaseConfiguration' '003_DatabaseOptions' 'ALLOW_SNAPSHOT_ISOLATION.option.sql'
+  'ALTER DATABASE CURRENT SET ALLOW_SNAPSHOT_ISOLATION ON' | Out-File -FilePath $optionFile -Encoding utf8
+
+  $result = Test-ScriptExcluded -ScriptPath $optionFile -ExcludeTypes @('DatabaseOptions')
+  Write-TestResult -Name "ScriptExcluded: .option.sql excluded when DatabaseOptions in ExcludeTypes" -Passed ($result -eq $true)
+
+  # 001_DatabaseScopedConfigurations.sql should NOT be excluded by DatabaseOptions
+  $configFile = Join-Path $tempRoot '02_DatabaseConfiguration' '001_DatabaseScopedConfigurations.sql'
+  'ALTER DATABASE SCOPED CONFIGURATION SET MAXDOP = 4' | Out-File -FilePath $configFile -Encoding utf8
+
+  $result = Test-ScriptExcluded -ScriptPath $configFile -ExcludeTypes @('DatabaseOptions')
+  Write-TestResult -Name "ScriptExcluded: ScopedConfigurations.sql NOT excluded by DatabaseOptions type" -Passed ($result -eq $false)
+
+  # .option.sql should NOT be excluded when DatabaseOptions is not in ExcludeTypes
+  $result = Test-ScriptExcluded -ScriptPath $optionFile -ExcludeTypes @('FileGroups')
+  Write-TestResult -Name "ScriptExcluded: .option.sql NOT excluded when type not in ExcludeTypes" -Passed ($result -eq $false)
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 6: Get-DatabaseOptionExclusions — defaults and config overrides (#129)
+  # ═══════════════════════════════════════════════════════════════
+  Write-Host "`n[PHASE 6] Get-DatabaseOptionExclusions: defaults and config overrides (#129)" -ForegroundColor Yellow
+
+  # Dev mode default: RECOVERY only
+  $excl = Get-DatabaseOptionExclusions -Mode 'Dev' -Config @{}
+  Write-TestResult -Name "Dev default: returns 1 exclusion"        -Passed (@($excl).Count -eq 1)
+  Write-TestResult -Name "Dev default: RECOVERY is excluded"        -Passed ($excl -contains 'RECOVERY')
+
+  # Prod mode: no exclusions
+  $excl = Get-DatabaseOptionExclusions -Mode 'Prod' -Config @{}
+  Write-TestResult -Name "Prod mode: no exclusions by default"      -Passed (@($excl).Count -eq 0)
+
+  # Config override with custom list
+  $cfg = @{ import = @{ developerMode = @{ databaseOptionExclusions = @('RECOVERY', 'TRUSTWORTHY') } } }
+  $excl = Get-DatabaseOptionExclusions -Mode 'Dev' -Config $cfg
+  Write-TestResult -Name "Config override: 2 exclusions"            -Passed (@($excl).Count -eq 2)
+  Write-TestResult -Name "Config override: RECOVERY present"        -Passed ($excl -contains 'RECOVERY')
+  Write-TestResult -Name "Config override: TRUSTWORTHY present"     -Passed ($excl -contains 'TRUSTWORTHY')
+
+  # Config empty list: apply all options
+  $cfg = @{ import = @{ developerMode = @{ databaseOptionExclusions = @() } } }
+  $excl = Get-DatabaseOptionExclusions -Mode 'Dev' -Config $cfg
+  Write-TestResult -Name "Config empty list: no exclusions"         -Passed (@($excl).Count -eq 0)
+
+  # Config null value: treated as no exclusions
+  $cfg = @{ import = @{ developerMode = @{ databaseOptionExclusions = $null } } }
+  $excl = Get-DatabaseOptionExclusions -Mode 'Dev' -Config $cfg
+  Write-TestResult -Name "Config null list: no exclusions"          -Passed (@($excl).Count -eq 0)
 
 } finally {
   # Cleanup temp directory

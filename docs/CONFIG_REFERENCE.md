@@ -969,6 +969,24 @@ import:
 
 > **Note**: If CLR assembly import fails and `disableStrictSecurityForImport` is not enabled, the import will emit a `[HINT]` message suggesting the option.
 
+#### `import.developerMode.databaseOptionExclusions`
+
+- **Type**: Array of strings
+- **Default**: `["RECOVERY"]`
+- **Description**: `ALTER DATABASE SET` options to skip during import in developer mode. By default, `RECOVERY` is excluded so local databases inherit the server's default recovery model rather than being forced into `FULL` or `BULK_LOGGED`. Set to `[]` to apply all exported options.
+- **Valid values**: Any option name exported to `003_DatabaseOptions/` — e.g., `RECOVERY`, `TRUSTWORTHY`, `COMPATIBILITY_LEVEL`, `ALLOW_SNAPSHOT_ISOLATION`, `READ_COMMITTED_SNAPSHOT`
+
+```yaml
+import:
+  developerMode:
+    databaseOptionExclusions:
+      - RECOVERY             # Don't force FULL/BULK_LOGGED recovery in dev
+      # - TRUSTWORTHY        # Skip if dev databases don't need cross-db ownership chains
+      # - COMPATIBILITY_LEVEL  # Keep server default for compatibility testing
+```
+
+> **Tip**: Set `databaseOptionExclusions: []` to apply every exported option, including `RECOVERY`. This is useful when testing that the full production configuration imports cleanly.
+
 ---
 
 ### Production Mode Settings
@@ -1122,6 +1140,18 @@ import:
 ```
 
 > **Best Practice**: In production, prefer signing CLR assemblies rather than disabling strict security. Only set `disableStrictSecurityForImport: true` when migrating legacy unsigned assemblies.
+
+#### `import.productionMode.databaseOptionExclusions`
+
+- **Type**: Array of strings
+- **Default**: Empty (all exported options are applied)
+- **Description**: `ALTER DATABASE SET` options to skip during production import. Defaults to empty so every exported option is applied, ensuring the target database matches the source configuration.
+
+```yaml
+import:
+  productionMode:
+    databaseOptionExclusions: []  # Apply all exported database options
+```
 
 ---
 

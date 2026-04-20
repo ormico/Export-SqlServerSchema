@@ -82,6 +82,16 @@ ALTER DATABASE SCOPED CONFIGURATION SET QUERY_OPTIMIZER_HOTFIXES = ON;
 GO
 
 -- ═══════════════════════════════════════════════════════════════
+-- DATABASE OPTIONS (issue #129 test)
+-- ═══════════════════════════════════════════════════════════════
+-- Enable snapshot isolation to verify export/import preserves this setting
+ALTER DATABASE [TestDb] SET ALLOW_SNAPSHOT_ISOLATION ON;
+GO
+
+ALTER DATABASE [TestDb] SET READ_COMMITTED_SNAPSHOT ON;
+GO
+
+-- ═══════════════════════════════════════════════════════════════
 -- CREATE SCHEMAS
 -- ═══════════════════════════════════════════════════════════════
 
