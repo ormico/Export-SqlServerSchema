@@ -6,3 +6,5 @@ DbScripts/**
 
 .claude/settings.local.json
 .claude/worktrees/
+
+.worktree/

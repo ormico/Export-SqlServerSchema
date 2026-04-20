@@ -5,6 +5,12 @@ All notable changes to Export-SqlServerSchema will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **`Get-SafeFileName` unit tests for special characters in SQL object names** — Verify that SQL Server object names containing spaces, dots, reserved Windows filenames, invalid filesystem characters, and other special characters are correctly sanitized into safe filenames for both Windows and Linux. Covers 58 test cases across 6 categories.
+
 ## [1.9.1] - 2026-03-04
 
 ### Fixed
