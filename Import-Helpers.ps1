@@ -388,10 +388,10 @@ function Get-DatabaseOptionExclusions {
   .SYNOPSIS
       Returns the list of database option names to exclude when applying .option.sql files.
   .DESCRIPTION
-      In Dev mode, certain options like RECOVERY are excluded by default to avoid
-      unintended side effects on developer environments. The exclusion list can be
-      overridden via config key import.developerMode.databaseOptionExclusions.
-      In Prod mode, no options are excluded by default.
+      In Dev mode, RECOVERY is excluded by default to avoid unintended side effects on developer
+      environments. In Prod mode, no options are excluded by default. The exclusion list can be
+      overridden for either mode via config keys import.developerMode.databaseOptionExclusions
+      or import.productionMode.databaseOptionExclusions.
   .PARAMETER Mode
       Import mode: 'Dev' or 'Prod'. Default: 'Dev'.
   .PARAMETER Config
@@ -404,22 +404,22 @@ function Get-DatabaseOptionExclusions {
     $Config = @{}
   )
 
-  if ($Mode -ne 'Dev') {
-    return @()
+  # Check for mode-specific config override
+  $modeKey = if ($Mode -eq 'Dev') { 'developerMode' } else { 'productionMode' }
+  $modeConfig = $null
+  if ($Config.import -and $Config.import[$modeKey]) {
+    $modeConfig = $Config.import[$modeKey]
   }
 
-  # Check for config override
-  $devMode = $null
-  if ($Config.import -and $Config.import.developerMode) {
-    $devMode = $Config.import.developerMode
-  }
-
-  if ($devMode -and $devMode.ContainsKey('databaseOptionExclusions')) {
-    $exclusions = $devMode.databaseOptionExclusions
+  if ($modeConfig -and $modeConfig.ContainsKey('databaseOptionExclusions')) {
+    $exclusions = $modeConfig.databaseOptionExclusions
     if ($null -eq $exclusions) { return @() }
     return @($exclusions)
   }
 
-  # Default Dev mode exclusion: RECOVERY (to avoid inadvertently changing recovery model)
-  return @('RECOVERY')
+  # Default exclusions per mode: Dev excludes RECOVERY, Prod excludes nothing
+  if ($Mode -eq 'Dev') {
+    return @('RECOVERY')
+  }
+  return @()
 }

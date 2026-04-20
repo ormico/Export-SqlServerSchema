@@ -274,35 +274,35 @@ try {
     }
 
     # Verify database options were exported (issue #129)
-    $optionsDir = Get-ChildItem $exportDir -Recurse -Filter "003_DatabaseOptions" -Directory
-    if ($optionsDir) {
-        $optionFiles = Get-ChildItem $optionsDir.FullName -Filter "*.option.sql"
-        Write-Host "  Database option files exported: $($optionFiles.Count)" -ForegroundColor White
+    $optionsDirs = @(Get-ChildItem $exportDir -Recurse -Filter "003_DatabaseOptions" -Directory)
+    if ($optionsDirs.Count -ne 1) {
+        Write-TestStep "003_DatabaseOptions subfolder not found in export (count=$($optionsDirs.Count))" -Type Error
+        throw "Database options export verification failed"
+    }
+    $optionsDir = $optionsDirs[0]
+    $optionFiles = Get-ChildItem $optionsDir.FullName -Filter "*.option.sql"
+    Write-Host "  Database option files exported: $($optionFiles.Count)" -ForegroundColor White
 
-        $snapshotOptionFile = $optionFiles | Where-Object { $_.Name -eq 'ALLOW_SNAPSHOT_ISOLATION.option.sql' }
-        if ($snapshotOptionFile) {
-            $snapshotContent = Get-Content $snapshotOptionFile.FullName -Raw
-            if ($snapshotContent -match 'ALLOW_SNAPSHOT_ISOLATION\s+ON') {
-                Write-TestStep "ALLOW_SNAPSHOT_ISOLATION exported correctly (issue #129)" -Type Success
-            } else {
-                Write-TestStep "ALLOW_SNAPSHOT_ISOLATION.option.sql does not contain expected ON value" -Type Error
-                throw "Database options export verification failed"
-            }
+    $snapshotOptionFile = $optionFiles | Where-Object { $_.Name -eq 'ALLOW_SNAPSHOT_ISOLATION.option.sql' }
+    if ($snapshotOptionFile) {
+        $snapshotContent = Get-Content $snapshotOptionFile.FullName -Raw
+        if ($snapshotContent -match 'ALLOW_SNAPSHOT_ISOLATION\s+ON') {
+            Write-TestStep "ALLOW_SNAPSHOT_ISOLATION exported correctly (issue #129)" -Type Success
         } else {
-            Write-TestStep "ALLOW_SNAPSHOT_ISOLATION.option.sql not found in export" -Type Error
+            Write-TestStep "ALLOW_SNAPSHOT_ISOLATION.option.sql does not contain expected ON value" -Type Error
             throw "Database options export verification failed"
         }
-
-        $recoveryOptionFile = $optionFiles | Where-Object { $_.Name -eq 'RECOVERY.option.sql' }
-        if ($recoveryOptionFile) {
-            Write-TestStep "RECOVERY.option.sql exported (will be skipped in Dev import)" -Type Success
-        } else {
-            Write-TestStep "RECOVERY.option.sql not found in export" -Type Error
-            throw "Database options export verification failed (RECOVERY)"
-        }
     } else {
-        Write-TestStep "003_DatabaseOptions subfolder not found in export" -Type Error
+        Write-TestStep "ALLOW_SNAPSHOT_ISOLATION.option.sql not found in export" -Type Error
         throw "Database options export verification failed"
+    }
+
+    $recoveryOptionFile = $optionFiles | Where-Object { $_.Name -eq 'RECOVERY.option.sql' }
+    if ($recoveryOptionFile) {
+        Write-TestStep "RECOVERY.option.sql exported (will be skipped in Dev import)" -Type Success
+    } else {
+        Write-TestStep "RECOVERY.option.sql not found in export" -Type Error
+        throw "Database options export verification failed (RECOVERY)"
     }
 
 
@@ -642,11 +642,20 @@ WHERE fg.name IN ('FG_CURRENT', 'FG_ARCHIVE')
         throw "Dev mode verification failed: ALLOW_SNAPSHOT_ISOLATION not applied"
     }
 
-    # RECOVERY should NOT have been applied in Dev mode (default exclusion)
-    # We just verify the option file was present but the recovery model stays at default (SIMPLE for a new DB)
+    # RECOVERY should NOT have been applied in Dev mode (default exclusion).
+    # New databases default to SIMPLE recovery model; if the option was applied it would change to match source.
+    $sourceRecovery = Invoke-SqlCommand "SELECT recovery_model_desc FROM sys.databases WHERE name = '$SourceDatabase'" "master"
     $devRecovery = Invoke-SqlCommand "SELECT recovery_model_desc FROM sys.databases WHERE name = '$TargetDatabaseDev'" "master"
-    Write-Host "  Dev mode RECOVERY model (should be default, not from source): $($devRecovery.Trim())" -ForegroundColor Gray
-    Write-TestStep "Dev mode: RECOVERY option correctly excluded by default" -Type Success
+    Write-Host "  Source recovery model: $($sourceRecovery.Trim()), Dev target recovery model: $($devRecovery.Trim())" -ForegroundColor Gray
+    if ($devRecovery.Trim() -ne 'SIMPLE') {
+        Write-TestStep "Dev mode: RECOVERY model changed unexpectedly (expected SIMPLE, got $($devRecovery.Trim()))" -Type Error
+        throw "Dev mode verification failed: RECOVERY option was applied when it should have been excluded"
+    }
+    if (($sourceRecovery.Trim() -ne 'SIMPLE') -and ($devRecovery.Trim() -eq $sourceRecovery.Trim())) {
+        Write-TestStep "Dev mode: RECOVERY model matches source unexpectedly ($($devRecovery.Trim()))" -Type Error
+        throw "Dev mode verification failed: RECOVERY model should not match source in Dev mode"
+    }
+    Write-TestStep "Dev mode: RECOVERY option correctly excluded (dev=$($devRecovery.Trim()))" -Type Success
 
     # Step 8: Import schema in Prod mode
     Write-Host "`n" -NoNewline

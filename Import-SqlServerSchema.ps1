@@ -215,7 +215,7 @@ param(
   [switch]$CollectMetrics,
 
   [Parameter(HelpMessage = 'Include only specific object types (overrides config file). Example: Tables,Views,StoredProcedures')]
-  [ValidateSet('FileGroups', 'DatabaseConfiguration', 'Schemas', 'Sequences', 'PartitionFunctions', 'PartitionSchemes',
+  [ValidateSet('FileGroups', 'DatabaseConfiguration', 'DatabaseOptions', 'Schemas', 'Sequences', 'PartitionFunctions', 'PartitionSchemes',
     'Types', 'XmlSchemaCollections', 'Tables', 'ForeignKeys', 'Indexes', 'Defaults', 'Rules',
     'Programmability', 'Views', 'Functions', 'StoredProcedures', 'Synonyms', 'SearchPropertyLists',
     'PlanGuides', 'DatabaseRoles', 'DatabaseUsers', 'WindowsUsers', 'SqlUsers', 'ExternalUsers',
@@ -223,7 +223,7 @@ param(
   [string[]]$IncludeObjectTypes,
 
   [Parameter(HelpMessage = 'Exclude specific object types (overrides config file). Example: WindowsUsers,SqlUsers')]
-  [ValidateSet('FileGroups', 'DatabaseConfiguration', 'Schemas', 'Sequences', 'PartitionFunctions', 'PartitionSchemes',
+  [ValidateSet('FileGroups', 'DatabaseConfiguration', 'DatabaseOptions', 'Schemas', 'Sequences', 'PartitionFunctions', 'PartitionSchemes',
     'Types', 'XmlSchemaCollections', 'Tables', 'ForeignKeys', 'Indexes', 'Defaults', 'Rules',
     'Programmability', 'Views', 'Functions', 'StoredProcedures', 'Synonyms', 'SearchPropertyLists',
     'PlanGuides', 'DatabaseRoles', 'DatabaseUsers', 'WindowsUsers', 'SqlUsers', 'ExternalUsers',
@@ -3631,22 +3631,31 @@ function Get-ScriptFiles {
 
       # Special handling for DatabaseConfiguration - file-level filtering
       if ($dir -eq '02_DatabaseConfiguration') {
+        # Determine which components of 02_DatabaseConfiguration are in scope.
+        # When no filter is active, or 'DatabaseConfiguration' covers the whole folder, include all.
+        # When a specific subfolder or granular type is requested, include only that component.
+        $includeFilterSpecified = $script:IncludeObjectTypesFilter -and @($script:IncludeObjectTypesFilter).Count -gt 0
+        $includeAll = -not $includeFilterSpecified -or (@($script:IncludeObjectTypesFilter) -contains 'DatabaseConfiguration')
+        $includeScopedConfigs = $includeAll -or (@($script:IncludeObjectTypesFilter) -contains 'DatabaseScopedConfigurations')
+        $includeScopedCreds   = $includeAll -or (@($script:IncludeObjectTypesFilter) -contains 'DatabaseScopedCredentials')
+        $includeOptions       = $includeAll -or ($subfolderPaths -contains '02_DatabaseConfiguration\003_DatabaseOptions')
+
         # 001_DatabaseScopedConfigurations.sql - only included when includeConfigurations is true
         $scopedConfigFile = Join-Path $fullPath '001_DatabaseScopedConfigurations.sql'
-        if ((Test-Path $scopedConfigFile) -and $modeSettings.includeConfigurations) {
+        if ((Test-Path $scopedConfigFile) -and $modeSettings.includeConfigurations -and $includeScopedConfigs) {
           $scripts += Get-Item -Path $scopedConfigFile
         }
 
         # 002_DatabaseScopedCredentials.sql - only when includeDatabaseScopedCredentials is true
         $credFile = Join-Path $fullPath '002_DatabaseScopedCredentials.sql'
-        if ((Test-Path $credFile) -and $modeSettings.includeDatabaseScopedCredentials) {
+        if ((Test-Path $credFile) -and $modeSettings.includeDatabaseScopedCredentials -and $includeScopedCreds) {
           $scripts += Get-Item -Path $credFile
         }
 
-        # 003_DatabaseOptions/*.option.sql - always included, with per-option exclusions
-        $optionsDir = Join-Path $fullPath '003_DatabaseOptions'
-        if (Test-Path $optionsDir) {
-          $optionFiles = @(Get-ChildItem -Path $optionsDir -Filter '*.option.sql' | Sort-Object Name)
+        # 003_DatabaseOptions/*.option.sql - included unless filtered to a different component
+        $optionsSubdir = Join-Path $fullPath '003_DatabaseOptions'
+        if ((Test-Path $optionsSubdir) -and $includeOptions) {
+          $optionFiles = @(Get-ChildItem -Path $optionsSubdir -Filter '*.option.sql' | Sort-Object Name)
           foreach ($optionFile in $optionFiles) {
             $optionName = $optionFile.Name -replace '\.option\.sql$', ''
             if ($dbOptionExclusions -contains $optionName) {
