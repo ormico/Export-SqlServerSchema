@@ -440,6 +440,13 @@ GO
 CREATE USER TestUser WITHOUT LOGIN;
 GO
 
+-- Role membership assignments (issue #128)
+ALTER ROLE TestDbRole ADD MEMBER TestUser;
+GO
+
+ALTER ROLE db_datareader ADD MEMBER TestUser;
+GO
+
 CREATE CERTIFICATE TestCert WITH SUBJECT = 'Test Certificate';
 GO
 
@@ -744,7 +751,7 @@ PRINT '  - User-Defined Types: 2 (table type + alias type)';
 PRINT '  - XML Schema Collections: 2';
 PRINT '  - Defaults: 1';
 PRINT '  - Rules: 1';
-PRINT '  - Security Objects: 6 (role, app role, user, certificate, asymmetric key, symmetric key)';
+PRINT '  - Security Objects: 6 (role, app role, user, certificate, asymmetric key, symmetric key) + 2 role memberships';
 PRINT '  - Indexes: 4 non-clustered';
 PRINT '';
 PRINT 'ADVANCED FEATURES';

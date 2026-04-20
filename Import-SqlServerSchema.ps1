@@ -687,8 +687,9 @@ function Get-ImportFolderSummary {
   # Folder name to display name mapping (ordered by expected import sequence)
   $folderDisplayNames = @{
     '00_FileGroups'           = 'FileGroups'
-    '01_Security'             = 'Security (Roles, Users)'
-    '02_DatabaseConfiguration' = 'Database Configuration'
+    '01_Security'                = 'Security (Roles, Users)'
+    '01_Security_RoleMembers'    = 'Security (Role Memberships)'
+    '02_DatabaseConfiguration'   = 'Database Configuration'
     '03_Schemas'              = 'Schemas'
     '04_Sequences'            = 'Sequences'
     '05_PartitionFunctions'   = 'Partition Functions'
@@ -3268,28 +3269,29 @@ function Get-CanonicalTypeOrder {
         Ordered hashtable mapping type identifiers to their ordinal position.
   #>
   return [ordered]@{
-    'filegroups'            = 0
-    'security'              = 1
-    'database_configuration' = 2
-    'schemas'               = 3
-    'sequences'             = 4
-    'partition_functions'   = 5
-    'partition_schemes'     = 6
-    'types'                 = 7
-    'xml_schema_collections' = 8
-    'tables_primarykey'     = 9
-    'indexes'               = 10
-    'tables_foreignkeys'    = 11
-    'defaults'              = 12
-    'rules'                 = 13
-    'programmability'       = 14
-    'synonyms'              = 15
-    'fulltext_search'       = 16
-    'external_data'         = 17
-    'search_property_lists' = 18
-    'plan_guides'           = 19
-    'security_policies'     = 20
-    'data'                  = 21
+    'filegroups'              = 0
+    'security'                = 1
+    'security_role_members'   = 2
+    'database_configuration'  = 3
+    'schemas'                 = 4
+    'sequences'               = 5
+    'partition_functions'     = 6
+    'partition_schemes'       = 7
+    'types'                   = 8
+    'xml_schema_collections'  = 9
+    'tables_primarykey'       = 10
+    'indexes'                 = 11
+    'tables_foreignkeys'      = 12
+    'defaults'                = 13
+    'rules'                   = 14
+    'programmability'         = 15
+    'synonyms'                = 16
+    'fulltext_search'         = 17
+    'external_data'           = 18
+    'search_property_lists'   = 19
+    'plan_guides'             = 20
+    'security_policies'       = 21
+    'data'                    = 22
   }
 }
 
@@ -3469,6 +3471,9 @@ function Get-ScriptFiles {
   # Security - MUST come before schemas since schemas may have GRANT statements referencing roles/users
   $orderedDirs += '01_Security'
 
+  # Role Memberships - MUST come after Security (roles and users must exist before assignments)
+  $orderedDirs += '01_Security_RoleMembers'
+
   # Database Configuration - skip in Dev mode unless explicitly enabled
   if ($modeSettings.includeConfigurations) {
     $orderedDirs += '02_DatabaseConfiguration'
@@ -3553,6 +3558,7 @@ function Get-ScriptFiles {
       'PlanGuides'            = '19_PlanGuides'
       'DatabaseRoles'         = '01_Security'
       'DatabaseUsers'         = '01_Security'
+      'RoleMembers'           = '01_Security_RoleMembers'
       'SecurityPolicies'      = '20_SecurityPolicies'
       'Data'                  = '21_Data'
     }
@@ -3560,7 +3566,8 @@ function Get-ScriptFiles {
     $filteredDirs = @()
     # Always include Security if any security-related types are included
     $needsSecurity = ($script:IncludeObjectTypesFilter -contains 'DatabaseRoles') -or
-    ($script:IncludeObjectTypesFilter -contains 'DatabaseUsers')
+    ($script:IncludeObjectTypesFilter -contains 'DatabaseUsers') -or
+    ($script:IncludeObjectTypesFilter -contains 'RoleMembers')
 
     foreach ($objType in $script:IncludeObjectTypesFilter) {
       if ($folderMap.ContainsKey($objType)) {

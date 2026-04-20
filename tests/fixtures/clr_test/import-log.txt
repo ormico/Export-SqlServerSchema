@@ -1,0 +1,72 @@
+[2026-04-20 12:42:43] [INFO] Import started
+[2026-04-20 12:42:43] [INFO] Server: localhost,1433
+[2026-04-20 12:42:43] [INFO] Database: TestDb_CLR_Enabled
+[2026-04-20 12:42:43] [INFO] Source: D:\Export-SqlServerSchema-128\tests\fixtures\clr_test
+[2026-04-20 12:42:43] [INFO] Import mode: Dev
+[2026-04-20 12:42:43] [INFO] Configuration source: D:\Export-SqlServerSchema-128\tests\test-clr-strict-security-enabled.yml
+[2026-04-20 12:42:44] [INFO] Connection test successful to localhost,1433
+[2026-04-20 12:42:44] [INFO] Starting script execution - 4 total scripts
+[2026-04-20 12:42:45] [ERROR] Import completed with 1 error(s)
+[2026-04-20 12:42:46] [INFO] Import started
+[2026-04-20 12:42:46] [INFO] Server: localhost,1433
+[2026-04-20 12:42:46] [INFO] Database: TestDb_CLR_Hint
+[2026-04-20 12:42:46] [INFO] Source: D:\Export-SqlServerSchema-128\tests\fixtures\clr_test
+[2026-04-20 12:42:46] [INFO] Import mode: Dev
+[2026-04-20 12:42:46] [INFO] Configuration source: D:\Export-SqlServerSchema-128\tests\test-clr-strict-security-disabled.yml
+[2026-04-20 12:42:46] [INFO] Connection test successful to localhost,1433
+[2026-04-20 12:42:46] [INFO] Starting script execution - 4 total scripts
+[2026-04-20 12:42:47] [ERROR] Import completed with 1 error(s)
+[2026-04-20 12:42:47] [INFO] Import started
+[2026-04-20 12:42:47] [INFO] Server: localhost,1433
+[2026-04-20 12:42:47] [INFO] Database: TestDb_CLR_NoRestore
+[2026-04-20 12:42:47] [INFO] Source: D:\Export-SqlServerSchema-128\tests\fixtures\clr_test
+[2026-04-20 12:42:47] [INFO] Import mode: Dev
+[2026-04-20 12:42:47] [INFO] Configuration source: D:\Export-SqlServerSchema-128\tests\test-clr-strict-security-no-restore.yml
+[2026-04-20 12:42:47] [INFO] Connection test successful to localhost,1433
+[2026-04-20 12:42:48] [INFO] Starting script execution - 4 total scripts
+[2026-04-20 12:42:48] [ERROR] Import completed with 1 error(s)
+[2026-04-20 12:42:48] [INFO] Import started
+[2026-04-20 12:42:48] [INFO] Server: localhost,1433
+[2026-04-20 12:42:48] [INFO] Database: TestDb_CLR_Enabled
+[2026-04-20 12:42:48] [INFO] Source: D:\Export-SqlServerSchema-128\tests\fixtures\clr_test
+[2026-04-20 12:42:48] [INFO] Import mode: Dev
+[2026-04-20 12:42:48] [INFO] Configuration source: D:\Export-SqlServerSchema-128\tests\test-clr-strict-security-enabled.yml
+[2026-04-20 12:42:48] [INFO] Connection test successful to localhost,1433
+[2026-04-20 12:42:48] [INFO] Starting script execution - 4 total scripts
+[2026-04-20 12:42:49] [ERROR] Import completed with 2 error(s)
+[2026-04-20 13:28:41] [INFO] Import started
+[2026-04-20 13:28:41] [INFO] Server: localhost,1433
+[2026-04-20 13:28:41] [INFO] Database: TestDb_CLR_Enabled
+[2026-04-20 13:28:41] [INFO] Source: D:\Export-SqlServerSchema-128\tests\fixtures\clr_test
+[2026-04-20 13:28:41] [INFO] Import mode: Dev
+[2026-04-20 13:28:41] [INFO] Configuration source: D:\Export-SqlServerSchema-128\tests\test-clr-strict-security-enabled.yml
+[2026-04-20 13:28:42] [INFO] Connection test successful to localhost,1433
+[2026-04-20 13:28:42] [INFO] Starting script execution - 4 total scripts
+[2026-04-20 13:28:43] [ERROR] Import completed with 1 error(s)
+[2026-04-20 13:28:44] [INFO] Import started
+[2026-04-20 13:28:44] [INFO] Server: localhost,1433
+[2026-04-20 13:28:44] [INFO] Database: TestDb_CLR_Hint
+[2026-04-20 13:28:44] [INFO] Source: D:\Export-SqlServerSchema-128\tests\fixtures\clr_test
+[2026-04-20 13:28:44] [INFO] Import mode: Dev
+[2026-04-20 13:28:44] [INFO] Configuration source: D:\Export-SqlServerSchema-128\tests\test-clr-strict-security-disabled.yml
+[2026-04-20 13:28:44] [INFO] Connection test successful to localhost,1433
+[2026-04-20 13:28:44] [INFO] Starting script execution - 4 total scripts
+[2026-04-20 13:28:45] [ERROR] Import completed with 1 error(s)
+[2026-04-20 13:28:45] [INFO] Import started
+[2026-04-20 13:28:45] [INFO] Server: localhost,1433
+[2026-04-20 13:28:45] [INFO] Database: TestDb_CLR_NoRestore
+[2026-04-20 13:28:45] [INFO] Source: D:\Export-SqlServerSchema-128\tests\fixtures\clr_test
+[2026-04-20 13:28:45] [INFO] Import mode: Dev
+[2026-04-20 13:28:45] [INFO] Configuration source: D:\Export-SqlServerSchema-128\tests\test-clr-strict-security-no-restore.yml
+[2026-04-20 13:28:45] [INFO] Connection test successful to localhost,1433
+[2026-04-20 13:28:45] [INFO] Starting script execution - 4 total scripts
+[2026-04-20 13:28:46] [ERROR] Import completed with 1 error(s)
+[2026-04-20 13:28:46] [INFO] Import started
+[2026-04-20 13:28:46] [INFO] Server: localhost,1433
+[2026-04-20 13:28:46] [INFO] Database: TestDb_CLR_Enabled
+[2026-04-20 13:28:46] [INFO] Source: D:\Export-SqlServerSchema-128\tests\fixtures\clr_test
+[2026-04-20 13:28:46] [INFO] Import mode: Dev
+[2026-04-20 13:28:46] [INFO] Configuration source: D:\Export-SqlServerSchema-128\tests\test-clr-strict-security-enabled.yml
+[2026-04-20 13:28:46] [INFO] Connection test successful to localhost,1433
+[2026-04-20 13:28:46] [INFO] Starting script execution - 4 total scripts
+[2026-04-20 13:28:47] [ERROR] Import completed with 2 error(s)

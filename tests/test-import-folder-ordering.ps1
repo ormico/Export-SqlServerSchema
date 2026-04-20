@@ -94,7 +94,7 @@ Write-TestResult 'Export: Save-ExportMetadata writes exportToolVersion' $hasExpo
 Write-Host "`n=== Test 4: folderOrder type ID mappings ===" -ForegroundColor Yellow
 
 $expectedTypes = @(
-  'filegroups', 'security', 'database_configuration', 'schemas', 'sequences',
+  'filegroups', 'security', 'security_role_members', 'database_configuration', 'schemas', 'sequences',
   'partition_functions', 'partition_schemes', 'types', 'xml_schema_collections',
   'tables_primarykey', 'indexes', 'tables_foreignkeys', 'defaults', 'rules',
   'programmability', 'synonyms', 'fulltext_search', 'external_data',
@@ -112,6 +112,7 @@ Write-Host "`n=== Test 5: folderOrder folder-to-type pairings ===" -ForegroundCo
 
 $pairings = @{
   '00_FileGroups'            = 'filegroups'
+  '01_Security_RoleMembers'  = 'security_role_members'
   '09_Tables_PrimaryKey'     = 'tables_primarykey'
   '10_Indexes'               = 'indexes'
   '11_Tables_ForeignKeys'    = 'tables_foreignkeys'
@@ -157,6 +158,22 @@ Write-TestResult 'Import: indexes order value found' ($indexesOrder -ge 0)
 Write-TestResult 'Import: tables_foreignkeys order value found' ($fkOrder -ge 0)
 Write-TestResult 'Import: indexes before tables_foreignkeys in canonical order' ($indexesOrder -lt $fkOrder)
 
+# ── Test 7b: security_role_members after security, before database_configuration ──
+
+Write-Host "`n=== Test 7b: security_role_members ordering ===" -ForegroundColor Yellow
+
+$secMatch    = [regex]::Match($canonicalText, "'security'\s*=\s*(\d+)")
+$rolMemMatch = [regex]::Match($canonicalText, "'security_role_members'\s*=\s*(\d+)")
+$dbCfgMatch  = [regex]::Match($canonicalText, "'database_configuration'\s*=\s*(\d+)")
+
+$secOrder    = if ($secMatch.Success)    { [int]$secMatch.Groups[1].Value }    else { -1 }
+$rolMemOrder = if ($rolMemMatch.Success) { [int]$rolMemMatch.Groups[1].Value } else { -1 }
+$dbCfgOrder  = if ($dbCfgMatch.Success)  { [int]$dbCfgMatch.Groups[1].Value }  else { -1 }
+
+Write-TestResult 'Import: security_role_members in canonical order' ($rolMemOrder -ge 0)
+Write-TestResult 'Import: security_role_members after security' ($secOrder -lt $rolMemOrder)
+Write-TestResult 'Import: security_role_members before database_configuration' ($rolMemOrder -lt $dbCfgOrder)
+
 # ── Test 8: Resolve-FolderTypeFromName function ─────────────────────────────
 
 Write-Host "`n=== Test 8: Common - Resolve-FolderTypeFromName ===" -ForegroundColor Yellow
@@ -169,6 +186,7 @@ Write-TestResult 'Common: Resolve-FolderTypeFromName function exists' $hasResolv
 $testCases = @{
   '00_FileGroups'            = 'filegroups'
   '01_Security'              = 'security'
+  '01_Security_RoleMembers'  = 'security_role_members'
   '02_DatabaseConfiguration' = 'database_configuration'
   '03_Schemas'               = 'schemas'
   '04_Sequences'             = 'sequences'
@@ -245,7 +263,7 @@ Write-TestResult 'Import: fallback calls Resolve-FolderTypeFromName' $hasFallbac
 $hasFallbackVerbose = $reorderFnText -match 'No folderOrder in metadata'
 Write-TestResult 'Import: fallback emits verbose message' $hasFallbackVerbose
 
-# ── Test 13: Canonical order is complete (22 entries, 0-21) ─────────────────
+# ── Test 13: Canonical order is complete (23 entries, 0-22) ─────────────────
 
 Write-Host "`n=== Test 13: Canonical order completeness ===" -ForegroundColor Yellow
 
@@ -254,13 +272,13 @@ $ordinals = @{}
 foreach ($m in $canonicalMatches) {
   $ordinals[$m.Groups[1].Value] = [int]$m.Groups[2].Value
 }
-Write-TestResult 'Import: canonical order has 22 entries' ($ordinals.Count -eq 22)
+Write-TestResult 'Import: canonical order has 23 entries' ($ordinals.Count -eq 23)
 
-# Check that ordinal values are 0 through 21 (contiguous)
+# Check that ordinal values are 0 through 22 (contiguous)
 $sortedOrdinals = $ordinals.Values | Sort-Object
-$expectedOrdinals = 0..21
+$expectedOrdinals = 0..22
 $isContiguous = ($sortedOrdinals -join ',') -eq ($expectedOrdinals -join ',')
-Write-TestResult 'Import: ordinal values are 0..21 (contiguous)' $isContiguous
+Write-TestResult 'Import: ordinal values are 0..22 (contiguous)' $isContiguous
 
 # ── Test 14: Simulated reordering with old-style numbering ──────────────────
 
@@ -271,28 +289,29 @@ Write-Host "`n=== Test 14: Simulated reorder (old FK-before-Index numbering) ===
 
 # Re-implement canonical order locally for simulation
 $localCanonical = [ordered]@{
-  'filegroups'            = 0
-  'security'              = 1
-  'database_configuration' = 2
-  'schemas'               = 3
-  'sequences'             = 4
-  'partition_functions'   = 5
-  'partition_schemes'     = 6
-  'types'                 = 7
-  'xml_schema_collections' = 8
-  'tables_primarykey'     = 9
-  'indexes'               = 10
-  'tables_foreignkeys'    = 11
-  'defaults'              = 12
-  'rules'                 = 13
-  'programmability'       = 14
-  'synonyms'              = 15
-  'fulltext_search'       = 16
-  'external_data'         = 17
-  'search_property_lists' = 18
-  'plan_guides'           = 19
-  'security_policies'     = 20
-  'data'                  = 21
+  'filegroups'              = 0
+  'security'                = 1
+  'security_role_members'   = 2
+  'database_configuration'  = 3
+  'schemas'                 = 4
+  'sequences'               = 5
+  'partition_functions'     = 6
+  'partition_schemes'       = 7
+  'types'                   = 8
+  'xml_schema_collections'  = 9
+  'tables_primarykey'       = 10
+  'indexes'                 = 11
+  'tables_foreignkeys'      = 12
+  'defaults'                = 13
+  'rules'                   = 14
+  'programmability'         = 15
+  'synonyms'                = 16
+  'fulltext_search'         = 17
+  'external_data'           = 18
+  'search_property_lists'   = 19
+  'plan_guides'             = 20
+  'security_policies'       = 21
+  'data'                    = 22
 }
 
 # Old-style export folders (wrong order: FK before Indexes)
@@ -347,7 +366,7 @@ Write-TestResult 'Simulation: correct-order folders unchanged by reorder' $noCha
 Write-Host "`n=== Test 16: folderOrder metadata folder names ===" -ForegroundColor Yellow
 
 $expectedFolders = @(
-  '00_FileGroups', '01_Security', '02_DatabaseConfiguration', '03_Schemas',
+  '00_FileGroups', '01_Security', '01_Security_RoleMembers', '02_DatabaseConfiguration', '03_Schemas',
   '04_Sequences', '05_PartitionFunctions', '06_PartitionSchemes', '07_Types',
   '08_XmlSchemaCollections', '09_Tables_PrimaryKey', '10_Indexes',
   '11_Tables_ForeignKeys', '12_Defaults', '13_Rules', '14_Programmability',
