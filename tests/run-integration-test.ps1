@@ -228,6 +228,14 @@ try {
     # Get export config path
     $exportConfigPath = Join-Path $PSScriptRoot "test-export-config.yml"
 
+    # Set source to BULK_LOGGED so RECOVERY.option.sql captures a value that differs from the
+    # new-database default (FULL on Developer/Enterprise; inherited from model). Without this,
+    # source and new-DB default are both FULL, making it impossible to distinguish "RECOVERY
+    # excluded" from "RECOVERY applied" in the Dev-mode assertion below.
+    # sys.databases.recovery_model: 1=FULL, 2=BULK_LOGGED, 3=SIMPLE
+    Invoke-SqlCommand "ALTER DATABASE [$SourceDatabase] SET RECOVERY BULK_LOGGED WITH NO_WAIT" "master"
+    Write-Host "  Set source recovery model to BULK_LOGGED for RECOVERY-exclusion test" -ForegroundColor Gray
+
     # Run export (this will fail if SMO is not installed, but we'll handle it gracefully)
     try {
         & $exportScript -Server $TEST_SERVER -Database $SourceDatabase -OutputPath $ExportPath -IncludeData -Credential $credential -ConfigFile $exportConfigPath -Verbose
@@ -643,19 +651,17 @@ WHERE fg.name IN ('FG_CURRENT', 'FG_ARCHIVE')
     }
 
     # RECOVERY should NOT have been applied in Dev mode (default exclusion).
-    # New databases default to SIMPLE recovery model; if the option was applied it would change to match source.
-    $sourceRecovery = Invoke-SqlCommand "SELECT recovery_model_desc FROM sys.databases WHERE name = '$SourceDatabase'" "master"
-    $devRecovery = Invoke-SqlCommand "SELECT recovery_model_desc FROM sys.databases WHERE name = '$TargetDatabaseDev'" "master"
-    Write-Host "  Source recovery model: $($sourceRecovery.Trim()), Dev target recovery model: $($devRecovery.Trim())" -ForegroundColor Gray
-    if ($devRecovery.Trim() -ne 'SIMPLE') {
-        Write-TestStep "Dev mode: RECOVERY model changed unexpectedly (expected SIMPLE, got $($devRecovery.Trim()))" -Type Error
+    # Source was set to BULK_LOGGED before export, so RECOVERY.option.sql contains BULK_LOGGED.
+    # Dev mode excludes RECOVERY by default, so the dev target should stay at FULL (the
+    # new-database default on Developer/Enterprise). Using recovery_model (numeric) rather than
+    # recovery_model_desc so Invoke-SqlCommand returns a clean string via the numeric fast-path.
+    # sys.databases.recovery_model: 1=FULL, 2=BULK_LOGGED, 3=SIMPLE
+    $devRecovery = Invoke-SqlCommand "SELECT recovery_model FROM sys.databases WHERE name = '$TargetDatabaseDev'" "master"
+    if ($devRecovery.Trim() -ne '1') {
+        Write-TestStep "Dev mode: RECOVERY model changed unexpectedly (expected FULL=1, got $($devRecovery.Trim()))" -Type Error
         throw "Dev mode verification failed: RECOVERY option was applied when it should have been excluded"
     }
-    if (($sourceRecovery.Trim() -ne 'SIMPLE') -and ($devRecovery.Trim() -eq $sourceRecovery.Trim())) {
-        Write-TestStep "Dev mode: RECOVERY model matches source unexpectedly ($($devRecovery.Trim()))" -Type Error
-        throw "Dev mode verification failed: RECOVERY model should not match source in Dev mode"
-    }
-    Write-TestStep "Dev mode: RECOVERY option correctly excluded (dev=$($devRecovery.Trim()))" -Type Success
+    Write-TestStep "Dev mode: RECOVERY option correctly excluded (recovery_model=$($devRecovery.Trim()), FULL)" -Type Success
 
     # Step 8: Import schema in Prod mode
     Write-Host "`n" -NoNewline
@@ -761,6 +767,15 @@ WHERE fg.name IN ('FG_CURRENT', 'FG_ARCHIVE')
         Write-TestStep "Prod mode: ALLOW_SNAPSHOT_ISOLATION NOT applied (state=$($prodSnapshotState.Trim()))" -Type Error
         throw "Prod mode verification failed: ALLOW_SNAPSHOT_ISOLATION not applied"
     }
+
+    # Prod mode should apply RECOVERY (no exclusions). Source was set to BULK_LOGGED, so
+    # RECOVERY.option.sql contains BULK_LOGGED; prod target should be BULK_LOGGED=2.
+    $prodRecovery = Invoke-SqlCommand "SELECT recovery_model FROM sys.databases WHERE name = '$TargetDatabaseProd'" "master"
+    if ($prodRecovery.Trim() -ne '2') {
+        Write-TestStep "Prod mode: RECOVERY not applied (expected BULK_LOGGED=2, got $($prodRecovery.Trim()))" -Type Error
+        throw "Prod mode verification failed: RECOVERY option should have been applied"
+    }
+    Write-TestStep "Prod mode: RECOVERY option correctly applied (recovery_model=$($prodRecovery.Trim()), BULK_LOGGED)" -Type Success
 
     # Step 10: Verify data integrity
     Write-Host "`n" -NoNewline
