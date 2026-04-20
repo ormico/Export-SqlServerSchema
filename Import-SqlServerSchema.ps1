@@ -3474,10 +3474,8 @@ function Get-ScriptFiles {
   # Role Memberships - MUST come after Security (roles and users must exist before assignments)
   $orderedDirs += '01_Security_RoleMembers'
 
-  # Database Configuration - skip in Dev mode unless explicitly enabled
-  if ($modeSettings.includeConfigurations) {
-    $orderedDirs += '02_DatabaseConfiguration'
-  }
+  # Database Configuration - always included; individual file filtering happens in the foreach loop below
+  $orderedDirs += '02_DatabaseConfiguration'
 
   # Core schema objects - always included
   $orderedDirs += @(
@@ -3536,9 +3534,12 @@ function Get-ScriptFiles {
 
     # Map object type names to folder names (and subfolders for granular types)
     $folderMap = @{
-      'FileGroups'            = '00_FileGroups'
-      'DatabaseConfiguration' = '02_DatabaseConfiguration'
-      'Schemas'               = '03_Schemas'
+      'FileGroups'                  = '00_FileGroups'
+      'DatabaseConfiguration'       = '02_DatabaseConfiguration'
+      'DatabaseScopedConfigurations' = '02_DatabaseConfiguration'
+      'DatabaseScopedCredentials'   = '02_DatabaseConfiguration'
+      'DatabaseOptions'             = '02_DatabaseConfiguration\003_DatabaseOptions'
+      'Schemas'                     = '03_Schemas'
       'Sequences'             = '04_Sequences'
       'PartitionFunctions'    = '05_PartitionFunctions'
       'PartitionSchemes'      = '06_PartitionSchemes'
@@ -3617,12 +3618,44 @@ function Get-ScriptFiles {
   $scripts = @()
   $skippedFolders = @()
 
+  $dbOptionExclusions = Get-DatabaseOptionExclusions -Mode $Mode -Config $Config
+
   foreach ($dir in $orderedDirs) {
     $fullPath = Join-Path $Path $dir
     if (Test-Path $fullPath) {
       # Special handling for SecurityPolicies folder - may need to skip in Dev mode
       if ($dir -eq '20_SecurityPolicies' -and -not $modeSettings.enableSecurityPolicies) {
         Write-Output "  [INFO] Skipping Row-Level Security policies (disabled in $Mode mode)"
+        continue
+      }
+
+      # Special handling for DatabaseConfiguration - file-level filtering
+      if ($dir -eq '02_DatabaseConfiguration') {
+        # 001_DatabaseScopedConfigurations.sql - only included when includeConfigurations is true
+        $scopedConfigFile = Join-Path $fullPath '001_DatabaseScopedConfigurations.sql'
+        if ((Test-Path $scopedConfigFile) -and $modeSettings.includeConfigurations) {
+          $scripts += Get-Item -Path $scopedConfigFile
+        }
+
+        # 002_DatabaseScopedCredentials.sql - only when includeDatabaseScopedCredentials is true
+        $credFile = Join-Path $fullPath '002_DatabaseScopedCredentials.sql'
+        if ((Test-Path $credFile) -and $modeSettings.includeDatabaseScopedCredentials) {
+          $scripts += Get-Item -Path $credFile
+        }
+
+        # 003_DatabaseOptions/*.option.sql - always included, with per-option exclusions
+        $optionsDir = Join-Path $fullPath '003_DatabaseOptions'
+        if (Test-Path $optionsDir) {
+          $optionFiles = @(Get-ChildItem -Path $optionsDir -Filter '*.option.sql' | Sort-Object Name)
+          foreach ($optionFile in $optionFiles) {
+            $optionName = $optionFile.Name -replace '\.option\.sql$', ''
+            if ($dbOptionExclusions -contains $optionName) {
+              Write-Verbose "  [INFO] Skipping database option '$optionName' (excluded in $Mode mode)"
+              continue
+            }
+            $scripts += $optionFile
+          }
+        }
         continue
       }
 
@@ -3687,7 +3720,7 @@ function Get-ScriptFiles {
   }
 
   # Track skipped folders for reporting
-  $allPossibleDirs = @('00_FileGroups', '02_DatabaseConfiguration', '17_ExternalData', '20_SecurityPolicies', '21_Data')
+  $allPossibleDirs = @('00_FileGroups', '17_ExternalData', '20_SecurityPolicies', '21_Data')
   foreach ($dir in $allPossibleDirs) {
     if ($dir -notin $orderedDirs) {
       $fullPath = Join-Path $Path $dir

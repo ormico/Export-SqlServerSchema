@@ -170,7 +170,8 @@ param(
   [switch]$CollectMetrics,
 
   [Parameter(HelpMessage = 'Include only specific object types (overrides config file). Example: Tables,Views,StoredProcedures')]
-  [ValidateSet('FileGroups', 'DatabaseScopedConfigurations', 'DatabaseScopedCredentials', 'Schemas', 'Sequences',
+  [ValidateSet('FileGroups', 'DatabaseScopedConfigurations', 'DatabaseScopedCredentials', 'DatabaseOptions',
+    'Schemas', 'Sequences',
     'PartitionFunctions', 'PartitionSchemes', 'UserDefinedTypes', 'XmlSchemaCollections', 'Tables',
     'ForeignKeys', 'Indexes', 'Defaults', 'Rules', 'Assemblies', 'DatabaseTriggers', 'TableTriggers',
     'Functions', 'UserDefinedAggregates', 'StoredProcedures', 'Views', 'Synonyms', 'FullTextCatalogs',
@@ -182,7 +183,8 @@ param(
   [string[]]$IncludeObjectTypes,
 
   [Parameter(HelpMessage = 'Exclude specific object types (overrides config file). Example: Data,SecurityPolicies')]
-  [ValidateSet('FileGroups', 'DatabaseScopedConfigurations', 'DatabaseScopedCredentials', 'Schemas', 'Sequences',
+  [ValidateSet('FileGroups', 'DatabaseScopedConfigurations', 'DatabaseScopedCredentials', 'DatabaseOptions',
+    'Schemas', 'Sequences',
     'PartitionFunctions', 'PartitionSchemes', 'UserDefinedTypes', 'XmlSchemaCollections', 'Tables',
     'ForeignKeys', 'Indexes', 'Defaults', 'Rules', 'Assemblies', 'DatabaseTriggers', 'TableTriggers',
     'Functions', 'UserDefinedAggregates', 'StoredProcedures', 'Views', 'Synonyms', 'FullTextCatalogs',
@@ -3185,7 +3187,7 @@ function Build-ParallelWorkQueue {
 function Export-NonParallelizableObjects {
   <#
   .SYNOPSIS
-      Exports objects that cannot be parallelized (FileGroups, DatabaseScopedConfigurations, Credentials).
+      Exports objects that cannot be parallelized (FileGroups, DatabaseScopedConfigurations, Credentials, DatabaseOptions).
   .DESCRIPTION
       These objects require StringBuilder-based generation for SQLCMD variable support
       or security reasons. This function is called by both sequential and parallel export
@@ -3214,6 +3216,7 @@ function Export-NonParallelizableObjects {
     FileGroups                   = 0
     DatabaseScopedConfigurations = 0
     DatabaseScopedCredentials    = 0
+    DatabaseOptions              = 0
   }
 
   # FileGroups (folder 00_FileGroups) - uses StringBuilder for SQLCMD variable support
@@ -3436,6 +3439,260 @@ function Export-NonParallelizableObjects {
     }
   }
 
+  # DatabaseOptions - ALTER DATABASE SET settings exported as individual .option.sql files
+  if (-not (Test-ObjectTypeExcluded -ObjectType 'DatabaseOptions')) {
+    try {
+      $optionsDir = Join-Path $OutputDir '02_DatabaseConfiguration' '003_DatabaseOptions'
+
+      # Define all supported database options as a list of descriptors
+      # Each entry: Name (T-SQL option name / file stem), Value (T-SQL value string), Category
+      $optionDescriptors = @(
+        # Isolation / concurrency
+        @{
+          Name     = 'ALLOW_SNAPSHOT_ISOLATION'
+          Category = 'Isolation'
+          GetValue = {
+            param($db)
+            $state = $db.SnapshotIsolationState
+            if ($state -eq [Microsoft.SqlServer.Management.Smo.SnapshotIsolationState]::Enabled -or
+                $state -eq [Microsoft.SqlServer.Management.Smo.SnapshotIsolationState]::PendingOn) {
+              'ON'
+            }
+            else { 'OFF' }
+          }
+          BuildSql = { param($value) "ALTER DATABASE CURRENT SET ALLOW_SNAPSHOT_ISOLATION $value" }
+        }
+        @{
+          Name     = 'READ_COMMITTED_SNAPSHOT'
+          Category = 'Isolation'
+          GetValue = { param($db) if ($db.IsReadCommittedSnapshotOn) { 'ON' } else { 'OFF' } }
+          BuildSql = { param($value) "ALTER DATABASE CURRENT SET READ_COMMITTED_SNAPSHOT $value" }
+        }
+        # Recovery
+        @{
+          Name     = 'RECOVERY'
+          Category = 'Recovery'
+          GetValue = {
+            param($db)
+            switch ($db.RecoveryModel) {
+              ([Microsoft.SqlServer.Management.Smo.RecoveryModel]::Full)       { 'FULL' }
+              ([Microsoft.SqlServer.Management.Smo.RecoveryModel]::BulkLogged) { 'BULK_LOGGED' }
+              ([Microsoft.SqlServer.Management.Smo.RecoveryModel]::Simple)     { 'SIMPLE' }
+              default { 'FULL' }
+            }
+          }
+          BuildSql = { param($value) "ALTER DATABASE CURRENT SET RECOVERY $value" }
+        }
+        # Compatibility
+        @{
+          Name     = 'COMPATIBILITY_LEVEL'
+          Category = 'Compatibility'
+          GetValue = { param($db) [int]$db.CompatibilityLevel }
+          BuildSql = { param($value) "ALTER DATABASE CURRENT SET COMPATIBILITY_LEVEL = $value" }
+        }
+        # Page verify
+        @{
+          Name     = 'PAGE_VERIFY'
+          Category = 'Maintenance'
+          GetValue = {
+            param($db)
+            switch ($db.PageVerify) {
+              ([Microsoft.SqlServer.Management.Smo.PageVerify]::None)               { 'NONE' }
+              ([Microsoft.SqlServer.Management.Smo.PageVerify]::TornPageDetection)  { 'TORN_PAGE_DETECTION' }
+              ([Microsoft.SqlServer.Management.Smo.PageVerify]::Checksum)           { 'CHECKSUM' }
+              default { 'CHECKSUM' }
+            }
+          }
+          BuildSql = { param($value) "ALTER DATABASE CURRENT SET PAGE_VERIFY $value" }
+        }
+        # Auto options
+        @{
+          Name     = 'AUTO_CLOSE'
+          Category = 'Auto'
+          GetValue = { param($db) if ($db.AutoClose) { 'ON' } else { 'OFF' } }
+          BuildSql = { param($value) "ALTER DATABASE CURRENT SET AUTO_CLOSE $value" }
+        }
+        @{
+          Name     = 'AUTO_SHRINK'
+          Category = 'Auto'
+          GetValue = { param($db) if ($db.AutoShrink) { 'ON' } else { 'OFF' } }
+          BuildSql = { param($value) "ALTER DATABASE CURRENT SET AUTO_SHRINK $value" }
+        }
+        @{
+          Name     = 'AUTO_CREATE_STATISTICS'
+          Category = 'Auto'
+          GetValue = { param($db) if ($db.AutoCreateStatisticsEnabled) { 'ON' } else { 'OFF' } }
+          BuildSql = { param($value) "ALTER DATABASE CURRENT SET AUTO_CREATE_STATISTICS $value" }
+        }
+        @{
+          Name     = 'AUTO_UPDATE_STATISTICS'
+          Category = 'Auto'
+          GetValue = { param($db) if ($db.AutoUpdateStatisticsEnabled) { 'ON' } else { 'OFF' } }
+          BuildSql = { param($value) "ALTER DATABASE CURRENT SET AUTO_UPDATE_STATISTICS $value" }
+        }
+        @{
+          Name     = 'AUTO_UPDATE_STATISTICS_ASYNC'
+          Category = 'Auto'
+          GetValue = { param($db) if ($db.AutoUpdateStatisticsAsync) { 'ON' } else { 'OFF' } }
+          BuildSql = { param($value) "ALTER DATABASE CURRENT SET AUTO_UPDATE_STATISTICS_ASYNC $value" }
+        }
+        # Cursor options
+        @{
+          Name     = 'CURSOR_CLOSE_ON_COMMIT'
+          Category = 'Cursor'
+          GetValue = { param($db) if ($db.CloseCursorsOnCommitEnabled) { 'ON' } else { 'OFF' } }
+          BuildSql = { param($value) "ALTER DATABASE CURRENT SET CURSOR_CLOSE_ON_COMMIT $value" }
+        }
+        @{
+          Name     = 'CURSOR_DEFAULT'
+          Category = 'Cursor'
+          GetValue = { param($db) if ($db.LocalCursorsDefault) { 'LOCAL' } else { 'GLOBAL' } }
+          BuildSql = { param($value) "ALTER DATABASE CURRENT SET CURSOR_DEFAULT $value" }
+        }
+        # ANSI options
+        @{
+          Name     = 'ANSI_NULL_DEFAULT'
+          Category = 'ANSI'
+          GetValue = { param($db) if ($db.AnsiNullDefault) { 'ON' } else { 'OFF' } }
+          BuildSql = { param($value) "ALTER DATABASE CURRENT SET ANSI_NULL_DEFAULT $value" }
+        }
+        @{
+          Name     = 'ANSI_NULLS'
+          Category = 'ANSI'
+          GetValue = { param($db) if ($db.AnsiNullsEnabled) { 'ON' } else { 'OFF' } }
+          BuildSql = { param($value) "ALTER DATABASE CURRENT SET ANSI_NULLS $value" }
+        }
+        @{
+          Name     = 'ANSI_PADDING'
+          Category = 'ANSI'
+          GetValue = { param($db) if ($db.AnsiPaddingEnabled) { 'ON' } else { 'OFF' } }
+          BuildSql = { param($value) "ALTER DATABASE CURRENT SET ANSI_PADDING $value" }
+        }
+        @{
+          Name     = 'ANSI_WARNINGS'
+          Category = 'ANSI'
+          GetValue = { param($db) if ($db.AnsiWarningsEnabled) { 'ON' } else { 'OFF' } }
+          BuildSql = { param($value) "ALTER DATABASE CURRENT SET ANSI_WARNINGS $value" }
+        }
+        # Arithmetic / string options
+        @{
+          Name     = 'ARITHABORT'
+          Category = 'Arithmetic'
+          GetValue = { param($db) if ($db.ArithmeticAbortEnabled) { 'ON' } else { 'OFF' } }
+          BuildSql = { param($value) "ALTER DATABASE CURRENT SET ARITHABORT $value" }
+        }
+        @{
+          Name     = 'CONCAT_NULL_YIELDS_NULL'
+          Category = 'String'
+          GetValue = { param($db) if ($db.ConcatenateNullYieldsNull) { 'ON' } else { 'OFF' } }
+          BuildSql = { param($value) "ALTER DATABASE CURRENT SET CONCAT_NULL_YIELDS_NULL $value" }
+        }
+        @{
+          Name     = 'NUMERIC_ROUNDABORT'
+          Category = 'Arithmetic'
+          GetValue = { param($db) if ($db.NumericRoundAbortEnabled) { 'ON' } else { 'OFF' } }
+          BuildSql = { param($value) "ALTER DATABASE CURRENT SET NUMERIC_ROUNDABORT $value" }
+        }
+        @{
+          Name     = 'QUOTED_IDENTIFIER'
+          Category = 'String'
+          GetValue = { param($db) if ($db.QuotedIdentifiersEnabled) { 'ON' } else { 'OFF' } }
+          BuildSql = { param($value) "ALTER DATABASE CURRENT SET QUOTED_IDENTIFIER $value" }
+        }
+        # Trigger options
+        @{
+          Name     = 'RECURSIVE_TRIGGERS'
+          Category = 'Triggers'
+          GetValue = { param($db) if ($db.RecursiveTriggersEnabled) { 'ON' } else { 'OFF' } }
+          BuildSql = { param($value) "ALTER DATABASE CURRENT SET RECURSIVE_TRIGGERS $value" }
+        }
+        # Security options
+        @{
+          Name     = 'TRUSTWORTHY'
+          Category = 'Security'
+          GetValue = { param($db) if ($db.Trustworthy) { 'ON' } else { 'OFF' } }
+          BuildSql = { param($value) "ALTER DATABASE CURRENT SET TRUSTWORTHY $value" }
+        }
+        @{
+          Name     = 'DB_CHAINING'
+          Category = 'Security'
+          GetValue = { param($db) if ($db.DatabaseOwnershipChaining) { 'ON' } else { 'OFF' } }
+          BuildSql = { param($value) "ALTER DATABASE CURRENT SET DB_CHAINING $value" }
+        }
+        # Broker
+        @{
+          Name     = 'BROKER_ENABLED'
+          Category = 'Broker'
+          GetValue = { param($db) if ($db.BrokerEnabled) { 'ON' } else { 'OFF' } }
+          BuildSql = {
+            param($value)
+            if ($value -eq 'ON') {
+              'ALTER DATABASE CURRENT SET ENABLE_BROKER'
+            }
+            else {
+              'ALTER DATABASE CURRENT SET DISABLE_BROKER'
+            }
+          }
+        }
+        @{
+          Name     = 'HONOR_BROKER_PRIORITY'
+          Category = 'Broker'
+          GetValue = { param($db) if ($db.HonorBrokerPriority) { 'ON' } else { 'OFF' } }
+          BuildSql = { param($value) "ALTER DATABASE CURRENT SET HONOR_BROKER_PRIORITY $value" }
+        }
+        # Optimizer options
+        @{
+          Name     = 'DATE_CORRELATION_OPTIMIZATION'
+          Category = 'Optimizer'
+          GetValue = { param($db) if ($db.DateCorrelationOptimization) { 'ON' } else { 'OFF' } }
+          BuildSql = { param($value) "ALTER DATABASE CURRENT SET DATE_CORRELATION_OPTIMIZATION $value" }
+        }
+        @{
+          Name     = 'PARAMETERIZATION'
+          Category = 'Optimizer'
+          GetValue = { param($db) if ($db.ForcedParameterizationEnabled) { 'FORCED' } else { 'SIMPLE' } }
+          BuildSql = { param($value) "ALTER DATABASE CURRENT SET PARAMETERIZATION $value" }
+        }
+      )
+
+      foreach ($descriptor in $optionDescriptors) {
+        try {
+          $value = & $descriptor.GetValue $Database
+          $sqlStatement = & $descriptor.BuildSql $value
+          $optionFilePath = Join-Path $optionsDir "$($descriptor.Name).option.sql"
+          $sb = [System.Text.StringBuilder]::new()
+          [void]$sb.AppendLine("-- Database Option: $($descriptor.Name) [$($descriptor.Category)]")
+          [void]$sb.AppendLine("-- Exported from: $(${Database}.Name)")
+          [void]$sb.AppendLine("-- WARNING: Review this option for compatibility with the target environment before applying.")
+          [void]$sb.AppendLine('')
+          [void]$sb.AppendLine($sqlStatement)
+          [void]$sb.AppendLine('GO')
+          [System.IO.File]::WriteAllText($optionFilePath, $sb.ToString(), [System.Text.Encoding]::UTF8)
+          $results.DatabaseOptions++
+        }
+        catch {
+          if (-not $Quiet) {
+            Write-Host "  [WARNING] Error exporting database option '$($descriptor.Name)': $_" -ForegroundColor Yellow
+          }
+        }
+      }
+
+      if (-not $Quiet) {
+        if ($results.DatabaseOptions -gt 0) {
+          Write-Host "  [SUCCESS] Exported $($results.DatabaseOptions) database option(s)" -ForegroundColor Green
+        }
+        else {
+          Write-Host "  [INFO] No database options exported" -ForegroundColor Cyan
+        }
+      }
+    }
+    catch {
+      if (-not $Quiet) {
+        Write-Host "  [WARNING] Error exporting DatabaseOptions: $_" -ForegroundColor Yellow
+      }
+    }
+  }
+
   return $results
 }
 
@@ -3491,7 +3748,7 @@ function Invoke-ParallelExport {
   #region Export Non-Parallelizable Objects Sequentially
   Write-Host "`n[INFO] Exporting non-parallelizable objects sequentially..." -ForegroundColor Cyan
 
-  # Call shared function for FileGroups, DatabaseScopedConfigurations, DatabaseScopedCredentials
+  # Call shared function for FileGroups, DatabaseScopedConfigurations, DatabaseScopedCredentials, DatabaseOptions
   $nonParallelResults = Export-NonParallelizableObjects -Database $Database -OutputDir $OutputDir
 
   #endregion
@@ -5213,6 +5470,7 @@ function Initialize-OutputDirectory {
     '01_Security',
     '01_Security_RoleMembers',
     '02_DatabaseConfiguration',
+    '02_DatabaseConfiguration/003_DatabaseOptions',
     '03_Schemas',
     '04_Sequences',
     '05_PartitionFunctions',
@@ -6197,7 +6455,7 @@ function Export-DatabaseObjects {
   }
   #endregion
 
-  # Non-parallelizable objects: FileGroups, DatabaseScopedConfigurations, DatabaseScopedCredentials
+  # Non-parallelizable objects: FileGroups, DatabaseScopedConfigurations, DatabaseScopedCredentials, DatabaseOptions
   # These use StringBuilder for SQLCMD variable support and require special handling
   Write-Host ''
   Write-Host 'Exporting non-parallelizable objects...' -ForegroundColor White
@@ -6218,6 +6476,9 @@ function Export-DatabaseObjects {
   if ($nonParallelResults.DatabaseScopedCredentials -gt 0) {
     Write-Host "  [SUCCESS] Documented $($nonParallelResults.DatabaseScopedCredentials) database scoped credential(s)" -ForegroundColor Green
     Write-Host "  [WARNING] Credentials exported as documentation only - secrets must be provided manually" -ForegroundColor Yellow
+  }
+  if ($nonParallelResults.DatabaseOptions -gt 0) {
+    Write-Host "  [SUCCESS] Exported $($nonParallelResults.DatabaseOptions) database option(s)" -ForegroundColor Green
   }
 
   #region Sequential Export via Work Items (Hybrid Approach)
@@ -6528,7 +6789,7 @@ function New-DeploymentManifest {
   [void]$sb.AppendLine("0. 00_FileGroups - Create filegroups (review paths for target environment)")
   [void]$sb.AppendLine("1. 01_Security - Create security objects (keys, certificates, roles, users, audit)")
   [void]$sb.AppendLine("2. 01_Security_RoleMembers - Assign role memberships (requires roles and users from step 1)")
-  [void]$sb.AppendLine("3. 02_DatabaseConfiguration - Apply database scoped configurations (review hardware-specific settings)")
+  [void]$sb.AppendLine("3. 02_DatabaseConfiguration - Apply database scoped configurations (review hardware-specific settings) and database options")
   [void]$sb.AppendLine("4. 03_Schemas - Create database schemas")
   [void]$sb.AppendLine("5. 04_Sequences - Create sequences")
   [void]$sb.AppendLine("6. 05_PartitionFunctions - Create partition functions")

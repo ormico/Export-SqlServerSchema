@@ -7,12 +7,14 @@
 .DESCRIPTION
     This file is dot-sourced by Import-SqlServerSchema.ps1 at startup. It contains pure
     filter functions that determine whether a script file should be excluded from import
-    based on schema, object name, or object type criteria.
+    based on schema, object name, or object type criteria, plus configuration helpers
+    for import-time option resolution.
 
     Functions provided:
-      - Test-SchemaExcluded  : Checks if a script belongs to an excluded schema
-      - Test-ObjectExcluded  : Checks if a script matches an excluded object pattern
-      - Test-ScriptExcluded  : Checks if a script should be excluded by object type
+      - Test-SchemaExcluded          : Checks if a script belongs to an excluded schema
+      - Test-ObjectExcluded          : Checks if a script matches an excluded object pattern
+      - Test-ScriptExcluded          : Checks if a script should be excluded by object type
+      - Get-DatabaseOptionExclusions : Returns database option names to skip during import
 
     This file has no param() block and no mandatory parameters, making it safe to dot-source.
 
@@ -20,6 +22,7 @@
     License: MIT
     Repository: https://github.com/ormico/Export-SqlServerSchema
     Issue: #113 - Extract import filter functions into dot-sourceable helper
+           #129 - Add Get-DatabaseOptionExclusions for per-option import control
 #>
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -364,6 +367,9 @@ function Test-ScriptExcluded {
       'SecurityPolicies' {
         if ($relativePath -match '20_SecurityPolicies') { return $true }
       }
+      'DatabaseOptions' {
+        if ($relativePath -match '003_DatabaseOptions') { return $true }
+      }
       'Data' {
         if ($relativePath -match '21_Data') { return $true }
       }
@@ -371,4 +377,49 @@ function Test-ScriptExcluded {
   }
 
   return $false
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Get-DatabaseOptionExclusions
+# ─────────────────────────────────────────────────────────────────────────────
+
+function Get-DatabaseOptionExclusions {
+  <#
+  .SYNOPSIS
+      Returns the list of database option names to exclude when applying .option.sql files.
+  .DESCRIPTION
+      In Dev mode, certain options like RECOVERY are excluded by default to avoid
+      unintended side effects on developer environments. The exclusion list can be
+      overridden via config key import.developerMode.databaseOptionExclusions.
+      In Prod mode, no options are excluded by default.
+  .PARAMETER Mode
+      Import mode: 'Dev' or 'Prod'. Default: 'Dev'.
+  .PARAMETER Config
+      Config hashtable (parsed from YAML config file).
+  .OUTPUTS
+      Array of option name strings (file stems of .option.sql files) to skip.
+  #>
+  param(
+    [string]$Mode = 'Dev',
+    $Config = @{}
+  )
+
+  if ($Mode -ne 'Dev') {
+    return @()
+  }
+
+  # Check for config override
+  $devMode = $null
+  if ($Config.import -and $Config.import.developerMode) {
+    $devMode = $Config.import.developerMode
+  }
+
+  if ($devMode -and $devMode.ContainsKey('databaseOptionExclusions')) {
+    $exclusions = $devMode.databaseOptionExclusions
+    if ($null -eq $exclusions) { return @() }
+    return @($exclusions)
+  }
+
+  # Default Dev mode exclusion: RECOVERY (to avoid inadvertently changing recovery model)
+  return @('RECOVERY')
 }
