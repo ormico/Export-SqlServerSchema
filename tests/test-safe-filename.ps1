@@ -48,11 +48,21 @@ function Get-FunctionBlock {
       if ($inFunction -and $depth -eq 0) { $end = $i; break }
     }
   }
+  if ((-not $inFunction) -or ($end -le $startIndex)) {
+    throw "Function '$FunctionName' could not be fully extracted because no matching closing brace was found"
+  }
   return $Content.Substring($startIndex, $end - $startIndex + 1)
 }
 
 $functionBlock = Get-FunctionBlock -Content $exportContent -FunctionName 'Get-SafeFileName'
-Invoke-Expression $functionBlock
+$tempFunctionPath = Join-Path -Path ([System.IO.Path]::GetTempPath()) -ChildPath ("Get-SafeFileName_{0}.ps1" -f [System.Guid]::NewGuid().ToString('N'))
+try {
+  Set-Content -Path $tempFunctionPath -Value $functionBlock -Encoding UTF8
+  . $tempFunctionPath
+}
+finally {
+  Remove-Item -Path $tempFunctionPath -ErrorAction SilentlyContinue
+}
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Helper
