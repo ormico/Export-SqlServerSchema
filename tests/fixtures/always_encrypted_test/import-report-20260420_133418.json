@@ -1,0 +1,116 @@
+{
+  "exportedObjectCount": 8,
+  "importedObjectCount": 6,
+  "skippedObjectCount": 0,
+  "failedObjectCount": 0,
+  "skippedReasons": {},
+  "duration": "00:00:00",
+  "timestamp": "2026-04-20T13:34:18.6603065-04:00",
+  "sourcePath": "D:\\Export-SqlServerSchema-128\\tests\\fixtures\\always_encrypted_test",
+  "exportMetadataSource": "_export_metadata.json",
+  "targetServer": "localhost,1433",
+  "targetDatabase": "TestDb_AE_Baseline",
+  "effectiveConfiguration": {
+    "importMode": {
+      "value": "Dev",
+      "source": "default"
+    },
+    "continueOnError": {
+      "value": false,
+      "source": "default"
+    },
+    "createDatabase": {
+      "value": true,
+      "source": "cli"
+    },
+    "includeData": {
+      "value": false,
+      "source": "default"
+    },
+    "maxRetries": {
+      "value": 3,
+      "source": "default"
+    },
+    "retryDelaySeconds": {
+      "value": 2,
+      "source": "default"
+    },
+    "connectionTimeout": {
+      "value": 30,
+      "source": "default"
+    },
+    "commandTimeout": {
+      "value": 300,
+      "source": "default"
+    },
+    "configFile": {
+      "value": "None (using defaults)",
+      "source": "default"
+    },
+    "server": {
+      "value": "localhost,1433",
+      "source": "cli"
+    },
+    "database": {
+      "value": "TestDb_AE_Baseline",
+      "source": "cli"
+    },
+    "excludeObjectTypes": {
+      "value": [],
+      "source": "default"
+    },
+    "excludeSchemas": {
+      "value": [],
+      "source": "default"
+    },
+    "stripFilestream": {
+      "value": false,
+      "source": "default"
+    },
+    "stripAlwaysEncrypted": {
+      "value": false,
+      "source": "default"
+    }
+  },
+  "exportedObjects": [],
+  "importedObjects": [
+    {
+      "type": "Security",
+      "schema": null,
+      "name": "004_ColumnMasterKeys",
+      "filePath": "01_Security\\004_ColumnMasterKeys.sql"
+    },
+    {
+      "type": "Security",
+      "schema": null,
+      "name": "005_ColumnEncryptionKeys",
+      "filePath": "01_Security\\005_ColumnEncryptionKeys.sql"
+    },
+    {
+      "type": "Schema",
+      "schema": null,
+      "name": "dbo",
+      "filePath": "03_Schemas\\dbo.sql"
+    },
+    {
+      "type": "Table",
+      "schema": "dbo",
+      "name": "EncryptedTable",
+      "filePath": "09_Tables_PrimaryKey\\dbo.EncryptedTable.sql"
+    },
+    {
+      "type": "Table",
+      "schema": "dbo",
+      "name": "MultiLineEncrypted",
+      "filePath": "09_Tables_PrimaryKey\\dbo.MultiLineEncrypted.sql"
+    },
+    {
+      "type": "Table",
+      "schema": "dbo",
+      "name": "RegularTable",
+      "filePath": "09_Tables_PrimaryKey\\dbo.RegularTable.sql"
+    }
+  ],
+  "skippedObjects": [],
+  "failedObjects": []
+}

@@ -191,6 +191,7 @@ try {
     $funcCount = Invoke-SqlCommand "SELECT COUNT(*) FROM sys.objects WHERE type IN ('FN', 'IF', 'TF') AND is_ms_shipped = 0" $SourceDatabase
     $fileGroupCount = Invoke-SqlCommand "SELECT COUNT(*) FROM sys.filegroups WHERE name NOT IN ('PRIMARY')" $SourceDatabase
     $securityPolicyCount = Invoke-SqlCommand "SELECT COUNT(*) FROM sys.security_policies" $SourceDatabase
+    $roleMemberCount = Invoke-SqlCommand "SELECT COUNT(*) FROM sys.database_role_members rm INNER JOIN sys.database_principals r ON rm.role_principal_id = r.principal_id INNER JOIN sys.database_principals m ON rm.member_principal_id = m.principal_id WHERE m.name <> 'dbo'" $SourceDatabase
 
     Write-Host "  Tables: $($tableCount.Trim())" -ForegroundColor White
     Write-Host "  Views: $($viewCount.Trim())" -ForegroundColor White
@@ -198,6 +199,7 @@ try {
     Write-Host "  Functions: $($funcCount.Trim())" -ForegroundColor White
     Write-Host "  FileGroups (non-PRIMARY): $($fileGroupCount.Trim())" -ForegroundColor White
     Write-Host "  Security Policies: $($securityPolicyCount.Trim())" -ForegroundColor White
+    Write-Host "  Role Memberships: $($roleMemberCount.Trim())" -ForegroundColor White
 
     Write-TestStep "Database structure verified" -Type Success
 
@@ -250,6 +252,26 @@ try {
     $sqlFiles = Get-ChildItem $exportDir -Recurse -Filter "*.sql"
     Write-Host "  SQL files created: $($sqlFiles.Count)" -ForegroundColor White
     Write-TestStep "Export verified" -Type Success
+
+    # Verify role memberships were exported (issue #128)
+    $roleMembersPath = Join-Path $exportDir '01_Security_RoleMembers' 'RoleMembers.sql'
+    $roleMembersFile = if (Test-Path $roleMembersPath) { Get-Item $roleMembersPath } else { $null }
+    if ($roleMembersFile) {
+        $roleMembersContent = Get-Content $roleMembersFile.FullName -Raw
+        if ($roleMembersContent -match 'ALTER ROLE.*ADD MEMBER') {
+            Write-TestStep "Role memberships exported to 01_Security_RoleMembers/RoleMembers.sql" -Type Success
+        } else {
+            Write-TestStep "RoleMembers.sql exists but contains no ALTER ROLE statements" -Type Error
+            throw "Role membership export verification failed"
+        }
+    } else {
+        if ([int]$roleMemberCount.Trim() -gt 0) {
+            Write-TestStep "RoleMembers.sql not found but source has $($roleMemberCount.Trim()) role memberships" -Type Error
+            throw "Role membership export verification failed"
+        } else {
+            Write-TestStep "No role memberships to export (source has none)" -Type Info
+        }
+    }
 
     # Step 4.5: Test parallel export (schema only, for comparison with sequential schema)
     Write-Host "`n" -NoNewline
@@ -492,6 +514,7 @@ WHERE t.is_ms_shipped = 0 AND p.index_id IN (0, 1) AND p.rows > 0
     $devFuncCount = Invoke-SqlCommand "SELECT COUNT(*) FROM sys.objects WHERE type IN ('FN', 'IF', 'TF') AND is_ms_shipped = 0" $TargetDatabaseDev
     $devFileGroupCount = Invoke-SqlCommand "SELECT COUNT(*) FROM sys.filegroups WHERE name NOT IN ('PRIMARY')" $TargetDatabaseDev
     $devSecurityPolicyCount = Invoke-SqlCommand "SELECT COUNT(*) FROM sys.security_policies" $TargetDatabaseDev
+    $devRoleMemberCount = Invoke-SqlCommand "SELECT COUNT(*) FROM sys.database_role_members rm INNER JOIN sys.database_principals r ON rm.role_principal_id = r.principal_id INNER JOIN sys.database_principals m ON rm.member_principal_id = m.principal_id WHERE m.name <> 'dbo'" $TargetDatabaseDev
 
     Write-Host "  Dev Tables: $($devTableCount.Trim())" -ForegroundColor White
     Write-Host "  Dev Views: $($devViewCount.Trim())" -ForegroundColor White
@@ -499,6 +522,7 @@ WHERE t.is_ms_shipped = 0 AND p.index_id IN (0, 1) AND p.rows > 0
     Write-Host "  Dev Functions: $($devFuncCount.Trim())" -ForegroundColor White
     Write-Host "  Dev FileGroups (non-PRIMARY): $($devFileGroupCount.Trim())" -ForegroundColor White
     Write-Host "  Dev Security Policies: $($devSecurityPolicyCount.Trim())" -ForegroundColor White
+    Write-Host "  Dev Role Memberships: $($devRoleMemberCount.Trim())" -ForegroundColor White
 
     # Dev mode with autoRemap strategy should import FileGroups (with auto-detected paths)
     if ($devFileGroupCount.Trim() -eq "2") {
@@ -566,7 +590,8 @@ WHERE fg.name IN ('FG_CURRENT', 'FG_ARCHIVE')
     $devSchemaMatch = ($tableCount.Trim() -eq $devTableCount.Trim()) -and
                       ($viewCount.Trim() -eq $devViewCount.Trim()) -and
                       ($procCount.Trim() -eq $devProcCount.Trim()) -and
-                      ($funcCount.Trim() -eq $devFuncCount.Trim())
+                      ($funcCount.Trim() -eq $devFuncCount.Trim()) -and
+                      ($roleMemberCount.Trim() -eq $devRoleMemberCount.Trim())
 
     if ($devSchemaMatch) {
         Write-TestStep "Dev mode schema objects match source" -Type Success
@@ -599,6 +624,7 @@ WHERE fg.name IN ('FG_CURRENT', 'FG_ARCHIVE')
     $prodFuncCount = Invoke-SqlCommand "SELECT COUNT(*) FROM sys.objects WHERE type IN ('FN', 'IF', 'TF') AND is_ms_shipped = 0" $TargetDatabaseProd
     $prodFileGroupCount = Invoke-SqlCommand "SELECT COUNT(*) FROM sys.filegroups WHERE name NOT IN ('PRIMARY')" $TargetDatabaseProd
     $prodSecurityPolicyCount = Invoke-SqlCommand "SELECT COUNT(*) FROM sys.security_policies" $TargetDatabaseProd
+    $prodRoleMemberCount = Invoke-SqlCommand "SELECT COUNT(*) FROM sys.database_role_members rm INNER JOIN sys.database_principals r ON rm.role_principal_id = r.principal_id INNER JOIN sys.database_principals m ON rm.member_principal_id = m.principal_id WHERE m.name <> 'dbo'" $TargetDatabaseProd
     $prodMaxDop = Invoke-SqlCommand "SELECT value FROM sys.database_scoped_configurations WHERE name = 'MAXDOP'" $TargetDatabaseProd
 
     Write-Host "  Prod Tables: $($prodTableCount.Trim())" -ForegroundColor White
@@ -607,6 +633,7 @@ WHERE fg.name IN ('FG_CURRENT', 'FG_ARCHIVE')
     Write-Host "  Prod Functions: $($prodFuncCount.Trim())" -ForegroundColor White
     Write-Host "  Prod FileGroups (non-PRIMARY): $($prodFileGroupCount.Trim())" -ForegroundColor White
     Write-Host "  Prod Security Policies: $($prodSecurityPolicyCount.Trim())" -ForegroundColor White
+    Write-Host "  Prod Role Memberships: $($prodRoleMemberCount.Trim())" -ForegroundColor White
     Write-Host "  Prod MAXDOP Setting: $($prodMaxDop.Trim())" -ForegroundColor White
 
     # Prod mode should include FileGroups
@@ -659,7 +686,8 @@ WHERE fg.name IN ('FG_CURRENT', 'FG_ARCHIVE')
                      ($viewCount.Trim() -eq $prodViewCount.Trim()) -and
                      ($procCount.Trim() -eq $prodProcCount.Trim()) -and
                      ($funcCount.Trim() -eq $prodFuncCount.Trim()) -and
-                     ($securityPolicyCount.Trim() -eq $prodSecurityPolicyCount.Trim())
+                     ($securityPolicyCount.Trim() -eq $prodSecurityPolicyCount.Trim()) -and
+                     ($roleMemberCount.Trim() -eq $prodRoleMemberCount.Trim())
 
     if ($prodFullMatch) {
         Write-TestStep "Prod mode all objects match source" -Type Success

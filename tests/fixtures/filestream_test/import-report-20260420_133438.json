@@ -1,0 +1,144 @@
+{
+  "exportedObjectCount": 8,
+  "importedObjectCount": 6,
+  "skippedObjectCount": 0,
+  "failedObjectCount": 1,
+  "skippedReasons": {},
+  "duration": "00:00:00",
+  "timestamp": "2026-04-20T13:34:38.0797531-04:00",
+  "sourcePath": "D:\\Export-SqlServerSchema-128\\tests\\fixtures\\filestream_test",
+  "exportMetadataSource": "_export_metadata.json",
+  "targetServer": "localhost,1433",
+  "targetDatabase": "TestDb_FS_Quoted",
+  "effectiveConfiguration": {
+    "importMode": {
+      "value": "Dev",
+      "source": "configFile"
+    },
+    "continueOnError": {
+      "value": false,
+      "source": "default"
+    },
+    "createDatabase": {
+      "value": true,
+      "source": "cli"
+    },
+    "includeData": {
+      "value": false,
+      "source": "default"
+    },
+    "maxRetries": {
+      "value": 3,
+      "source": "default"
+    },
+    "retryDelaySeconds": {
+      "value": 2,
+      "source": "default"
+    },
+    "connectionTimeout": {
+      "value": 30,
+      "source": "configFile"
+    },
+    "commandTimeout": {
+      "value": 300,
+      "source": "configFile"
+    },
+    "configFile": {
+      "value": "D:\\Export-SqlServerSchema-128\\tests\\test-filestream-quoted.yml",
+      "source": "cli"
+    },
+    "server": {
+      "value": "localhost,1433",
+      "source": "cli"
+    },
+    "database": {
+      "value": "TestDb_FS_Quoted",
+      "source": "cli"
+    },
+    "excludeObjectTypes": {
+      "value": [],
+      "source": "default"
+    },
+    "excludeSchemas": {
+      "value": [],
+      "source": "default"
+    },
+    "stripFilestream": {
+      "value": true,
+      "source": "configFile"
+    },
+    "stripAlwaysEncrypted": {
+      "value": false,
+      "source": "default"
+    }
+  },
+  "exportedObjects": [],
+  "importedObjects": [
+    {
+      "type": "FileGroup",
+      "schema": null,
+      "name": "001_FileGroups",
+      "filePath": "00_FileGroups\\001_FileGroups.sql"
+    },
+    {
+      "type": "Schema",
+      "schema": null,
+      "name": "dbo",
+      "filePath": "03_Schemas\\dbo.sql"
+    },
+    {
+      "type": "Table",
+      "schema": "dbo",
+      "name": "Attachments",
+      "filePath": "09_Tables_PrimaryKey\\dbo.Attachments.sql"
+    },
+    {
+      "type": "Table",
+      "schema": "dbo",
+      "name": "Documents",
+      "filePath": "09_Tables_PrimaryKey\\dbo.Documents.sql"
+    },
+    {
+      "type": "Table",
+      "schema": "dbo",
+      "name": "RegularTable",
+      "filePath": "09_Tables_PrimaryKey\\dbo.RegularTable.sql"
+    },
+    {
+      "type": "Programmability",
+      "schema": "dbo",
+      "name": "usp_ListDocuments",
+      "filePath": "14_Programmability\\03_StoredProcedures\\dbo.usp_ListDocuments.sql"
+    }
+  ],
+  "skippedObjects": [],
+  "failedObjects": [
+    {
+      "name": "usp_GetDocumentPath",
+      "filePath": "14_Programmability\\03_StoredProcedures\\dbo.usp_GetDocumentPath.sql",
+      "folder": "14_Programmability",
+      "reason": "SqlError",
+      "errorMessage": "FILESTREAM feature doesn't have file system access enabled.",
+      "errorChain": [
+        {
+          "type": "System.Management.Automation.MethodInvocationException",
+          "message": "Exception calling \"ExecuteNonQuery\" with \"1\" argument(s): \"An exception occurred while executing a Transact-SQL statement or batch.\""
+        },
+        {
+          "type": "Microsoft.SqlServer.Management.Common.ExecutionFailureException",
+          "message": "An exception occurred while executing a Transact-SQL statement or batch."
+        },
+        {
+          "type": "Microsoft.Data.SqlClient.SqlException",
+          "message": "FILESTREAM feature doesn't have file system access enabled."
+        },
+        {
+          "type": "Microsoft.Data.SqlClient.SqlException",
+          "message": "Error 5592: FILESTREAM feature doesn't have file system access enabled."
+        }
+      ],
+      "type": "Programmability",
+      "schema": "dbo"
+    }
+  ]
+}

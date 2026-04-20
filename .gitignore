@@ -8,3 +8,7 @@ DbScripts/**
 .claude/worktrees/
 
 .worktree/
+handoff.md
+
+tests/fixtures/clr_test/import-log.txt
+import-report-*.json

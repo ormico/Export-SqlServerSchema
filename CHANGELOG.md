@@ -10,6 +10,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **`Get-SafeFileName` unit tests for special characters in SQL object names** — Verify that SQL Server object names containing spaces, dots, reserved Windows filenames, invalid filesystem characters, and other special characters are correctly sanitized into safe filenames for both Windows and Linux. Covers 58 test cases across 6 categories.
+- **Role membership export/import (#128)** — `ALTER ROLE ... ADD MEMBER` statements were silently dropped during export because SMO does not generate them. Export now writes them to `01_Security_RoleMembers/RoleMembers.sql`; import processes this folder after `01_Security/` so roles and users already exist.
+
+### Fixed
+
+- **Parallel worker dropped queue items after RoleMembers in single-worker mode** — `return $result` inside the runspace scriptblock exited the entire scriptblock instead of continuing the loop, causing all items queued after RoleMembers to be skipped. Fixed with an `if/else` structure so every item reaches `$ResultsBag.Add()` and the progress counter.
 
 ## [1.9.1] - 2026-03-04
 
