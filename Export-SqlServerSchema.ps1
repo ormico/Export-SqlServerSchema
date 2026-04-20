@@ -2852,10 +2852,16 @@ function Build-WorkItems-Security {
       # Enumerate members of custom database roles (skip fixed roles like db_owner, db_datareader, etc.)
       $allRoles = @($Database.Roles | Where-Object { -not $_.IsFixedRole })
       foreach ($role in $allRoles) {
+        # Skip if the role itself is excluded by type or name
+        if ((Test-ObjectTypeExcluded -ObjectType 'DatabaseRoles') -or (Test-ObjectExcluded -Schema $null -Name $role.Name)) { continue }
         try {
           $members = @($role.EnumMembers())
           foreach ($member in $members) {
-            $roleMemberStatements.Add("ALTER ROLE [$($role.Name)] ADD MEMBER [$member];")
+            # Skip if the member is excluded by name
+            if (Test-ObjectExcluded -Schema $null -Name $member) { continue }
+            $escapedRole = Get-EscapedSqlIdentifier -Name $role.Name
+            $escapedMember = Get-EscapedSqlIdentifier -Name $member
+            $roleMemberStatements.Add("ALTER ROLE [$escapedRole] ADD MEMBER [$escapedMember];")
           }
         }
         catch {
@@ -2870,9 +2876,12 @@ function Build-WorkItems-Security {
         try {
           $members = @($role.EnumMembers())
           foreach ($member in $members) {
-            # Skip system users (dbo is always db_owner, etc.)
+            # Skip system users (dbo is always db_owner, etc.) and excluded members
             if ($member -eq 'dbo') { continue }
-            $roleMemberStatements.Add("ALTER ROLE [$($role.Name)] ADD MEMBER [$member];")
+            if (Test-ObjectExcluded -Schema $null -Name $member) { continue }
+            $escapedRole = Get-EscapedSqlIdentifier -Name $role.Name
+            $escapedMember = Get-EscapedSqlIdentifier -Name $member
+            $roleMemberStatements.Add("ALTER ROLE [$escapedRole] ADD MEMBER [$escapedMember];")
           }
         }
         catch {

@@ -219,7 +219,7 @@ param(
     'Types', 'XmlSchemaCollections', 'Tables', 'ForeignKeys', 'Indexes', 'Defaults', 'Rules',
     'Programmability', 'Views', 'Functions', 'StoredProcedures', 'Synonyms', 'SearchPropertyLists',
     'PlanGuides', 'DatabaseRoles', 'DatabaseUsers', 'WindowsUsers', 'SqlUsers', 'ExternalUsers',
-    'CertificateMappedUsers', 'SecurityPolicies', 'Data')]
+    'CertificateMappedUsers', 'RoleMembers', 'SecurityPolicies', 'Data')]
   [string[]]$IncludeObjectTypes,
 
   [Parameter(HelpMessage = 'Exclude specific object types (overrides config file). Example: WindowsUsers,SqlUsers')]
@@ -227,7 +227,7 @@ param(
     'Types', 'XmlSchemaCollections', 'Tables', 'ForeignKeys', 'Indexes', 'Defaults', 'Rules',
     'Programmability', 'Views', 'Functions', 'StoredProcedures', 'Synonyms', 'SearchPropertyLists',
     'PlanGuides', 'DatabaseRoles', 'DatabaseUsers', 'WindowsUsers', 'SqlUsers', 'ExternalUsers',
-    'CertificateMappedUsers', 'SecurityPolicies', 'Data')]
+    'CertificateMappedUsers', 'RoleMembers', 'SecurityPolicies', 'Data')]
   [string[]]$ExcludeObjectTypes,
 
   [Parameter(HelpMessage = 'Exclude specific schemas from import. Example: cdc,staging')]
